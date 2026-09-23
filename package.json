@@ -19,8 +19,7 @@
     "db:generate": "pnpm --filter @videochat/api db:generate",
     "db:migrate": "pnpm --filter @videochat/api db:migrate",
     "db:seed": "pnpm --filter @videochat/api db:seed",
-    "db:reset": "pnpm --filter @videochat/api db:reset",
-    "prepare": "husky"
+    "db:reset": "pnpm --filter @videochat/api db:reset"
   },
   "devDependencies": {
     "@eslint/js": "^10.0.0",
@@ -28,7 +27,6 @@
     "eslint-config-prettier": "^10.1.8",
     "eslint-plugin-react-hooks": "^7.0.0",
     "globals": "^16.0.0",
-    "husky": "^9.1.7",
     "lint-staged": "^17.5.1",
     "prettier": "^3.9.9",
     "turbo": "^2.11.3",

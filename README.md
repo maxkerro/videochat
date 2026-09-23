@@ -26,6 +26,25 @@ Check that everything is connected: http://localhost:3000/health shows `database
 
 Local tools: MinIO console http://localhost:9001 (`videochat` / `videochat-secret`), Mailpit inbox http://localhost:8025.
 
+### Pre-push code review hook (optional, recommended)
+
+This repo ships a `pre-push` git hook (`.githooks/pre-push`) that reviews the commits you're about
+to push with the [Claude Code CLI](https://claude.com/claude-code) running Opus, then asks for a
+`y/N` confirmation before letting the push through. It blocks the push only if the review finds a
+blocking-severity issue; if the `claude` CLI isn't installed, isn't logged in, or errors out, it
+never blocks on that alone — it just skips straight to the confirmation prompt.
+
+It's off by default (git doesn't run hooks from a path outside `.git/hooks` unless told to), so
+enable it once per clone:
+
+```
+git config core.hooksPath .githooks
+```
+
+Requires the `claude` CLI on `PATH` (check with `which claude`) to get an actual review; without
+it, the hook still asks for confirmation, just without anything to read first. Bypass any single
+push with `git push --no-verify`.
+
 ## Everyday commands
 
 | Command                                        | Does                                                                        |

@@ -1,0 +1,4 @@
+#!/bin/sh
+# Runs lint-staged (ESLint + Prettier on staged files) before each commit.
+# Installed via: git config core.hooksPath .githooks (see README.md)
+pnpm exec lint-staged
