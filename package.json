@@ -7,6 +7,7 @@
     "node": ">=22.22.0"
   },
   "scripts": {
+    "prepare": "git config core.hooksPath .githooks",
     "dev": "turbo run dev --filter=@videochat/api --filter=@videochat/web --filter=@videochat/shared",
     "build": "turbo run build",
     "lint": "turbo run lint",
