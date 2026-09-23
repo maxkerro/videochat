@@ -22,6 +22,66 @@ export const publicUserSchema = z.object({
 });
 export type PublicUser = z.infer<typeof publicUserSchema>;
 
+/** The signed-in user's own view of themselves: everything in PublicUser plus private fields. */
+export const meSchema = publicUserSchema.extend({
+  email: emailSchema,
+  emailVerified: z.boolean(),
+});
+export type Me = z.infer<typeof meSchema>;
+
+export const passwordSchema = z
+  .string()
+  .min(LIMITS.passwordMin, `At least ${LIMITS.passwordMin} characters`)
+  .max(LIMITS.passwordMax);
+
+export const signUpSchema = z.object({
+  email: emailSchema,
+  username: usernameSchema,
+  displayName: displayNameSchema,
+  password: passwordSchema,
+});
+export type SignUpInput = z.infer<typeof signUpSchema>;
+
+export const loginSchema = z.object({
+  email: emailSchema,
+  password: z.string().min(1),
+});
+export type LoginInput = z.infer<typeof loginSchema>;
+
+export const requestPasswordResetSchema = z.object({ email: emailSchema });
+export type RequestPasswordResetInput = z.infer<typeof requestPasswordResetSchema>;
+
+export const resetPasswordSchema = z.object({
+  token: z.string().min(1),
+  password: passwordSchema,
+});
+export type ResetPasswordInput = z.infer<typeof resetPasswordSchema>;
+
+export const verifyEmailSchema = z.object({ token: z.string().min(1) });
+export type VerifyEmailInput = z.infer<typeof verifyEmailSchema>;
+
+export const updateProfileSchema = z
+  .object({
+    username: usernameSchema.optional(),
+    displayName: displayNameSchema.optional(),
+  })
+  .refine((v) => v.username !== undefined || v.displayName !== undefined, {
+    message: 'Nothing to update',
+  });
+export type UpdateProfileInput = z.infer<typeof updateProfileSchema>;
+
+export const usernameAvailabilitySchema = z.object({ available: z.boolean() });
+export type UsernameAvailability = z.infer<typeof usernameAvailabilitySchema>;
+
+/** Returned after login/refresh: the caller keeps the access token in memory and sends it as
+ *  `Authorization: Bearer <token>`. The refresh token itself travels only in an httpOnly cookie. */
+export const authSessionSchema = z.object({
+  accessToken: z.string(),
+  accessTokenExpiresAt: z.iso.datetime(),
+  user: meSchema,
+});
+export type AuthSession = z.infer<typeof authSessionSchema>;
+
 export const conversationSummarySchema = z.object({
   id: z.uuid(),
   type: z.enum(CONVERSATION_TYPES),

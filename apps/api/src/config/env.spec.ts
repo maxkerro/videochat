@@ -3,6 +3,7 @@ import { loadEnv } from './env.js';
 const base = {
   DATABASE_URL: 'postgres://u:p@localhost:5432/db',
   REDIS_URL: 'redis://localhost:6379',
+  JWT_SECRET: 'a'.repeat(32),
 };
 
 describe('loadEnv', () => {
@@ -26,6 +27,15 @@ describe('loadEnv', () => {
 
   it('fails fast with a readable message when required values are missing', () => {
     expect(() => loadEnv({ REDIS_URL: base.REDIS_URL })).toThrow(/DATABASE_URL/);
+  });
+
+  it('rejects a JWT secret shorter than 32 characters', () => {
+    expect(() => loadEnv({ ...base, JWT_SECRET: 'too-short' })).toThrow(/JWT_SECRET/);
+  });
+
+  it('treats the literal string "false" as false for a stringbool flag, unlike z.coerce.boolean', () => {
+    const env = loadEnv({ ...base, S3_FORCE_PATH_STYLE: 'false' });
+    expect(env.S3_FORCE_PATH_STYLE).toBe(false);
   });
 
   it('caches the result for process.env, so a second call skips re-parsing', () => {

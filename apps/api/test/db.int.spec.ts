@@ -44,7 +44,7 @@ describe.skipIf(!hasInfra)('database schema v1 (CHAT-004)', () => {
     const result = await again.db.execute<{ n: number }>(
       sql`select count(*)::int as n from information_schema.tables where table_schema = 'public'`,
     );
-    expect(result.rows[0]?.n).toBe(5);
+    expect(result.rows[0]?.n).toBe(7); // users, devices, conversations, memberships, messages, refresh_tokens, auth_tokens
     await again.close();
   });
 

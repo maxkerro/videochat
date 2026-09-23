@@ -1,4 +1,5 @@
 import {
+  AUTH_TOKEN_PURPOSES,
   CONVERSATION_TYPES,
   DEVICE_PLATFORMS,
   MEMBER_ROLES,
@@ -50,12 +51,70 @@ export const users = pgTable(
     avatarKey: text('avatar_key'),
     passwordHash: text('password_hash'),
     emailVerifiedAt: timestamp('email_verified_at', { withTimezone: true }),
+    /** Consecutive failed login attempts; reset to 0 on a successful login (CHAT-010). */
+    failedLoginAttempts: bigint('failed_login_attempts', { mode: 'number' }).notNull().default(0),
+    /** Set after too many failed attempts; login is refused until this passes. */
+    lockedUntil: timestamp('locked_until', { withTimezone: true }),
     ...timestamps,
   },
   (t) => [
     // Case-insensitive uniqueness without the citext extension.
     uniqueIndex('users_email_lower_uq').on(sql`lower(${t.email})`),
     uniqueIndex('users_username_lower_uq').on(sql`lower(${t.username})`),
+  ],
+);
+
+/**
+ * One row per issued refresh token (CHAT-010). Only a SHA-256 hash of the opaque token is
+ * stored, never the token itself, so a leaked database row can't be replayed.
+ *
+ * `familyId` links every token descended from the same login through however many rotations:
+ * on refresh the current token is revoked and a new one in the same family replaces it, and
+ * presenting an already-revoked token (a replay of a stolen or reused token) revokes the whole
+ * family, ending that session everywhere rather than just rejecting the one request.
+ */
+export const refreshTokens = pgTable(
+  'refresh_tokens',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    userId: uuid('user_id')
+      .notNull()
+      .references(() => users.id, { onDelete: 'cascade' }),
+    familyId: uuid('family_id').notNull(),
+    tokenHash: char('token_hash', { length: 64 }).notNull(),
+    expiresAt: timestamp('expires_at', { withTimezone: true }).notNull(),
+    revokedAt: timestamp('revoked_at', { withTimezone: true }),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [
+    uniqueIndex('refresh_tokens_token_hash_uq').on(t.tokenHash),
+    index('refresh_tokens_family_idx').on(t.familyId),
+    index('refresh_tokens_user_idx').on(t.userId),
+  ],
+);
+
+export const authTokenPurpose = pgEnum('auth_token_purpose', AUTH_TOKEN_PURPOSES);
+
+/**
+ * Single-use, short-lived tokens for email verification and password reset (CHAT-010).
+ * Only a hash of the token is stored; the plaintext is only ever in the emailed link.
+ */
+export const authTokens = pgTable(
+  'auth_tokens',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    userId: uuid('user_id')
+      .notNull()
+      .references(() => users.id, { onDelete: 'cascade' }),
+    purpose: authTokenPurpose('purpose').notNull(),
+    tokenHash: char('token_hash', { length: 64 }).notNull(),
+    expiresAt: timestamp('expires_at', { withTimezone: true }).notNull(),
+    consumedAt: timestamp('consumed_at', { withTimezone: true }),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [
+    uniqueIndex('auth_tokens_token_hash_uq').on(t.tokenHash),
+    index('auth_tokens_user_purpose_idx').on(t.userId, t.purpose),
   ],
 );
 
@@ -171,6 +230,8 @@ export const messages = pgTable(
 
 export type User = typeof users.$inferSelect;
 export type NewUser = typeof users.$inferInsert;
+export type RefreshTokenRow = typeof refreshTokens.$inferSelect;
+export type AuthTokenRow = typeof authTokens.$inferSelect;
 export type Conversation = typeof conversations.$inferSelect;
 export type Membership = typeof memberships.$inferSelect;
 export type MessageRow = typeof messages.$inferSelect;

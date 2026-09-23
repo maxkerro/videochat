@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import { Link, Outlet, useMatch } from 'react-router';
 import { Button, Input, Modal, useToast } from '../components/ui';
+import { AccountMenu } from '../features/auth/AccountMenu';
 import { ConversationList } from '../features/conversations/ConversationList';
 import { ApiStatus } from '../features/system/ApiStatus';
 import { ThemeMenu } from '../features/system/ThemeMenu';
@@ -55,6 +56,7 @@ export function AppShell() {
           <Link to="/ui" className={styles.footerLink}>
             UI kit
           </Link>
+          <AccountMenu />
         </footer>
       </aside>
 

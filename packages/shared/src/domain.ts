@@ -14,6 +14,9 @@ export type MessageType = (typeof MESSAGE_TYPES)[number];
 export const DEVICE_PLATFORMS = ['web', 'ios', 'android'] as const;
 export type DevicePlatform = (typeof DEVICE_PLATFORMS)[number];
 
+export const AUTH_TOKEN_PURPOSES = ['email_verify', 'password_reset'] as const;
+export type AuthTokenPurpose = (typeof AUTH_TOKEN_PURPOSES)[number];
+
 /** Product limits referenced by both validation and UI. */
 export const LIMITS = {
   messageMaxLength: 4000,
@@ -22,4 +25,10 @@ export const LIMITS = {
   displayNameMax: 64,
   groupTitleMax: 80,
   groupMaxMembers: 100,
+  passwordMin: 8,
+  passwordMax: 128,
+  avatarMaxBytes: 5 * 1024 * 1024,
+  /** Consecutive failed logins before a cool-down (CHAT-010). */
+  loginAttemptsBeforeLockout: 5,
+  loginLockoutMinutes: 15,
 } as const;

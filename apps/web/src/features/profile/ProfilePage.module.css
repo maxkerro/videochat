@@ -1,0 +1,54 @@
+.page {
+  max-width: 480px;
+  margin: 0 auto;
+  padding: var(--space-6) var(--space-4) var(--space-8);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-6);
+  overflow-y: auto;
+  height: 100%;
+  width: 100%;
+}
+.header {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+}
+.header h1 {
+  font-size: var(--text-xl);
+}
+.avatarRow {
+  display: flex;
+  align-items: center;
+  gap: var(--space-4);
+}
+.avatarMeta {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+}
+.avatarMeta p {
+  font-size: var(--text-xs);
+  color: var(--color-text-muted);
+}
+.form {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+}
+.availability {
+  font-size: var(--text-xs);
+}
+.available {
+  color: var(--color-success);
+}
+.unavailable {
+  color: var(--color-danger);
+}
+.checking {
+  color: var(--color-text-muted);
+}
+.actions {
+  display: flex;
+  justify-content: flex-end;
+}
