@@ -7,7 +7,7 @@
     "node": ">=22.22.0"
   },
   "scripts": {
-    "prepare": "git rev-parse --git-dir >/dev/null 2>&1 && git config core.hooksPath .githooks || true",
+    "prepare": "sh scripts/setup-hooks.sh",
     "dev": "turbo run dev --filter=@videochat/api --filter=@videochat/web --filter=@videochat/shared",
     "build": "turbo run build",
     "lint": "turbo run lint",
@@ -20,7 +20,8 @@
     "db:generate": "pnpm --filter @videochat/api db:generate",
     "db:migrate": "pnpm --filter @videochat/api db:migrate",
     "db:seed": "pnpm --filter @videochat/api db:seed",
-    "db:reset": "pnpm --filter @videochat/api db:reset"
+    "db:reset": "pnpm --filter @videochat/api db:reset",
+    "test:hooks": "sh scripts/test-pre-push-hook.sh"
   },
   "devDependencies": {
     "@eslint/js": "^10.0.0",

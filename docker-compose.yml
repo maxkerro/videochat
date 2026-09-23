@@ -34,15 +34,14 @@ services:
 
   # S3-compatible object storage for avatars and attachments (M1+). Console: http://localhost:9001
   # Docker Hub removed the minio/minio and minio/mc repos; quay.io/minio/* is
-  # the current mirror. RELEASE.2025-09-07T16-13-09Z is the last community
-  # release multiple other projects' quay.io migrations report actually
-  # having a container image there -- MinIO's later release notes stop
-  # publishing pre-built images at all and say to build from source instead,
-  # so a newer-looking RELEASE tag can be source-only with no matching image.
-  # This sandbox's network policy blocks quay.io outright (pulls here fail
-  # with a 403 regardless of tag), so this couldn't be pull-verified from
-  # here -- run `docker compose pull minio minio-setup` once to confirm
-  # before relying on it.
+  # the current mirror. minio and mc are separate release trains with their
+  # own timestamps -- RELEASE.2025-09-07T16-13-09Z (server) and
+  # RELEASE.2025-08-13T08-35-41Z (mc) are each repo's last community release
+  # multiple other projects' quay.io migrations report actually having a
+  # container image there. MinIO's later release notes stop publishing
+  # pre-built images at all and say to build from source instead, so a
+  # newer-looking RELEASE tag can be source-only with no matching image.
+  # Verify with `docker compose pull minio minio-setup` before relying on it.
   minio:
     image: quay.io/minio/minio:RELEASE.2025-09-07T16-13-09Z
     command: ['server', '/data', '--console-address', ':9001']
@@ -62,7 +61,7 @@ services:
 
   # Creates the bucket once MinIO is healthy, then exits.
   minio-setup:
-    image: quay.io/minio/mc:RELEASE.2025-09-07T16-13-09Z
+    image: quay.io/minio/mc:RELEASE.2025-08-13T08-35-41Z
     depends_on:
       minio:
         condition: service_healthy

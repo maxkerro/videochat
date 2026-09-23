@@ -34,8 +34,16 @@ to push with the [Claude Code CLI](https://claude.com/claude-code) running Opus,
 blocking-severity issue; if the `claude` CLI isn't installed, isn't logged in, or errors out, it
 never blocks on that alone — it just skips straight to the confirmation prompt.
 
-It's enabled automatically by `pnpm install` (the root `package.json` `prepare` script runs
-`git config core.hooksPath .githooks`), or by hand with:
+**This sends the diff of every push to the `claude` CLI** (when it's on `PATH`) so it can be
+reviewed — anything in your commits, including something committed by accident (a `.env` file, a
+credential), goes with it, and it uses your own Claude usage/quota. Lockfile changes
+(`pnpm-lock.yaml`) are excluded and a very large diff is truncated, but everything else in the
+diff is sent as-is.
+
+It's enabled automatically by `pnpm install` (`scripts/setup-hooks.sh`, run via the root
+`package.json` `prepare` script, sets `git config core.hooksPath .githooks`) — unless you've
+already pointed `core.hooksPath` at something else yourself, in which case it leaves that alone
+rather than silently overriding your choice. Enable by hand with:
 
 ```
 git config core.hooksPath .githooks
@@ -44,6 +52,10 @@ git config core.hooksPath .githooks
 Requires the `claude` CLI on `PATH` (check with `which claude`) to get an actual review; without
 it, the hook still asks for confirmation, just without anything to read first. Bypass any single
 push with `git push --no-verify`.
+
+Run `sh scripts/test-pre-push-hook.sh` to exercise the hook's own logic (root commits, branch
+deletes, multi-ref pushes, a force-push over history you haven't fetched, decorated verdict lines)
+against fake `claude`/`pnpm` shims in scratch repos, without needing a real review to run.
 
 ## Everyday commands
 
