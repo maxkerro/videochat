@@ -7,6 +7,18 @@ const optionalUrl = z
   .transform((v) => (v && v.trim() !== '' ? v : undefined))
   .pipe(z.url().optional());
 
+/** Fields that default to a local dev value and must be set explicitly in production,
+ *  otherwise the app "succeeds" while silently doing the wrong thing (mail never sends,
+ *  avatars never persist, verification links point at localhost). */
+const requiredInProduction = [
+  'PUBLIC_WEB_URL',
+  'SMTP_URL',
+  'S3_ENDPOINT',
+  'S3_BUCKET',
+  'S3_ACCESS_KEY_ID',
+  'S3_SECRET_ACCESS_KEY',
+] as const;
+
 const envSchema = z.object({
   NODE_ENV: z.enum(['development', 'test', 'production']).default('development'),
   PORT: z.coerce.number().int().positive().default(3000),
@@ -52,6 +64,21 @@ const envSchema = z.object({
   S3_FORCE_PATH_STYLE: z.stringbool().default(true),
 });
 
+const envSchemaWithProductionChecks = envSchema.superRefine((data, ctx) => {
+  if (data.NODE_ENV !== 'production') return;
+  for (const key of requiredInProduction) {
+    // These vars are actual localhost defaults in envSchema. z.url() still passes for
+    // "http://localhost:9000", so we have to check the raw value, not just presence.
+    if (data[key].includes('localhost')) {
+      ctx.addIssue({
+        code: 'custom',
+        path: [key],
+        message: `${key} must be set explicitly in production (it is still at its local dev default)`,
+      });
+    }
+  }
+});
+
 export type Env = z.infer<typeof envSchema>;
 
 let cached: Env | undefined;
@@ -65,7 +92,7 @@ export function loadEnv(source: NodeJS.ProcessEnv = process.env): Env {
   if (source === process.env && source.NODE_ENV !== 'production' && existsSync('.env')) {
     process.loadEnvFile('.env');
   }
-  const parsed = envSchema.safeParse({
+  const parsed = envSchemaWithProductionChecks.safeParse({
     ...source,
     APP_VERSION: source.APP_VERSION ?? source.RENDER_GIT_COMMIT,
   });

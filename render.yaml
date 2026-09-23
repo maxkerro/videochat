@@ -38,6 +38,27 @@ services:
       # The web app's public URL, e.g. https://videochat-web.onrender.com (set after first deploy).
       - key: CORS_ORIGINS
         sync: false
+      # Signs access tokens; required with no default (apps/api/src/config/env.ts). Render
+      # generates a random value on first deploy -- rotate it in the dashboard to force
+      # every access token to expire at once.
+      - key: JWT_SECRET
+        generateValue: true
+      # Used to build verification/reset-password links; must be the web app's public URL,
+      # not its localhost default. Same value as CORS_ORIGINS above.
+      - key: PUBLIC_WEB_URL
+        sync: false
+      # Real SMTP + S3/R2 credentials -- these default to localhost dev values (Mailpit/MinIO)
+      # that silently fail in production (mail is only logged; uploads have nowhere to land).
+      - key: SMTP_URL
+        sync: false
+      - key: S3_ENDPOINT
+        sync: false
+      - key: S3_BUCKET
+        sync: false
+      - key: S3_ACCESS_KEY_ID
+        sync: false
+      - key: S3_SECRET_ACCESS_KEY
+        sync: false
       - key: SENTRY_DSN
         sync: false
 
@@ -56,7 +77,34 @@ services:
         - packages/shared/**
         - pnpm-lock.yaml
     routes:
-      # Client-side routing: every path serves the SPA.
+      # Proxy API paths through the web origin instead of calling videochat-api cross-site.
+      # videochat-web and videochat-api are separate *.onrender.com hosts, which are
+      # cross-site (onrender.com is on the Public Suffix List) -- a SameSite=Lax refresh
+      # cookie set by the API would never reach the browser via a cross-site fetch, and
+      # SameSite=None doesn't hold up either once Safari/Chrome block third-party cookies.
+      # Proxying makes every request the browser sees same-origin, so the cookie just works.
+      # These rules must come before the catch-all SPA rewrite below (first match wins).
+      # Order matters: Render's static-site hostname is fixed as <service name>.onrender.com,
+      # so this can be hardcoded rather than filled in after first deploy.
+      - type: rewrite
+        source: /auth/*
+        destination: https://videochat-api.onrender.com/auth/:splat
+      - type: rewrite
+        source: /me
+        destination: https://videochat-api.onrender.com/me
+      - type: rewrite
+        source: /me/*
+        destination: https://videochat-api.onrender.com/me/:splat
+      - type: rewrite
+        source: /users/*
+        destination: https://videochat-api.onrender.com/users/:splat
+      - type: rewrite
+        source: /health
+        destination: https://videochat-api.onrender.com/health
+      - type: rewrite
+        source: /ready
+        destination: https://videochat-api.onrender.com/ready
+      # Client-side routing: every other path serves the SPA.
       - type: rewrite
         source: /*
         destination: /index.html
@@ -76,9 +124,10 @@ services:
     envVars:
       - key: NODE_VERSION
         value: 22.22.0
-      # The API's public URL, e.g. https://videochat-api.onrender.com (set after first deploy).
-      - key: VITE_API_URL
-        sync: false
+      # VITE_API_URL is deliberately left unset here: the routes above proxy API calls
+      # through this same origin, so the web app's default (same-origin relative paths)
+      # is what production wants. Only set it if you point the web app at an API that
+      # isn't proxied this way.
       - key: VITE_SENTRY_DSN
         sync: false
 

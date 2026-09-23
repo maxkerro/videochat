@@ -1,7 +1,13 @@
 import type { z } from 'zod';
 
-export const API_URL =
-  (import.meta.env.VITE_API_URL as string | undefined) ?? 'http://localhost:3000';
+/**
+ * Base URL prepended to every API path. Empty string means "same origin, relative path" --
+ * the setup in production, where the web static site proxies /auth, /me, /users, /health and
+ * /ready through to the API (see render.yaml) so the refresh-token cookie is same-site rather
+ * than cross-site between two *.onrender.com hosts. Local dev overrides this via .env to point
+ * straight at the API's own port, since there's no proxy running locally.
+ */
+export const API_URL = (import.meta.env.VITE_API_URL as string | undefined) ?? '';
 
 export class ApiError extends Error {
   constructor(

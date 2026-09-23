@@ -1,6 +1,6 @@
 import { sql, eq, and, ne } from 'drizzle-orm';
 import { LIMITS } from '@videochat/shared';
-import type { Database, DbExecutor } from './client.js';
+import type { DbExecutor } from './client.js';
 import { users, type NewUser, type User } from './schema.js';
 
 export interface CreateUserInput {
@@ -82,25 +82,29 @@ export async function setPasswordHash(
 /**
  * Increments the failed-login counter and, once it reaches the threshold, sets `lockedUntil`
  * and resets the counter so the next window starts fresh after the lockout passes (CHAT-010).
+ *
+ * This is one atomic UPDATE, not a read-then-write: every expression in a Postgres SET clause
+ * sees the same pre-update row, and concurrent UPDATEs to the same row serialize on that row's
+ * lock rather than racing. A read-then-write version (SELECT, compute in JS, UPDATE) would lose
+ * increments under concurrency -- N parallel wrong-password requests would all read the same
+ * count and each write count+1, letting an attacker who parallelizes get far more than
+ * `loginAttemptsBeforeLockout` guesses per lockout window.
  */
-export async function recordFailedLogin(db: Database, id: string): Promise<User> {
-  return db.transaction(async (tx) => {
-    const [current] = await tx.select().from(users).where(eq(users.id, id)).limit(1);
-    if (!current) throw new Error(`User ${id} not found`);
-    const attempts = current.failedLoginAttempts + 1;
-    const locked = attempts >= LIMITS.loginAttemptsBeforeLockout;
-    const [row] = await tx
-      .update(users)
-      .set({
-        failedLoginAttempts: locked ? 0 : attempts,
-        lockedUntil: locked
-          ? new Date(Date.now() + LIMITS.loginLockoutMinutes * 60_000)
-          : current.lockedUntil,
-      })
-      .where(eq(users.id, id))
-      .returning();
-    return row!;
-  });
+export async function recordFailedLogin(db: DbExecutor, id: string): Promise<User> {
+  const threshold = LIMITS.loginAttemptsBeforeLockout;
+  const lockoutMs = LIMITS.loginLockoutMinutes * 60_000;
+  const [row] = await db
+    .update(users)
+    .set({
+      failedLoginAttempts: sql`case when ${users.failedLoginAttempts} + 1 >= ${threshold}
+        then 0 else ${users.failedLoginAttempts} + 1 end`,
+      lockedUntil: sql`case when ${users.failedLoginAttempts} + 1 >= ${threshold}
+        then now() + (${lockoutMs} * interval '1 millisecond') else ${users.lockedUntil} end`,
+    })
+    .where(eq(users.id, id))
+    .returning();
+  if (!row) throw new Error(`User ${id} not found`);
+  return row;
 }
 
 export async function resetFailedLogins(db: DbExecutor, id: string): Promise<void> {

@@ -22,11 +22,13 @@
 
 3. **Fill the secret values** that the Blueprint asks for:
    - `videochat-api` → `DATABASE_URL` = the Neon connection string from step 1
+   - `videochat-api` → `JWT_SECRET` = a random 32+ char string, e.g. `openssl rand -hex 32` (also required so the API can issue tokens)
    - `videochat-api` → `CORS_ORIGINS` = the web URL, once the first deploy has given it one, e.g. `https://videochat-web.onrender.com`
-   - `videochat-web` → `VITE_API_URL` = the API URL, once the first deploy has given it one, e.g. `https://videochat-api.onrender.com`
+   - `videochat-api` → `PUBLIC_WEB_URL` = the web URL, same as above (used to build verification/reset links -- must not be left at its localhost default in production)
+   - `videochat-api` → `SMTP_URL`, `S3_ENDPOINT`, `S3_BUCKET`, `S3_ACCESS_KEY_ID`, `S3_SECRET_ACCESS_KEY` = real values; these default to localhost/dev placeholders that silently fail in production (mail never sends, avatar uploads never persist)
    - Optional: `SENTRY_DSN` (API) and `VITE_SENTRY_DSN` (web)
 
-   Then redeploy the web service, because Vite bakes `VITE_*` values in at build time.
+   `videochat-web` does **not** need `VITE_API_URL` set -- it proxies API paths through its own origin (see `render.yaml`'s `routes`), which is also what keeps the refresh-token cookie same-site instead of cross-site between the two `*.onrender.com` hosts.
 
 4. **Wire up GitHub.** Go to **Settings → Secrets and variables → Actions → Variables** and add `STAGING_API_URL` and `STAGING_WEB_URL`. Without them, the smoke-test job is skipped.
 5. **Protect `master`.** Go to **Settings → Branches**, add a rule for `master`, and require the checks _Lint, typecheck, test, build_ and _API Docker image builds_ before merging.

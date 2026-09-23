@@ -3,6 +3,7 @@ import type { Me, UpdateProfileInput } from '@videochat/shared';
 import type { Database } from '../db/client.js';
 import { DB } from '../infra/tokens.js';
 import { findUserById, isUsernameTaken, setAvatarKey, updateProfile } from '../db/users.js';
+import { isUniqueViolation } from '../db/pg-errors.js';
 import { S3Service } from '../storage/s3.service.js';
 import { AvatarService, type UploadedAvatarFile } from './avatar.service.js';
 import { toMe } from './user-mapper.js';
@@ -26,7 +27,17 @@ export class UsersService {
     if (patch.username && (await isUsernameTaken(this.db, patch.username, userId))) {
       throw new ConflictException('That username is already taken');
     }
-    const user = await updateProfile(this.db, userId, patch);
+    let user;
+    try {
+      user = await updateProfile(this.db, userId, patch);
+    } catch (err) {
+      // Same race as signup: the availability check above can't stop two concurrent updates to
+      // the same username from both passing it and racing to the write.
+      if (isUniqueViolation(err)) {
+        throw new ConflictException('That username is already taken');
+      }
+      throw err;
+    }
     const avatarUrl = await this.s3.getAvatarUrl(user.avatarKey);
     return toMe(user, avatarUrl);
   }

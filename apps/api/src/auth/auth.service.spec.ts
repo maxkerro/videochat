@@ -139,6 +139,67 @@ describe('AuthService', () => {
       );
       expect(mail.sendVerificationEmail).toHaveBeenCalledWith(created.email, expect.any(String));
     });
+
+    it('maps a unique-constraint race on insert to a 409, not a 500', async () => {
+      // The availability checks above passed (no user found, username free), but a concurrent
+      // signup won the insert first -- the unique index is what actually caught it.
+      (usersDb.findUserByEmail as Mock).mockResolvedValue(undefined);
+      (usersDb.isUsernameTaken as Mock).mockResolvedValue(false);
+      (usersDb.createUser as Mock).mockRejectedValue({ code: '23505', message: 'duplicate key' });
+      const { service } = makeService();
+
+      await expect(
+        service.signUp({
+          email: 'race@test.dev',
+          username: 'racer',
+          displayName: 'X',
+          password: 'pw123456',
+        }),
+      ).rejects.toMatchObject({ status: 409 });
+    });
+
+    it('rethrows a non-unique-violation error from the insert unchanged', async () => {
+      (usersDb.findUserByEmail as Mock).mockResolvedValue(undefined);
+      (usersDb.isUsernameTaken as Mock).mockResolvedValue(false);
+      (usersDb.createUser as Mock).mockRejectedValue(new Error('connection reset'));
+      const { service } = makeService();
+
+      await expect(
+        service.signUp({
+          email: 'x@test.dev',
+          username: 'x',
+          displayName: 'X',
+          password: 'pw123456',
+        }),
+      ).rejects.toThrow('connection reset');
+    });
+  });
+
+  describe('resendVerification', () => {
+    it('is a silent no-op for an unknown email', async () => {
+      (usersDb.findUserByEmail as Mock).mockResolvedValue(undefined);
+      const { service, mail } = makeService();
+      await expect(service.resendVerification('nobody@test.dev')).resolves.toBeUndefined();
+      expect(mail.sendVerificationEmail).not.toHaveBeenCalled();
+    });
+
+    it('is a silent no-op for an already-verified email', async () => {
+      (usersDb.findUserByEmail as Mock).mockResolvedValue(
+        makeUser({ emailVerifiedAt: new Date() }),
+      );
+      const { service, mail } = makeService();
+      await expect(service.resendVerification('a@test.dev')).resolves.toBeUndefined();
+      expect(mail.sendVerificationEmail).not.toHaveBeenCalled();
+    });
+
+    it('sends a new verification email for an unverified account', async () => {
+      const user = makeUser({ emailVerifiedAt: null });
+      (usersDb.findUserByEmail as Mock).mockResolvedValue(user);
+      (authTokensDb.createAuthToken as Mock).mockResolvedValue({ id: 'tok-1' });
+      const { service, mail } = makeService();
+      await service.resendVerification(user.email);
+      expect(mail.sendVerificationEmail).toHaveBeenCalledWith(user.email, expect.any(String));
+    });
   });
 
   describe('login', () => {
@@ -221,9 +282,28 @@ describe('AuthService', () => {
         revokedAt: new Date(),
         expiresAt: new Date(Date.now() + 60_000),
       });
+      (refreshTokensDb.revokeRefreshToken as Mock).mockResolvedValue(false);
       const { service } = makeService();
       await expect(service.refresh('stolen')).rejects.toThrow(/revoked/);
       expect(refreshTokensDb.revokeFamily).toHaveBeenCalledWith(expect.anything(), 'fam-1');
+    });
+
+    it('rejects the loser of a concurrent rotation race instead of minting a second child', async () => {
+      // Both requests read the row while it still looked live (revokedAt: null), so the
+      // pre-existing "is it revoked?" check alone couldn't have caught this -- only the atomic
+      // revoke (revokeRefreshToken returning false here) can, since it's the actual DB gate.
+      (refreshTokensDb.findRefreshTokenByHash as Mock).mockResolvedValue({
+        id: 'rt-1',
+        familyId: 'fam-1',
+        userId: 'user-1',
+        revokedAt: null,
+        expiresAt: new Date(Date.now() + 60_000),
+      });
+      (refreshTokensDb.revokeRefreshToken as Mock).mockResolvedValue(false);
+      const { service } = makeService();
+      await expect(service.refresh('lost-the-race')).rejects.toThrow(/revoked/);
+      expect(refreshTokensDb.revokeFamily).toHaveBeenCalledWith(expect.anything(), 'fam-1');
+      expect(refreshTokensDb.createRefreshToken).not.toHaveBeenCalled();
     });
 
     it('rejects an expired token without needing to revoke anything', async () => {
@@ -248,6 +328,7 @@ describe('AuthService', () => {
         revokedAt: null,
         expiresAt: new Date(Date.now() + 60_000),
       });
+      (refreshTokensDb.revokeRefreshToken as Mock).mockResolvedValue(true);
       (usersDb.findUserById as Mock).mockResolvedValue(user);
       (refreshTokensDb.createRefreshToken as Mock).mockResolvedValue({ id: 'rt-2' });
       const { service } = makeService();
@@ -299,7 +380,7 @@ describe('AuthService', () => {
     });
 
     it('rejects an invalid or expired reset token', async () => {
-      (authTokensDb.findValidAuthToken as Mock).mockResolvedValue(undefined);
+      (authTokensDb.consumeAuthToken as Mock).mockResolvedValue(undefined);
       const { service } = makeService();
       await expect(service.resetPassword({ token: 'bad', password: 'newpass123' })).rejects.toThrow(
         /invalid or has expired/,
@@ -307,13 +388,17 @@ describe('AuthService', () => {
     });
 
     it('sets the new password and revokes every existing session', async () => {
-      (authTokensDb.findValidAuthToken as Mock).mockResolvedValue({
+      (authTokensDb.consumeAuthToken as Mock).mockResolvedValue({
         id: 'tok-1',
         userId: 'user-1',
       });
       const { service } = makeService();
       await service.resetPassword({ token: 'good', password: 'newpass123' });
-      expect(authTokensDb.consumeAuthToken).toHaveBeenCalledWith(expect.anything(), 'tok-1');
+      expect(authTokensDb.consumeAuthToken).toHaveBeenCalledWith(
+        expect.anything(),
+        expect.any(String),
+        'password_reset',
+      );
       expect(usersDb.setPasswordHash).toHaveBeenCalledWith(
         expect.anything(),
         'user-1',
@@ -325,19 +410,23 @@ describe('AuthService', () => {
 
   describe('verifyEmail', () => {
     it('rejects an invalid or expired token', async () => {
-      (authTokensDb.findValidAuthToken as Mock).mockResolvedValue(undefined);
+      (authTokensDb.consumeAuthToken as Mock).mockResolvedValue(undefined);
       const { service } = makeService();
       await expect(service.verifyEmail('bad')).rejects.toThrow(/invalid or has expired/);
     });
 
     it('marks the email verified and consumes the token', async () => {
-      (authTokensDb.findValidAuthToken as Mock).mockResolvedValue({
+      (authTokensDb.consumeAuthToken as Mock).mockResolvedValue({
         id: 'tok-1',
         userId: 'user-1',
       });
       const { service } = makeService();
       await service.verifyEmail('good');
-      expect(authTokensDb.consumeAuthToken).toHaveBeenCalledWith(expect.anything(), 'tok-1');
+      expect(authTokensDb.consumeAuthToken).toHaveBeenCalledWith(
+        expect.anything(),
+        expect.any(String),
+        'email_verify',
+      );
       expect(usersDb.markEmailVerified).toHaveBeenCalledWith(expect.anything(), 'user-1');
     });
   });

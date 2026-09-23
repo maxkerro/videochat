@@ -12,7 +12,8 @@ import { randomUUID } from 'node:crypto';
 import type { Env } from '../config/env.js';
 import type { Database } from '../db/client.js';
 import { DB, ENV } from '../infra/tokens.js';
-import { consumeAuthToken, createAuthToken, findValidAuthToken } from '../db/auth-tokens.js';
+import { consumeAuthToken, createAuthToken } from '../db/auth-tokens.js';
+import { isUniqueViolation } from '../db/pg-errors.js';
 import {
   createRefreshToken,
   findRefreshTokenByHash,
@@ -63,12 +64,23 @@ export class AuthService {
     }
 
     const passwordHash = await hashPassword(input.password);
-    const user = await createUser(this.db, {
-      email: input.email,
-      username: input.username,
-      displayName: input.displayName,
-      passwordHash,
-    });
+    let user;
+    try {
+      user = await createUser(this.db, {
+        email: input.email,
+        username: input.username,
+        displayName: input.displayName,
+        passwordHash,
+      });
+    } catch (err) {
+      // The checks above are a courtesy, not a guarantee: two concurrent signups with the same
+      // email or username can both pass them and race to the insert. The unique index is the
+      // real source of truth, so a violation here is still a 409, not a 500.
+      if (isUniqueViolation(err)) {
+        throw new ConflictException('An account with that email or username already exists');
+      }
+      throw err;
+    }
 
     await this.issueAndSendVerification(user.id, user.email);
   }
@@ -92,9 +104,8 @@ export class AuthService {
   }
 
   async verifyEmail(token: string): Promise<void> {
-    const row = await findValidAuthToken(this.db, hashToken(token), 'email_verify');
+    const row = await consumeAuthToken(this.db, hashToken(token), 'email_verify');
     if (!row) throw new BadRequestException('This verification link is invalid or has expired');
-    await consumeAuthToken(this.db, row.id);
     await markEmailVerified(this.db, row.userId);
   }
 
@@ -128,18 +139,24 @@ export class AuthService {
     const tokenHash = hashToken(refreshToken);
     const row = await findRefreshTokenByHash(this.db, tokenHash);
     if (!row) throw new UnauthorizedException('Invalid session');
-
-    if (row.revokedAt) {
-      // Someone presented a token that was already rotated away or explicitly logged out --
-      // either a replay of a stolen token, or a client bug. Either way, end the whole session.
-      await revokeFamily(this.db, row.familyId);
-      throw new UnauthorizedException('Session revoked; please log in again');
-    }
     if (row.expiresAt.getTime() <= Date.now()) {
       throw new UnauthorizedException('Session expired; please log in again');
     }
 
-    await revokeRefreshToken(this.db, row.id);
+    // The revoke IS the gate: it only succeeds for whichever request gets there first, so two
+    // concurrent refreshes with the same token (two tabs, a retried request) can't both pass a
+    // separate "is it revoked" check and both mint a live child -- that race is what let a
+    // replayed stolen token go undetected, and forked the token family, before this fix. A short
+    // grace window that tolerated re-presenting a just-rotated token was considered (to spare
+    // multi-tab users an occasional full logout), but there's no way to tell that case apart
+    // from an attacker replaying a token within a few seconds of its legitimate rotation --
+    // exactly the reuse this endpoint exists to catch -- so any presentation of an already-dead
+    // token still ends the whole session.
+    const rotated = await revokeRefreshToken(this.db, row.id);
+    if (!rotated) {
+      await revokeFamily(this.db, row.familyId);
+      throw new UnauthorizedException('Session revoked; please log in again');
+    }
     return this.issueSession(row.userId, row.familyId);
   }
 
@@ -163,9 +180,8 @@ export class AuthService {
   }
 
   async resetPassword(input: ResetPasswordInput): Promise<void> {
-    const row = await findValidAuthToken(this.db, hashToken(input.token), 'password_reset');
+    const row = await consumeAuthToken(this.db, hashToken(input.token), 'password_reset');
     if (!row) throw new BadRequestException('This reset link is invalid or has expired');
-    await consumeAuthToken(this.db, row.id);
     const passwordHash = await hashPassword(input.password);
     await setPasswordHash(this.db, row.userId, passwordHash);
     // Force every existing session to re-authenticate: a password reset usually means the old

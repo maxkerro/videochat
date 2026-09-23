@@ -77,6 +77,40 @@ describe.skipIf(!hasInfra)('auth data layer (CHAT-010, CHAT-011)', () => {
       expect(again?.lockedUntil).toBeNull();
       expect(again?.failedLoginAttempts).toBe(0);
     });
+
+    it('loses no increments when failed logins race (single atomic UPDATE, not read-then-write)', async () => {
+      const u = await makeUser('marla');
+      // One below the lockout threshold, so every increment should still be visible in the
+      // counter rather than having tripped the lockout-reset-to-0 path.
+      const concurrentAttempts = LIMITS.loginAttemptsBeforeLockout - 1;
+      await Promise.all(
+        Array.from({ length: concurrentAttempts }, () => recordFailedLogin(db, u.id)),
+      );
+      const [row] = await db.select().from(users).where(eq(users.id, u.id));
+      // A read-then-write version (SELECT, compute in JS, UPDATE) would lose increments here:
+      // every concurrent attempt reads the same starting count and each writes count+1.
+      expect(row?.failedLoginAttempts).toBe(concurrentAttempts);
+      expect(row?.lockedUntil).toBeNull();
+    });
+  });
+
+  describe('refresh token rotation under concurrency', () => {
+    it('lets only one of two concurrent rotations of the same token succeed', async () => {
+      const u = await makeUser('leo');
+      const t1 = await createRefreshToken(db, {
+        userId: u.id,
+        familyId: randomUUID(),
+        tokenHash: 'p'.repeat(64),
+        expiresAt: new Date(Date.now() + 60_000),
+      });
+      const [firstRevoked, secondRevoked] = await Promise.all([
+        revokeRefreshToken(db, t1.id),
+        revokeRefreshToken(db, t1.id),
+      ]);
+      // Exactly one caller "wins" the atomic revoke; the other must see it already gone. If
+      // both won, both would go on to mint a live child token from the same parent undetected.
+      expect([firstRevoked, secondRevoked].filter(Boolean)).toHaveLength(1);
+    });
   });
 
   describe('refresh tokens', () => {
@@ -141,8 +175,28 @@ describe.skipIf(!hasInfra)('auth data layer (CHAT-010, CHAT-011)', () => {
       // Wrong purpose never matches, even for an otherwise-valid token.
       expect(await findValidAuthToken(db, 'm'.repeat(64), 'password_reset')).toBeUndefined();
 
-      await consumeAuthToken(db, created.id);
+      const consumed = await consumeAuthToken(db, 'm'.repeat(64), 'email_verify');
+      expect(consumed).toMatchObject({ id: created.id, userId: u.id });
       expect(await findValidAuthToken(db, 'm'.repeat(64), 'email_verify')).toBeUndefined();
+      // Double-spend is impossible: a second consume of the same link finds nothing left to
+      // consume, rather than silently succeeding again.
+      expect(await consumeAuthToken(db, 'm'.repeat(64), 'email_verify')).toBeUndefined();
+    });
+
+    it('lets only one of two concurrent consumes of the same token succeed', async () => {
+      const u = await makeUser('kara');
+      await createAuthToken(db, {
+        userId: u.id,
+        purpose: 'password_reset',
+        tokenHash: 'o'.repeat(64),
+        expiresAt: new Date(Date.now() + 60_000),
+      });
+      const [first, second] = await Promise.all([
+        consumeAuthToken(db, 'o'.repeat(64), 'password_reset'),
+        consumeAuthToken(db, 'o'.repeat(64), 'password_reset'),
+      ]);
+      const succeeded = [first, second].filter(Boolean);
+      expect(succeeded).toHaveLength(1);
     });
 
     it('does not find an expired token', async () => {

@@ -38,6 +38,31 @@ describe('loadEnv', () => {
     expect(env.S3_FORCE_PATH_STYLE).toBe(false);
   });
 
+  it('rejects localhost defaults for PUBLIC_WEB_URL, SMTP_URL and S3_* in production', () => {
+    expect(() => loadEnv({ ...base, NODE_ENV: 'production' })).toThrow(
+      /PUBLIC_WEB_URL.*production/s,
+    );
+  });
+
+  it('accepts production when the localhost defaults are overridden with real values', () => {
+    const env = loadEnv({
+      ...base,
+      NODE_ENV: 'production',
+      PUBLIC_WEB_URL: 'https://videochat-web.onrender.com',
+      SMTP_URL: 'smtps://user:pass@smtp.example.com:465',
+      S3_ENDPOINT: 'https://s3.example.com',
+      S3_BUCKET: 'videochat-prod',
+      S3_ACCESS_KEY_ID: 'real-key',
+      S3_SECRET_ACCESS_KEY: 'real-secret',
+    });
+    expect(env.PUBLIC_WEB_URL).toBe('https://videochat-web.onrender.com');
+  });
+
+  it('does not require production values outside production', () => {
+    const env = loadEnv({ ...base, NODE_ENV: 'development' });
+    expect(env.PUBLIC_WEB_URL).toBe('http://localhost:5173');
+  });
+
   it('caches the result for process.env, so a second call skips re-parsing', () => {
     const originalEnv = { ...process.env };
     try {
