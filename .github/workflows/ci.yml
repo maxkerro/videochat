@@ -1,0 +1,106 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [master]
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    name: Lint, typecheck, test, build
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    services:
+      postgres:
+        image: postgres:17-alpine
+        env:
+          POSTGRES_USER: videochat
+          POSTGRES_PASSWORD: videochat
+          POSTGRES_DB: videochat_test
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd "pg_isready -U videochat" --health-interval 5s --health-timeout 3s --health-retries 20
+      redis:
+        image: redis:8-alpine
+        ports: ['6379:6379']
+        options: >-
+          --health-cmd "redis-cli ping" --health-interval 5s --health-timeout 3s --health-retries 20
+    env:
+      TEST_DATABASE_URL: postgres://videochat:videochat@localhost:5432/videochat_test
+      DATABASE_URL: postgres://videochat:videochat@localhost:5432/videochat_test
+      REDIS_URL: redis://localhost:6379
+      TURBO_TELEMETRY_DISABLED: 1
+    steps:
+      - uses: actions/checkout@v5
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v5
+        with:
+          node-version-file: .nvmrc
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm format:check
+      - run: pnpm lint
+      - run: pnpm typecheck
+      - run: pnpm test
+      - run: pnpm build
+      - name: Migrations apply cleanly from an empty database
+        run: pnpm db:reset -- --empty && pnpm db:migrate
+      - name: Dependency audit (fail on critical)
+        run: pnpm audit --prod --audit-level critical
+
+  docker:
+    name: API Docker image builds
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v5
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: apps/api/Dockerfile
+          push: false
+          tags: videochat-api:ci
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+  # Render deploys `master` itself once these checks pass (autoDeployTrigger: checksPass in render.yaml).
+  # This job waits for that deploy and smoke-tests it, so a broken deploy turns the commit red.
+  staging-smoke:
+    name: Staging smoke test
+    needs: [check, docker]
+    if: github.event_name == 'push' && github.ref == 'refs/heads/master' && vars.STAGING_API_URL != ''
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    environment:
+      name: staging
+      url: ${{ vars.STAGING_WEB_URL }}
+    steps:
+      - name: Wait for staging to run this commit
+        env:
+          API: ${{ vars.STAGING_API_URL }}
+          SHA: ${{ github.sha }}
+        run: |
+          for i in $(seq 1 90); do
+            version=$(curl -fsS "$API/health" | jq -r .version || true)
+            if [ "$version" = "$SHA" ]; then echo "Staging runs $SHA"; break; fi
+            echo "Staging on '${version:-unreachable}', waiting… ($i/90)"; sleep 10
+          done
+          [ "$version" = "$SHA" ] || { echo "::error::Staging did not pick up $SHA in 15 minutes"; exit 1; }
+      - name: Readiness
+        run: curl -fsS "${{ vars.STAGING_API_URL }}/ready" | jq .
+      - name: Summary
+        run: |
+          {
+            echo "### Staging deployed"
+            echo "- Web: ${{ vars.STAGING_WEB_URL }}"
+            echo "- API: ${{ vars.STAGING_API_URL }}/health"
+            echo "- Commit: \`${{ github.sha }}\`"
+          } >> "$GITHUB_STEP_SUMMARY"
