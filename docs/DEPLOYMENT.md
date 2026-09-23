@@ -9,27 +9,31 @@
 
 ## One-time setup
 
-1. **Create the services.** In Render, go to **New → Blueprint**, select this repository, and apply `render.yaml`. This creates:
+1. **Create a Neon Postgres project.** Render's free Postgres expires 30 days after creation, so the database lives on [Neon](https://neon.com) instead, which has no expiration on its free tier:
+   - Sign up at neon.com, create a project (pick the region closest to Frankfurt, e.g. `eu-central-1`), database name `videochat`.
+   - Copy the pooled connection string from the Neon dashboard (**Connect** → looks like `postgresql://user:pass@ep-xxx-pooler.eu-central-1.aws.neon.tech/videochat?sslmode=require`). Keep it handy for step 3.
+
+2. **Create the Render services.** In Render, go to **New → Blueprint**, select this repository, and apply `render.yaml`. This creates:
    - `videochat-api`: a Docker web service
    - `videochat-web`: a static site
-   - `videochat-db`: Postgres 17
    - `videochat-redis`: Key Value (Redis-compatible)
 
-   All of them run in Frankfurt.
+   All of them run in Frankfurt. (Postgres is intentionally not in the Blueprint — see step 1.)
 
-2. **Fill the secret values** that the Blueprint asks for, once the first deploy has given each service its URL:
-   - `videochat-api` → `CORS_ORIGINS` = the web URL, e.g. `https://videochat-web.onrender.com`
-   - `videochat-web` → `VITE_API_URL` = the API URL, e.g. `https://videochat-api.onrender.com`
+3. **Fill the secret values** that the Blueprint asks for:
+   - `videochat-api` → `DATABASE_URL` = the Neon connection string from step 1
+   - `videochat-api` → `CORS_ORIGINS` = the web URL, once the first deploy has given it one, e.g. `https://videochat-web.onrender.com`
+   - `videochat-web` → `VITE_API_URL` = the API URL, once the first deploy has given it one, e.g. `https://videochat-api.onrender.com`
    - Optional: `SENTRY_DSN` (API) and `VITE_SENTRY_DSN` (web)
 
    Then redeploy the web service, because Vite bakes `VITE_*` values in at build time.
 
-3. **Wire up GitHub.** Go to **Settings → Secrets and variables → Actions → Variables** and add `STAGING_API_URL` and `STAGING_WEB_URL`. Without them, the smoke-test job is skipped.
-4. **Protect `master`.** Go to **Settings → Branches**, add a rule for `master`, and require the checks _Lint, typecheck, test, build_ and _API Docker image builds_ before merging.
+4. **Wire up GitHub.** Go to **Settings → Secrets and variables → Actions → Variables** and add `STAGING_API_URL` and `STAGING_WEB_URL`. Without them, the smoke-test job is skipped.
+5. **Protect `master`.** Go to **Settings → Branches**, add a rule for `master`, and require the checks _Lint, typecheck, test, build_ and _API Docker image builds_ before merging.
 
 ## Things to know
 
-- **Free plan limits.** Free web services sleep after about 15 minutes idle, so the first request takes around 30 s. Free Postgres databases expire after 30 days. Upgrade `videochat-db` (and ideally `videochat-api`) to a paid plan before anyone relies on staging.
+- **Free plan limits.** Free web services sleep after about 15 minutes idle, so the first request takes around 30 s. Neon's free tier (0.5 GB storage, 100 compute-hours/month) does **not** expire, but its compute auto-suspends after 5 minutes idle, adding to that same cold-start delay. Render's free Redis (Key Value) is in-memory only — data is lost on restart; fine for cache/pub-sub, not for anything that must survive a restart (swap to Upstash's free tier if that changes). Upgrade to paid plans before anyone relies on staging being always-on or Redis being durable.
 - **Migrations** are forward-only (Drizzle). To change the schema, edit `apps/api/src/db/schema.ts`, run `pnpm db:generate`, review the SQL in `apps/api/drizzle/`, and commit it with the code that needs it. Write migrations so that the previous release still works against the new schema: add columns first, remove them in a later release.
 - **Metrics.** `/metrics` is public in staging. Restrict it (for example with an auth token or a private network) before production. Import `infra/grafana/videochat-api.dashboard.json` into Grafana (for example Grafana Cloud) and point a Prometheus scrape job or Grafana Alloy at `/metrics`.
 - **Tracing.** Set `OTEL_EXPORTER_OTLP_ENDPOINT` on the API (for example a Grafana Cloud, Honeycomb or Jaeger OTLP endpoint) to send traces. Logs then include `trace_id`.

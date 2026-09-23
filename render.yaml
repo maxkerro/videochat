@@ -3,6 +3,10 @@
 #
 # Deploys are gated on CI: `autoDeployTrigger: checksPass` makes Render deploy a commit on `master`
 # only after its GitHub checks (the CI workflow) have passed.
+#
+# Postgres is NOT provisioned here on purpose: Render's free Postgres expires 30 days after
+# creation. We use Neon's free tier instead (no expiration) and paste its connection string
+# into DATABASE_URL below. See docs/DEPLOYMENT.md.
 
 services:
   - type: web
@@ -21,10 +25,9 @@ services:
         - packages/shared/**
         - pnpm-lock.yaml
     envVars:
+      # Neon connection string, e.g. postgresql://user:pass@ep-xxx.eu-central-1.aws.neon.tech/videochat?sslmode=require
       - key: DATABASE_URL
-        fromDatabase:
-          name: videochat-db
-          property: connectionString
+        sync: false
       - key: REDIS_URL
         fromService:
           type: keyvalue
@@ -85,11 +88,3 @@ services:
     region: frankfurt
     maxmemoryPolicy: noeviction
     ipAllowList: [] # internal connections only
-
-databases:
-  - name: videochat-db
-    plan: free
-    region: frankfurt
-    databaseName: videochat
-    user: videochat
-    postgresMajorVersion: '17'
