@@ -34,8 +34,8 @@ to push with the [Claude Code CLI](https://claude.com/claude-code) running Opus,
 blocking-severity issue; if the `claude` CLI isn't installed, isn't logged in, or errors out, it
 never blocks on that alone — it just skips straight to the confirmation prompt.
 
-It's off by default (git doesn't run hooks from a path outside `.git/hooks` unless told to), so
-enable it once per clone:
+It's enabled automatically by `pnpm install` (the root `package.json` `prepare` script runs
+`git config core.hooksPath .githooks`), or by hand with:
 
 ```
 git config core.hooksPath .githooks

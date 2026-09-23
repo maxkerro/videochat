@@ -83,7 +83,13 @@ reffile=$(mktemp "${TMPDIR:-/tmp}/claude-review-hook-refs.XXXXXX") || {
   echo "[review-hook] Could not create a temp file -- skipping the review."
   exit 0
 }
-trap 'rm -f "$reffile" "$errfile"' EXIT INT TERM
+# Clean up AND exit on INT/TERM (e.g. Ctrl-C during a review): without the
+# explicit exit, the trap only deletes the temp files and then lets the
+# script fall through to whatever's next, so a killed `claude` would just
+# be reported as "review failed -- not blocking" and the hook would carry
+# on as if nothing happened.
+trap 'rm -f "$reffile" "$errfile"' EXIT
+trap 'rm -f "$reffile" "$errfile"; exit 130' INT TERM
 cat > "$reffile"
 
 zero=0000000000000000000000000000000000000000
@@ -152,15 +158,24 @@ $diff_text"
   #    environment), which a large diff (e.g. a big pnpm-lock.yaml change,
   #    or a big first push) can exceed;
   #  - keeps claude's stdin independent of this loop's stdin (see the
-  #    `refs=$(cat)` note above), so it can never consume the ref list.
-  # --allowedTools '': the diff is untrusted content (it can come from
-  # anyone's commits), so the reviewer runs with no tool access at all --
-  # it can only read the prompt and answer, never act on anything a
-  # crafted diff might try to get it to do.
+  #    reffile comment above), so it can never consume the ref list.
+  # The diff is untrusted content (it can come from anyone's commits), so
+  # the reviewer runs with no tool access at all -- it can only read the
+  # prompt and answer, never act on anything a crafted diff might try to
+  # get it to do. Note --allowedTools alone would NOT do this: it only
+  # pre-approves tools, it doesn't take any away, so a prompt injection
+  # could still reach anything already allowed in your own settings, plus
+  # no-permission-needed tools like Read/Grep. What actually disables tool
+  # access is the combination below:
+  #  --tools ""            -- the available tool set is empty
+  #  --restricted          -- ignores your user/project/local settings
+  #                           files, so previously-allowed tools don't leak in
+  #  --strict-mcp-config    -- with no --mcp-config given, loads zero MCP
+  #                           servers (connectors), regardless of project config
   if [ -n "$errfile" ]; then
-    review_output=$(printf '%s' "$prompt" | claude -p --model opus --allowedTools '' 2>"$errfile")
+    review_output=$(printf '%s' "$prompt" | claude -p --model opus --tools "" --restricted --strict-mcp-config 2>"$errfile")
   else
-    review_output=$(printf '%s' "$prompt" | claude -p --model opus --allowedTools '' 2>&1)
+    review_output=$(printf '%s' "$prompt" | claude -p --model opus --tools "" --restricted --strict-mcp-config 2>&1)
   fi
   claude_status=$?
 
@@ -187,8 +202,18 @@ $diff_text"
   # Only the last non-empty line counts as the verdict -- grepping the
   # whole review text for the marker would also match a false positive if
   # the review happens to mention the marker string while discussing this
-  # very hook.
-  verdict=$(printf '%s\n' "$review_output" | awk 'NF{l=$0} END{print l}')
+  # very hook. Trim markdown bold markers, a trailing \r (a diff/terminal
+  # occasionally leaves one), and surrounding whitespace before matching,
+  # so a harmlessly-decorated verdict line (e.g. "**VERDICT: OK**") isn't
+  # mistaken for "no clear verdict". This still fails safe either way: an
+  # unrecognized verdict falls through to the y/N prompt below, never to
+  # an automatic pass.
+  verdict=$(
+    printf '%s\n' "$review_output" |
+      awk 'NF{l=$0} END{print l}' |
+      tr -d '\r' |
+      sed -e 's/^[[:space:]*]*//' -e 's/[[:space:]*]*$//'
+  )
   case "$verdict" in
     'VERDICT: BLOCK')
       echo "[review-hook] Opus flagged a blocking-severity issue above. Push aborted."
