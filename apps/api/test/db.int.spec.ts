@@ -116,6 +116,17 @@ describe.skipIf(!hasInfra)('database schema v1 (CHAT-004)', () => {
     expect(n?.n).toBe(1);
   });
 
+  it('refuses to append a message to a conversation that does not exist', async () => {
+    const sender = await makeUser('ivan');
+    await expect(
+      appendMessage(db, {
+        conversationId: '00000000-0000-0000-0000-000000000000',
+        senderId: sender.id,
+        body: 'hello?',
+      }),
+    ).rejects.toThrow(/not found/);
+  });
+
   it('rejects message bodies over 4,000 characters', async () => {
     const conv = await makeGroup();
     const code = await pgErrorCode(

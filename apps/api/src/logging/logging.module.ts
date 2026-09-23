@@ -11,7 +11,7 @@ const REQUEST_ID_HEADER = 'x-request-id';
 const QUIET_PATHS = new Set(['/health', '/ready', '/metrics']);
 
 /** pino-pretty is a dev dependency; fall back to JSON if it isn't installed (e.g. a prod image). */
-function hasPrettyPrinter(): boolean {
+export function hasPrettyPrinter(): boolean {
   try {
     createRequire(import.meta.url).resolve('pino-pretty');
     return true;

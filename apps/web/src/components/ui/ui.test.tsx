@@ -1,6 +1,7 @@
 import { render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import { Avatar, Button, Input, initials } from './index';
+import { fireEvent } from '@testing-library/react';
+import { Avatar, Button, Input, Skeleton, initials } from './index';
 
 describe('Button', () => {
   it('is keyboard-activatable and defaults to type="button"', async () => {
@@ -29,6 +30,12 @@ describe('Input', () => {
     expect(input).toHaveAccessibleDescription('Use at least 3 characters.');
     expect(screen.getByRole('alert')).toHaveTextContent('Use at least 3 characters.');
   });
+
+  it('shows a hint instead of an error when there is no error', () => {
+    render(<Input label="Display name" hint="Shown to people you chat with." />);
+    expect(screen.getByText('Shown to people you chat with.')).toBeInTheDocument();
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+  });
 });
 
 describe('Avatar', () => {
@@ -43,5 +50,22 @@ describe('Avatar', () => {
   it('exposes the name and presence to assistive tech', () => {
     render(<Avatar name="Ben Okafor" online />);
     expect(screen.getByRole('img', { name: 'Ben Okafor, online' })).toBeInTheDocument();
+  });
+
+  it('shows the image when a src is given, and falls back to initials if it fails to load', () => {
+    render(<Avatar name="Ben Okafor" src="https://example.test/ben.png" />);
+    const img = screen.getByRole('img', { name: 'Ben Okafor' }).querySelector('img')!;
+    expect(img).toHaveAttribute('src', 'https://example.test/ben.png');
+    fireEvent.error(img);
+    expect(screen.getByText('BO')).toBeInTheDocument();
+  });
+});
+
+describe('Skeleton', () => {
+  it('renders a hidden placeholder sized by its props', () => {
+    const { container } = render(<Skeleton width={40} height={40} circle />);
+    const el = container.firstElementChild!;
+    expect(el).toHaveAttribute('aria-hidden', 'true');
+    expect(el).toHaveStyle({ width: '40px', height: '40px' });
   });
 });
