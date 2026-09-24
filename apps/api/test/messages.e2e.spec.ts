@@ -29,7 +29,14 @@ function waitForOpen(ws: WebSocket): Promise<void> {
   });
 }
 
-function waitForMessage(ws: WebSocket, timeoutMs = 3000): Promise<unknown> {
+// 3000ms was tight enough that this occasionally timed out on GitHub's shared runners even
+// though delivery is a same-process Redis pub/sub round trip that normally completes in single-
+// digit milliseconds -- vitest runs many e2e files' Postgres/Redis-backed tests concurrently, and
+// a neighboring file's heavy work (Argon2 hashing, DB round trips) can stall the event loop or
+// starve CPU for a couple of seconds on a loaded runner. 8000ms gives real CI jitter room without
+// meaningfully weakening the assertion: a genuinely broken delivery path still fails, just not on
+// a hairline miss.
+function waitForMessage(ws: WebSocket, timeoutMs = 8000): Promise<unknown> {
   return new Promise((resolve, reject) => {
     const timer = setTimeout(() => reject(new Error('Timed out waiting for a message')), timeoutMs);
     ws.once('message', (data: Buffer) => {
