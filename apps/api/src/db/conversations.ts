@@ -30,6 +30,19 @@ export async function isConversationMember(
   return row !== undefined;
 }
 
+/** Ids of every conversation `userId` currently belongs to. Used by the realtime gateway
+ *  (CHAT-013) to snapshot, at connect time, which `conv:{id}` channels to fan messages in from. */
+export async function listConversationIdsForUser(
+  db: DbExecutor,
+  userId: string,
+): Promise<string[]> {
+  const rows = await db
+    .select({ conversationId: memberships.conversationId })
+    .from(memberships)
+    .where(and(eq(memberships.userId, userId), isNull(memberships.leftAt)));
+  return rows.map((r) => r.conversationId);
+}
+
 /**
  * Finds the existing direct conversation between two users, or creates one. `directKey` is
  * unique-indexed (see schema.ts), so a race between two concurrent "start chat with X" requests

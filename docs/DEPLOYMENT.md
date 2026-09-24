@@ -33,6 +33,8 @@
 
    `videochat-web` does **not** need `VITE_API_URL` set -- it proxies API paths through its own origin (see `render.yaml`'s `routes`), which is also what keeps the refresh-token cookie same-site instead of cross-site between the two `*.onrender.com` hosts.
 
+   `VITE_REALTIME_URL` (CHAT-013) is the one exception: it **is** set in `render.yaml`, pointing straight at `wss://<api hostname>/realtime`. The realtime socket authenticates with the access token as a query parameter rather than the refresh-token cookie, so there's no same-site requirement, and going straight to the API avoids relying on the static-site rewrite proxy for a WebSocket upgrade. Update it alongside the API hostname in the `routes` section if the API service is ever recreated under a new name.
+
 4. **Wire up GitHub.** Go to **Settings → Secrets and variables → Actions → Variables** and add `STAGING_API_URL` and `STAGING_WEB_URL`. Without them, the smoke-test job is skipped.
 5. **Protect `master`.** Go to **Settings → Branches**, add a rule for `master`, and require the checks _Lint, typecheck, test, build_ and _API Docker image builds_ before merging.
 

@@ -1,4 +1,5 @@
 import type { INestApplication } from '@nestjs/common';
+import { WsAdapter } from '@nestjs/platform-ws';
 import cookieParser from 'cookie-parser';
 import helmet from 'helmet';
 import { Logger } from 'nestjs-pino';
@@ -22,5 +23,9 @@ export function configureApp(app: INestApplication): Env {
     exposedHeaders: ['x-request-id'],
   });
   app.enableShutdownHooks();
+  // CHAT-013: plain `ws` gateway for the realtime endpoint, sharing this same HTTP server
+  // (the default port-0 mode attaches to it via the 'upgrade' event) rather than opening one
+  // of its own.
+  app.useWebSocketAdapter(new WsAdapter(app));
   return env;
 }

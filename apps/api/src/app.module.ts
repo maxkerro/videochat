@@ -7,6 +7,7 @@ import { HealthModule } from './health/health.module.js';
 import { InfraModule } from './infra/infra.module.js';
 import { LoggingModule } from './logging/logging.module.js';
 import { MetricsModule } from './metrics/metrics.module.js';
+import { RealtimeModule } from './realtime/realtime.module.js';
 import { StorageModule } from './storage/storage.module.js';
 import { UsersModule } from './users/users.module.js';
 
@@ -21,7 +22,8 @@ import { UsersModule } from './users/users.module.js';
     AuthModule,
     UsersModule,
     ConversationsModule,
-    // Remaining feature modules (messages, realtime) arrive later in M1.
+    RealtimeModule,
+    // Remaining feature modules (messages) arrive with CHAT-014.
   ],
   providers: [{ provide: APP_FILTER, useClass: SentryGlobalFilter }],
 })

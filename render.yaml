@@ -103,6 +103,12 @@ services:
         source: /users/*
         destination: https://videochat-api-p6sw.onrender.com/users/:splat
       - type: rewrite
+        source: /conversations
+        destination: https://videochat-api-p6sw.onrender.com/conversations
+      - type: rewrite
+        source: /conversations/*
+        destination: https://videochat-api-p6sw.onrender.com/conversations/:splat
+      - type: rewrite
         source: /health
         destination: https://videochat-api-p6sw.onrender.com/health
       - type: rewrite
@@ -132,6 +138,13 @@ services:
       # through this same origin, so the web app's default (same-origin relative paths)
       # is what production wants. Only set it if you point the web app at an API that
       # isn't proxied this way.
+      # CHAT-013's realtime socket is the one exception: it authenticates with the access
+      # token as a query parameter, not the refresh-token cookie, so it has no same-site
+      # requirement and connects straight to the API's own host instead of going through the
+      # rewrite proxy above (whose HTTP-rewrite rules aren't meant for a WebSocket upgrade).
+      # Must be updated together with the API hostname in the routes above.
+      - key: VITE_REALTIME_URL
+        value: wss://videochat-api-p6sw.onrender.com/realtime
       - key: VITE_SENTRY_DSN
         sync: false
 
