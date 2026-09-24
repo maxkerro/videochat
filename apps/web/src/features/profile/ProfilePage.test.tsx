@@ -22,7 +22,10 @@ function routedFetch(
   handlers: Record<string, (url: URL, init?: RequestInit) => Response>,
 ): typeof fetch {
   return vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
-    const url = new URL(typeof input === 'string' ? input : input.toString());
+    // VITE_API_URL is unset in CI (apps/web/.env is gitignored, like apps/api's), so apiGet()
+    // calls fetch() with a relative path there instead of an absolute localhost URL -- new URL()
+    // requires a base for a relative input, so this must always supply one.
+    const url = new URL(typeof input === 'string' ? input : input.toString(), 'http://localhost');
     for (const [key, handler] of Object.entries(handlers)) {
       const [method, path] = key.split(' ');
       if ((init?.method ?? 'GET') === method && url.pathname === path) {
