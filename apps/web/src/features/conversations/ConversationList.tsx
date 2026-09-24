@@ -1,9 +1,10 @@
-import { useQuery } from '@tanstack/react-query';
-import type { ConversationSummary } from '@videochat/shared';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
+import { messageSchema, type ConversationSummary, type WsEnvelope } from '@videochat/shared';
 import { useState } from 'react';
 import { NavLink } from 'react-router';
 import { Avatar, Input } from '../../components/ui';
 import { useAuth, withAuthRetry } from '../auth/AuthContext';
+import { useRealtimeEvent } from '../chat/RealtimeProvider';
 import { cx } from '../../lib/cx';
 import { fetchConversations } from './conversationsApi';
 import styles from './ConversationList.module.css';
@@ -20,16 +21,60 @@ function timeFor(conversation: ConversationSummary): string {
   });
 }
 
+/** Same ordering the API returns the list in (most recent activity first), so a client-side
+ *  reorder after a realtime update never disagrees with a fresh fetch. A conversation with no
+ *  messages yet (`lastMessageAt: null`) sorts last. */
+function byRecency(a: ConversationSummary, b: ConversationSummary): number {
+  const at = a.lastMessageAt ? Date.parse(a.lastMessageAt) : 0;
+  const bt = b.lastMessageAt ? Date.parse(b.lastMessageAt) : 0;
+  return bt - at;
+}
+
 export function ConversationList() {
   const auth = useAuth();
+  const queryClient = useQueryClient();
   const [query, setQuery] = useState('');
 
-  // Real-time updates to this list (new messages bumping order, unread counts) arrive with
-  // CHAT-015; for now it reflects whatever was true when the page loaded or was last focused.
   const { data: conversations = [] } = useQuery({
     queryKey: ['conversations'],
     queryFn: () => withAuthRetry(auth, fetchConversations),
     enabled: auth.status === 'authenticated',
+  });
+
+  // CHAT-015: keeps the inbox live -- a new message (ours or a peer's) moves its conversation to
+  // the top and updates the unread badge immediately, without waiting on a refetch.
+  useRealtimeEvent((envelope: WsEnvelope) => {
+    if (envelope.type !== 'message.new') return;
+    const parsed = messageSchema.safeParse(envelope.payload);
+    if (!parsed.success) return;
+    const message = parsed.data;
+
+    queryClient.setQueryData<ConversationSummary[]>(['conversations'], (old) => {
+      if (!old) return old;
+      const idx = old.findIndex((c) => c.id === message.conversationId);
+      if (idx < 0) {
+        // Not a conversation we have cached yet -- most likely one just started by someone else
+        // that immediately sent a message. Refetch instead of fabricating a summary client-side.
+        void queryClient.invalidateQueries({ queryKey: ['conversations'] });
+        return old;
+      }
+      const current = old[idx]!;
+      const next: ConversationSummary = {
+        ...current,
+        lastSeq: Math.max(current.lastSeq, message.seq),
+        lastMessageAt: message.createdAt,
+        // Sending counts as having read your own message (mirrors appendMessage's own
+        // bookkeeping server-side), so your own outgoing messages never show up as unread here.
+        lastReadSeq:
+          message.senderId === auth.user?.id
+            ? Math.max(current.lastReadSeq, message.seq)
+            : current.lastReadSeq,
+      };
+      const copy = old.slice();
+      copy[idx] = next;
+      copy.sort(byRecency);
+      return copy;
+    });
   });
 
   const items = conversations.filter((c) =>
