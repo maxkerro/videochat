@@ -33,4 +33,7 @@ export const LIMITS = {
   loginLockoutMinutes: 15,
   /** Max rows returned by the "find people" search (CHAT-012). */
   userSearchMaxResults: 20,
+  /** Messages returned by the initial (non-paged) history load (CHAT-014). Full cursor-based
+   *  paging arrives with CHAT-016. */
+  messageHistoryPageSize: 50,
 } as const;

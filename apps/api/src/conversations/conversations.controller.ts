@@ -1,4 +1,4 @@
-import { Body, Controller, Get, Post, UseGuards } from '@nestjs/common';
+import { Body, Controller, Get, Param, Post, UseGuards } from '@nestjs/common';
 import {
   startDirectConversationSchema,
   type ConversationSummary,
@@ -17,6 +17,14 @@ export class ConversationsController {
   @Get()
   list(@CurrentUserId() userId: string): Promise<ConversationsList> {
     return this.conversations.listForUser(userId);
+  }
+
+  @Get(':conversationId')
+  getOne(
+    @Param('conversationId') conversationId: string,
+    @CurrentUserId() userId: string,
+  ): Promise<ConversationSummary> {
+    return this.conversations.getById(conversationId, userId);
   }
 
   @Post('direct')

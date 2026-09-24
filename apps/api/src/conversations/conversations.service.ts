@@ -2,7 +2,11 @@ import { BadRequestException, Inject, Injectable, NotFoundException } from '@nes
 import type { ConversationSummary } from '@videochat/shared';
 import type { Database } from '../db/client.js';
 import { DB } from '../infra/tokens.js';
-import { findOrCreateDirectConversation, listConversationsForUser } from '../db/conversations.js';
+import {
+  findConversationForUser,
+  findOrCreateDirectConversation,
+  listConversationsForUser,
+} from '../db/conversations.js';
 import { findUserById } from '../db/users.js';
 import { S3Service } from '../storage/s3.service.js';
 import { toConversationSummary } from './conversation-mapper.js';
@@ -24,6 +28,16 @@ export class ConversationsService {
     const conv = await findOrCreateDirectConversation(this.db, userId, otherUserId);
     const avatarUrl = await this.s3.getAvatarUrl(other.avatarKey);
     return toConversationSummary({ ...conv, peer: other }, avatarUrl);
+  }
+
+  /** CHAT-014: a single conversation, for a client that navigated straight to it (e.g. a
+   *  reload) without the full list already in cache. 404s for a non-member, same as the
+   *  message endpoints. */
+  async getById(conversationId: string, userId: string): Promise<ConversationSummary> {
+    const row = await findConversationForUser(this.db, conversationId, userId);
+    if (!row) throw new NotFoundException('Conversation not found');
+    const avatarUrl = row.peer ? await this.s3.getAvatarUrl(row.peer.avatarKey) : null;
+    return toConversationSummary(row, avatarUrl);
   }
 
   async listForUser(userId: string): Promise<ConversationSummary[]> {

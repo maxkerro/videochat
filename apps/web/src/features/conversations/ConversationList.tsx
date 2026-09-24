@@ -1,14 +1,39 @@
+import { useQuery } from '@tanstack/react-query';
+import type { ConversationSummary } from '@videochat/shared';
 import { useState } from 'react';
 import { NavLink } from 'react-router';
 import { Avatar, Input } from '../../components/ui';
+import { useAuth, withAuthRetry } from '../auth/AuthContext';
 import { cx } from '../../lib/cx';
+import { fetchConversations } from './conversationsApi';
 import styles from './ConversationList.module.css';
-import { sampleConversations } from './sampleData';
+
+function titleFor(conversation: ConversationSummary): string {
+  return conversation.peer?.displayName ?? conversation.title ?? 'Conversation';
+}
+
+function timeFor(conversation: ConversationSummary): string {
+  if (!conversation.lastMessageAt) return '';
+  return new Date(conversation.lastMessageAt).toLocaleTimeString([], {
+    hour: 'numeric',
+    minute: '2-digit',
+  });
+}
 
 export function ConversationList() {
+  const auth = useAuth();
   const [query, setQuery] = useState('');
-  const items = sampleConversations.filter((c) =>
-    c.title.toLowerCase().includes(query.trim().toLowerCase()),
+
+  // Real-time updates to this list (new messages bumping order, unread counts) arrive with
+  // CHAT-015; for now it reflects whatever was true when the page loaded or was last focused.
+  const { data: conversations = [] } = useQuery({
+    queryKey: ['conversations'],
+    queryFn: () => withAuthRetry(auth, fetchConversations),
+    enabled: auth.status === 'authenticated',
+  });
+
+  const items = conversations.filter((c) =>
+    titleFor(c).toLowerCase().includes(query.trim().toLowerCase()),
   );
 
   return (
@@ -36,33 +61,40 @@ export function ConversationList() {
       </div>
       <nav aria-label="Conversations" className={styles.scroll}>
         {items.length === 0 ? (
-          <p className={styles.empty}>No conversations match “{query}”.</p>
+          <p className={styles.empty}>
+            {query
+              ? `No conversations match "${query}".`
+              : 'No conversations yet -- start one with "New chat".'}
+          </p>
         ) : (
           <ul className={styles.list}>
-            {items.map((c) => (
-              <li key={c.id}>
-                <NavLink
-                  to={`/c/${c.id}`}
-                  className={({ isActive }) => cx(styles.item, isActive && styles.active)}
-                >
-                  <Avatar name={c.title} online={c.online} />
-                  <span className={styles.text}>
-                    <span className={styles.row}>
-                      <span className={styles.title}>{c.title}</span>
-                      <time className={styles.time}>{c.lastAt}</time>
-                    </span>
-                    <span className={styles.row}>
-                      <span className={styles.preview}>{c.lastMessage}</span>
-                      {c.unread > 0 && (
-                        <span className={styles.badge} aria-label={`${c.unread} unread`}>
-                          {c.unread > 99 ? '99+' : c.unread}
+            {items.map((c) => {
+              const unread = Math.max(0, c.lastSeq - c.lastReadSeq);
+              return (
+                <li key={c.id}>
+                  <NavLink
+                    to={`/c/${c.id}`}
+                    className={({ isActive }) => cx(styles.item, isActive && styles.active)}
+                  >
+                    <Avatar name={titleFor(c)} src={c.peer?.avatarUrl} />
+                    <span className={styles.text}>
+                      <span className={styles.row}>
+                        <span className={styles.title}>{titleFor(c)}</span>
+                        <time className={styles.time}>{timeFor(c)}</time>
+                      </span>
+                      {unread > 0 && (
+                        <span className={styles.row}>
+                          <span className={styles.preview} />
+                          <span className={styles.badge} aria-label={`${unread} unread`}>
+                            {unread > 99 ? '99+' : unread}
+                          </span>
                         </span>
                       )}
                     </span>
-                  </span>
-                </NavLink>
-              </li>
-            ))}
+                  </NavLink>
+                </li>
+              );
+            })}
           </ul>
         )}
       </nav>

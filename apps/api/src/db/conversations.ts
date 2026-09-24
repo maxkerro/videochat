@@ -108,6 +108,39 @@ export interface ConversationListRow extends ConversationWithMembership {
   peer?: typeof users.$inferSelect;
 }
 
+/** One conversation, as `userId` (a current member) sees it -- used by ChatPane (CHAT-014) to
+ *  render a header without loading the whole list. Returns undefined for a non-member, same as
+ *  a not-found, so a caller can 404 either way. */
+export async function findConversationForUser(
+  db: DbExecutor,
+  conversationId: string,
+  userId: string,
+): Promise<ConversationListRow | undefined> {
+  const [row] = await db
+    .select({
+      conversation: conversations,
+      role: memberships.role,
+      lastReadSeq: memberships.lastReadSeq,
+    })
+    .from(memberships)
+    .innerJoin(conversations, eq(conversations.id, memberships.conversationId))
+    .where(
+      and(
+        eq(memberships.conversationId, conversationId),
+        eq(memberships.userId, userId),
+        isNull(memberships.leftAt),
+      ),
+    )
+    .limit(1);
+  if (!row) return undefined;
+
+  const peer =
+    row.conversation.type === 'direct'
+      ? (await loadDirectPeers(db, [conversationId], userId)).get(conversationId)
+      : undefined;
+  return { ...row.conversation, role: row.role, lastReadSeq: row.lastReadSeq, peer };
+}
+
 /** Every conversation `userId` currently belongs to, newest activity first. For a direct
  *  conversation, also loads the other member so the client can show who it's with (a direct
  *  conversation has no title of its own). */

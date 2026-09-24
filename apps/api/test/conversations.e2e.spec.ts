@@ -148,6 +148,29 @@ describe.skipIf(!hasInfra)('conversations HTTP flow (CHAT-012)', () => {
       expect(listForB.body[0].peer.username).toBe(a.username);
     });
 
+    it('gets a single conversation by id for a member, and 404s for a non-member', async () => {
+      const a = await signUpAndLogIn();
+      const b = await signUpAndLogIn();
+      const outsider = await signUpAndLogIn();
+      const bMe = await request(server()).get('/me').set(auth(b.session.accessToken)).expect(200);
+      const started = await request(server())
+        .post('/conversations/direct')
+        .set(auth(a.session.accessToken))
+        .send({ userId: bMe.body.id })
+        .expect(201);
+
+      const got = await request(server())
+        .get(`/conversations/${started.body.id}`)
+        .set(auth(a.session.accessToken))
+        .expect(200);
+      expect(got.body).toEqual(started.body);
+
+      await request(server())
+        .get(`/conversations/${started.body.id}`)
+        .set(auth(outsider.session.accessToken))
+        .expect(404);
+    });
+
     it('rejects starting a conversation with a user that does not exist', async () => {
       const a = await signUpAndLogIn();
       await request(server())

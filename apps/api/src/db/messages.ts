@@ -1,4 +1,4 @@
-import { and, eq, sql } from 'drizzle-orm';
+import { and, desc, eq, sql } from 'drizzle-orm';
 import { ulid } from 'ulid';
 import type { MessageType } from '@videochat/shared';
 import type { Database, DbExecutor } from './client.js';
@@ -65,6 +65,25 @@ async function findByClientMsgId(
     .where(and(eq(messages.senderId, senderId), eq(messages.clientMsgId, clientMsgId)))
     .limit(1);
   return row;
+}
+
+/**
+ * The most recent `limit` messages in a conversation, oldest first (ready to render top-to-
+ * bottom). A minimal stand-in for CHAT-016's cursor-paged, virtualized history -- just enough
+ * to show a working conversation for CHAT-014's send/receive.
+ */
+export async function listRecentMessages(
+  db: DbExecutor,
+  conversationId: string,
+  limit: number,
+): Promise<MessageRow[]> {
+  const rows = await db
+    .select()
+    .from(messages)
+    .where(eq(messages.conversationId, conversationId))
+    .orderBy(desc(messages.seq))
+    .limit(limit);
+  return rows.reverse();
 }
 
 /** Stable key for a direct conversation between two users, order-independent. */
