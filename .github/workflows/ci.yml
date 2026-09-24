@@ -37,6 +37,13 @@ jobs:
       DATABASE_URL: postgres://videochat:videochat@localhost:5432/videochat_test
       REDIS_URL: redis://localhost:6379
       TURBO_TELEMETRY_DISABLED: 1
+      # env.ts's schema requires this with no default (unlike the other auth/storage/mail vars,
+      # which all fall back to a local dev value) -- it's normally supplied by the gitignored
+      # apps/api/.env, which doesn't exist in CI, so the full-app e2e specs (auth, conversations,
+      # messages, realtime) fail Nest's DI with "JWT_SECRET: Invalid input: expected string,
+      # received undefined" without this. Any string >= 32 chars works; it never needs to match a
+      # real deployment's secret since CI never talks to a real deployment.
+      JWT_SECRET: ci-only-secret-do-not-use-in-production-32chars
     steps:
       - uses: actions/checkout@v5
       - uses: pnpm/action-setup@v4
