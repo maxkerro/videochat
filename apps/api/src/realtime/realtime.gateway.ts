@@ -8,7 +8,9 @@ import {
   type OnGatewayInit,
 } from '@nestjs/websockets';
 import type { IncomingMessage } from 'http';
+import { randomUUID } from 'node:crypto';
 import type { Server } from 'ws';
+import { makeEnvelope } from '@videochat/shared';
 import type { AccessTokenPayload } from '../auth/access-token.guard.js';
 import type { Database } from '../db/client.js';
 import { listConversationIdsForUser } from '../db/conversations.js';
@@ -76,6 +78,16 @@ export class RealtimeGateway
 
     const conversationIds = await listConversationIdsForUser(this.db, userId);
     this.realtime.register(client, userId, conversationIds);
+
+    // The client's WebSocket fires `open` as soon as the handshake completes, which is before
+    // this handler's DB query and registration above finish -- there's no way to delay `open`
+    // itself. Until this confirmation arrives, a message published into one of the client's
+    // conversations can race ahead of `register()` and be silently dropped (deliverLocally only
+    // sees sockets already in its registry). A client -- or a test -- that waits for this event
+    // instead of `open` before assuming it will hear about new activity closes that window.
+    if (client.readyState === client.OPEN) {
+      client.send(JSON.stringify(makeEnvelope('realtime.ready', {}, randomUUID())));
+    }
   }
 
   handleDisconnect(client: RealtimeSocket): void {

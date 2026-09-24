@@ -58,6 +58,17 @@ function waitForOpen(ws: WebSocket): Promise<void> {
   });
 }
 
+/** `open` fires as soon as the handshake completes, before the gateway's async DB query and
+ *  registration with RealtimeService (see handleConnection) finish -- publishing to a
+ *  conversation right after `open` can race ahead of that and be silently dropped. The gateway
+ *  sends a `realtime.ready` envelope once registration is actually done; waiting for that
+ *  instead of (well, in addition to) `open` is what makes this test -- and any real client
+ *  relying on the same signal -- deterministic instead of occasionally flaky under load. */
+async function waitForReady(ws: WebSocket): Promise<void> {
+  await waitForOpen(ws);
+  await waitForMessage(ws);
+}
+
 function waitForMessage(ws: WebSocket, timeoutMs = 3000): Promise<unknown> {
   return new Promise((resolve, reject) => {
     const timer = setTimeout(() => reject(new Error('Timed out waiting for a message')), timeoutMs);
@@ -138,7 +149,7 @@ describe.skipIf(!hasInfra)('realtime gateway fan-out across nodes (CHAT-013)', (
 
     const socketA = connect(nodeA, a.accessToken);
     const socketB = connect(nodeB, b.accessToken);
-    await Promise.all([waitForOpen(socketA), waitForOpen(socketB)]);
+    await Promise.all([waitForReady(socketA), waitForReady(socketB)]);
 
     const envelope = makeEnvelope('message.new', { text: 'hi from node A' }, 'evt-1');
     const received = waitForMessage(socketB);

@@ -39,6 +39,17 @@ function waitForMessage(ws: WebSocket, timeoutMs = 3000): Promise<unknown> {
   });
 }
 
+/** `open` fires as soon as the handshake completes, before the gateway's async DB query and
+ *  registration with RealtimeService (see handleConnection) finish -- publishing to a
+ *  conversation right after `open` can race ahead of that and be silently dropped. The gateway
+ *  sends a `realtime.ready` envelope once registration is actually done; waiting for that (and
+ *  consuming it via the same `once` as waitForMessage, so it's never mistaken for a real event)
+ *  before assuming the socket will hear about new activity is what makes this deterministic. */
+async function waitForReady(ws: WebSocket): Promise<void> {
+  await waitForOpen(ws);
+  await waitForMessage(ws);
+}
+
 describe.skipIf(!hasInfra)('messages HTTP flow (CHAT-014)', () => {
   let app: INestApplication;
   let mail: FakeMailService;
@@ -108,7 +119,7 @@ describe.skipIf(!hasInfra)('messages HTTP flow (CHAT-014)', () => {
 
     const socketB = new WebSocket(wsUrl(`/realtime?token=${b.accessToken}`));
     openSockets.push(socketB);
-    await waitForOpen(socketB);
+    await waitForReady(socketB);
 
     const delivered = waitForMessage(socketB);
     const sent = await request(server())
@@ -138,7 +149,7 @@ describe.skipIf(!hasInfra)('messages HTTP flow (CHAT-014)', () => {
     const socketB = new WebSocket(wsUrl(`/realtime?token=${b.accessToken}`));
     const socketOutsider = new WebSocket(wsUrl(`/realtime?token=${outsider.accessToken}`));
     openSockets.push(socketB, socketOutsider);
-    await Promise.all([waitForOpen(socketB), waitForOpen(socketOutsider)]);
+    await Promise.all([waitForReady(socketB), waitForReady(socketOutsider)]);
 
     const receivedByOutsider: unknown[] = [];
     socketOutsider.on('message', (data: Buffer) =>
