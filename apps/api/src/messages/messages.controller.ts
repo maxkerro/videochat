@@ -2,6 +2,7 @@ import { Body, Controller, Get, Param, Post, UseGuards } from '@nestjs/common';
 import { sendMessageSchema, type Message, type MessageList } from '@videochat/shared';
 import { z } from 'zod';
 import { AccessTokenGuard, CurrentUserId } from '../auth/access-token.guard.js';
+import { UuidParamPipe } from '../common/uuid-param.pipe.js';
 import { ZodValidationPipe } from '../common/zod-validation.pipe.js';
 import { MessagesService } from './messages.service.js';
 
@@ -12,7 +13,7 @@ export class MessagesController {
 
   @Get()
   list(
-    @Param('conversationId') conversationId: string,
+    @Param('conversationId', UuidParamPipe) conversationId: string,
     @CurrentUserId() userId: string,
   ): Promise<MessageList> {
     return this.messages.listRecent(conversationId, userId);
@@ -20,7 +21,7 @@ export class MessagesController {
 
   @Post()
   send(
-    @Param('conversationId') conversationId: string,
+    @Param('conversationId', UuidParamPipe) conversationId: string,
     @CurrentUserId() userId: string,
     @Body(new ZodValidationPipe(sendMessageSchema)) body: z.infer<typeof sendMessageSchema>,
   ): Promise<Message> {

@@ -21,6 +21,13 @@ const peer = {
 };
 
 const conversationId = '33333333-3333-4333-8333-333333333333';
+const otherPeer = {
+  id: '44444444-4444-4444-8444-444444444444',
+  username: 'clara',
+  displayName: 'Clara Novak',
+  avatarUrl: null,
+};
+const otherConversationId = '55555555-5555-4555-8555-555555555555';
 
 function session() {
   return {
@@ -40,6 +47,19 @@ function conversation() {
     role: 'member' as const,
     lastReadSeq: 1,
     peer,
+  };
+}
+
+function otherConversation() {
+  return {
+    id: otherConversationId,
+    type: 'direct' as const,
+    title: null,
+    lastSeq: 0,
+    lastMessageAt: null,
+    role: 'member' as const,
+    lastReadSeq: 0,
+    peer: otherPeer,
   };
 }
 
@@ -199,6 +219,37 @@ describe('ChatPane', () => {
     );
     expect(screen.getAllByText('retry me')).toHaveLength(1);
     expect(attempts).toBe(2);
+  });
+
+  it('does not leak a failed send into a conversation switched to afterwards', async () => {
+    vi.stubGlobal(
+      'fetch',
+      routedFetch({
+        'POST /auth/refresh': () => jsonResponse(session()),
+        [`GET /conversations/${conversationId}`]: () => jsonResponse(conversation()),
+        [`GET /conversations/${conversationId}/messages`]: () => jsonResponse([]),
+        [`POST /conversations/${conversationId}/messages`]: () =>
+          jsonResponse({ message: 'Server error' }, 500),
+        [`GET /conversations/${otherConversationId}`]: () => jsonResponse(otherConversation()),
+        [`GET /conversations/${otherConversationId}/messages`]: () => jsonResponse([]),
+      }),
+    );
+    const { router } = renderApp(`/c/${conversationId}`);
+    await screen.findByLabelText('Message');
+
+    await userEvent.type(screen.getByLabelText('Message'), 'for ben only');
+    await userEvent.click(screen.getByRole('button', { name: 'Send message' }));
+    await screen.findByRole('button', { name: 'Failed -- tap to retry' });
+
+    await router.navigate(`/c/${otherConversationId}`);
+
+    expect(await screen.findByRole('heading', { name: 'Clara Novak' })).toBeInTheDocument();
+    expect(screen.queryByText('for ben only')).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole('button', { name: 'Failed -- tap to retry' }),
+    ).not.toBeInTheDocument();
+    // The composer should also be empty rather than carrying the other conversation's draft.
+    expect(screen.getByLabelText('Message')).toHaveValue('');
   });
 
   it('renders message bodies as plain text with safe links', async () => {

@@ -171,6 +171,14 @@ describe.skipIf(!hasInfra)('conversations HTTP flow (CHAT-012)', () => {
         .expect(404);
     });
 
+    it('returns 404 (not 500) for a conversation id that is not a UUID at all', async () => {
+      const a = await signUpAndLogIn();
+      await request(server())
+        .get('/conversations/not-a-uuid')
+        .set(auth(a.session.accessToken))
+        .expect(404);
+    });
+
     it('rejects starting a conversation with a user that does not exist', async () => {
       const a = await signUpAndLogIn();
       await request(server())

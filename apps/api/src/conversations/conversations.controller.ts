@@ -6,6 +6,7 @@ import {
 } from '@videochat/shared';
 import { z } from 'zod';
 import { AccessTokenGuard, CurrentUserId } from '../auth/access-token.guard.js';
+import { UuidParamPipe } from '../common/uuid-param.pipe.js';
 import { ZodValidationPipe } from '../common/zod-validation.pipe.js';
 import { ConversationsService } from './conversations.service.js';
 
@@ -21,7 +22,7 @@ export class ConversationsController {
 
   @Get(':conversationId')
   getOne(
-    @Param('conversationId') conversationId: string,
+    @Param('conversationId', UuidParamPipe) conversationId: string,
     @CurrentUserId() userId: string,
   ): Promise<ConversationSummary> {
     return this.conversations.getById(conversationId, userId);

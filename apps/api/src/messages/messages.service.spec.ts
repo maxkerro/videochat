@@ -1,4 +1,4 @@
-import { NotFoundException } from '@nestjs/common';
+import { ConflictException, NotFoundException } from '@nestjs/common';
 import type { Database } from '../db/client.js';
 import * as conversationsDb from '../db/conversations.js';
 import * as messagesDb from '../db/messages.js';
@@ -65,6 +65,20 @@ describe('MessagesService', () => {
         'conv-1',
         expect.objectContaining({ type: 'message.new', payload: message }),
       );
+    });
+
+    it('rejects with 409 when clientMsgId was already used in a different conversation, without broadcasting', async () => {
+      vi.mocked(conversationsDb.isConversationMember).mockResolvedValue(true);
+      // appendMessage dedupes on (senderId, clientMsgId) alone, so it can return a row that
+      // belongs to some *other* conversation than the one this call is targeting.
+      vi.mocked(messagesDb.appendMessage).mockResolvedValue(
+        makeMessageRow({ conversationId: 'conv-other' }),
+      );
+
+      await expect(
+        service.send('conv-1', 'user-1', { clientMsgId: 'c-1', body: 'hi' }),
+      ).rejects.toThrow(ConflictException);
+      expect(realtime.publishToConversation).not.toHaveBeenCalled();
     });
 
     it('retrying the same clientMsgId re-broadcasts the same message rather than a new one', async () => {

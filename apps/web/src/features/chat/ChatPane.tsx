@@ -13,6 +13,7 @@ import styles from './ChatPane.module.css';
 
 interface PendingMessage {
   clientMsgId: string;
+  conversationId: string;
   body: string;
   status: 'sending' | 'failed';
 }
@@ -44,6 +45,16 @@ export function ChatPane() {
   const [draft, setDraft] = useState('');
   const [pending, setPending] = useState<PendingMessage[]>([]);
 
+  // `ChatPane` stays mounted across a conversation switch, so an in-progress draft would
+  // otherwise follow the person into the next conversation and could get sent to the wrong
+  // person. Adjusted during render (React's documented pattern for this) rather than in an
+  // effect, so it takes effect before the stale draft ever paints.
+  const [draftConversationId, setDraftConversationId] = useState(conversationId);
+  if (draftConversationId !== conversationId) {
+    setDraftConversationId(conversationId);
+    setDraft('');
+  }
+
   const enabled = auth.status === 'authenticated' && Boolean(conversationId);
 
   const conversationQuery = useQuery({
@@ -74,20 +85,27 @@ export function ChatPane() {
 
   const messages = messagesQuery.data ?? [];
   const remaining = LIMITS.messageMaxLength - draft.length;
+  // `ChatPane` is reused across a conversation switch (the route just changes `:conversationId`
+  // on the same component instance), so `pending` can hold entries left over from a conversation
+  // the person has since navigated away from -- filter to this conversation's own before
+  // rendering, so a failed send from A never shows up (or gets retried into) B.
+  const pendingHere = pending.filter((p) => p.conversationId === conversationId);
 
-  async function trySend(clientMsgId: string, body: string) {
-    if (!conversationId) return;
+  async function trySend(target: { clientMsgId: string; conversationId: string; body: string }) {
     try {
       const message = await withAuthRetry(auth, (token) =>
-        sendMessage(token, conversationId, { clientMsgId, body }),
+        sendMessage(token, target.conversationId, {
+          clientMsgId: target.clientMsgId,
+          body: target.body,
+        }),
       );
-      queryClient.setQueryData<Message[]>(['messages', conversationId], (old = []) =>
+      queryClient.setQueryData<Message[]>(['messages', target.conversationId], (old = []) =>
         upsertMessage(old, message),
       );
-      setPending((prev) => prev.filter((p) => p.clientMsgId !== clientMsgId));
+      setPending((prev) => prev.filter((p) => p.clientMsgId !== target.clientMsgId));
     } catch {
       setPending((prev) =>
-        prev.map((p) => (p.clientMsgId === clientMsgId ? { ...p, status: 'failed' } : p)),
+        prev.map((p) => (p.clientMsgId === target.clientMsgId ? { ...p, status: 'failed' } : p)),
       );
     }
   }
@@ -95,18 +113,18 @@ export function ChatPane() {
   function handleSubmit(event: FormEvent) {
     event.preventDefault();
     const body = draft.trim();
-    if (!body) return;
+    if (!body || !conversationId) return;
     const clientMsgId = newClientMsgId();
-    setPending((prev) => [...prev, { clientMsgId, body, status: 'sending' }]);
+    setPending((prev) => [...prev, { clientMsgId, conversationId, body, status: 'sending' }]);
     setDraft('');
-    void trySend(clientMsgId, body);
+    void trySend({ clientMsgId, conversationId, body });
   }
 
   function handleRetry(message: PendingMessage) {
     setPending((prev) =>
       prev.map((p) => (p.clientMsgId === message.clientMsgId ? { ...p, status: 'sending' } : p)),
     );
-    void trySend(message.clientMsgId, message.body);
+    void trySend(message);
   }
 
   function handleKeyDown(event: KeyboardEvent<HTMLTextAreaElement>) {
@@ -157,7 +175,7 @@ export function ChatPane() {
             <time className={styles.time}>{timeFor(m.createdAt)}</time>
           </li>
         ))}
-        {pending.map((p) => (
+        {pendingHere.map((p) => (
           <li key={p.clientMsgId} className={cx(styles.message, styles.own)}>
             <span className={styles.bubble}>{linkify(p.body)}</span>
             {p.status === 'sending' ? (

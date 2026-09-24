@@ -1,4 +1,4 @@
-import { Inject, Injectable, NotFoundException } from '@nestjs/common';
+import { ConflictException, Inject, Injectable, NotFoundException } from '@nestjs/common';
 import { LIMITS, makeEnvelope, type Message, type SendMessageInput } from '@videochat/shared';
 import type { Database } from '../db/client.js';
 import { isConversationMember } from '../db/conversations.js';
@@ -29,6 +29,13 @@ export class MessagesService {
       body: input.body,
       clientMsgId: input.clientMsgId,
     });
+    // `appendMessage` dedupes on (senderId, clientMsgId) alone, with no conversation in the key.
+    // If a client reuses a clientMsgId across two different conversations, the second call would
+    // otherwise return -- and re-broadcast into this conversation -- a message that actually
+    // belongs to the first one. Reject that rather than leaking it.
+    if (row.conversationId !== conversationId) {
+      throw new ConflictException('clientMsgId already used in another conversation');
+    }
     const message = toMessage(row);
 
     // A retried send resolves to the same row every time; re-broadcasting it is harmless

@@ -10,6 +10,19 @@ import { ENV } from '../infra/tokens.js';
 const REQUEST_ID_HEADER = 'x-request-id';
 const QUIET_PATHS = new Set(['/health', '/ready', '/metrics']);
 
+/** CHAT-013's realtime gateway authenticates over `?token=` (the WS upgrade request can't carry
+ *  an Authorization header), which would otherwise put a live access token straight into every
+ *  request log line and, upstream of this app, into Render's own access logs. Redact it rather
+ *  than relying on every log consumer to know not to look. */
+export function redactUrl(url: string): string {
+  const queryIndex = url.indexOf('?');
+  if (queryIndex === -1) return url;
+  const path = url.slice(0, queryIndex);
+  const params = new URLSearchParams(url.slice(queryIndex + 1));
+  if (params.has('token')) params.set('token', '[redacted]');
+  return `${path}?${params.toString()}`;
+}
+
 /** pino-pretty is a dev dependency; fall back to JSON if it isn't installed (e.g. a prod image). */
 export function hasPrettyPrinter(): boolean {
   try {
@@ -48,7 +61,10 @@ export function hasPrettyPrinter(): boolean {
           // Put the request id at the top level of every log line written during the request.
           customProps: (req: IncomingMessage & { id?: unknown }) => ({ reqId: req.id }),
           serializers: {
-            req: (req: { method: string; url: string }) => ({ method: req.method, url: req.url }),
+            req: (req: { method: string; url: string }) => ({
+              method: req.method,
+              url: redactUrl(req.url),
+            }),
             res: (res: { statusCode: number }) => ({ statusCode: res.statusCode }),
           },
           autoLogging: { ignore: (req: IncomingMessage) => QUIET_PATHS.has(req.url ?? '') },

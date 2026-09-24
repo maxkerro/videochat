@@ -129,6 +129,58 @@ describe.skipIf(!hasInfra)('messages HTTP flow (CHAT-014)', () => {
     expect(history.body).toEqual([sent.body]);
   });
 
+  it('does not deliver a message to a socket connected as someone outside the conversation', async () => {
+    const a = await signUpAndLogIn();
+    const b = await signUpAndLogIn();
+    const outsider = await signUpAndLogIn();
+    const conversationId = await startDirectConversation(a, b);
+
+    const socketOutsider = new WebSocket(wsUrl(`/realtime?token=${outsider.accessToken}`));
+    openSockets.push(socketOutsider);
+    await waitForOpen(socketOutsider);
+
+    const receivedByOutsider: unknown[] = [];
+    socketOutsider.on('message', (data: Buffer) =>
+      receivedByOutsider.push(JSON.parse(data.toString())),
+    );
+
+    await request(server())
+      .post(`/conversations/${conversationId}/messages`)
+      .set(auth(a.accessToken))
+      .send({ clientMsgId: 'c-isolation', body: 'not for you' })
+      .expect(201);
+
+    // Give the fan-out a moment to (mis)deliver before asserting nothing arrived.
+    await new Promise((resolve) => setTimeout(resolve, 200));
+    expect(receivedByOutsider).toEqual([]);
+  });
+
+  it('rejects reusing a clientMsgId across two different conversations with 409, without re-broadcasting', async () => {
+    const a = await signUpAndLogIn();
+    const b = await signUpAndLogIn();
+    const c = await signUpAndLogIn();
+    const conversationAB = await startDirectConversation(a, b);
+    const conversationAC = await startDirectConversation(a, c);
+
+    await request(server())
+      .post(`/conversations/${conversationAB}/messages`)
+      .set(auth(a.accessToken))
+      .send({ clientMsgId: 'shared-id', body: 'first conversation' })
+      .expect(201);
+
+    await request(server())
+      .post(`/conversations/${conversationAC}/messages`)
+      .set(auth(a.accessToken))
+      .send({ clientMsgId: 'shared-id', body: 'second conversation' })
+      .expect(409);
+
+    const historyAC = await request(server())
+      .get(`/conversations/${conversationAC}/messages`)
+      .set(auth(a.accessToken))
+      .expect(200);
+    expect(historyAC.body).toEqual([]);
+  });
+
   it('retrying the same clientMsgId returns the original message instead of a duplicate', async () => {
     const a = await signUpAndLogIn();
     const b = await signUpAndLogIn();
@@ -194,5 +246,19 @@ describe.skipIf(!hasInfra)('messages HTTP flow (CHAT-014)', () => {
       .post('/conversations/x/messages')
       .send({ clientMsgId: 'c-1', body: 'hi' })
       .expect(401);
+  });
+
+  it('returns 404 (not 500) for a conversation id that is not a UUID at all', async () => {
+    const a = await signUpAndLogIn();
+
+    await request(server())
+      .get('/conversations/not-a-uuid/messages')
+      .set(auth(a.accessToken))
+      .expect(404);
+    await request(server())
+      .post('/conversations/not-a-uuid/messages')
+      .set(auth(a.accessToken))
+      .send({ clientMsgId: 'c-1', body: 'hi' })
+      .expect(404);
   });
 });
