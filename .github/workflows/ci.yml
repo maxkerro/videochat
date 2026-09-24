@@ -71,36 +71,13 @@ jobs:
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
-  # Render deploys `master` itself once these checks pass (autoDeployTrigger: checksPass in render.yaml).
-  # This job waits for that deploy and smoke-tests it, so a broken deploy turns the commit red.
-  staging-smoke:
-    name: Staging smoke test
-    needs: [check, docker]
-    if: github.event_name == 'push' && github.ref == 'refs/heads/master' && vars.STAGING_API_URL != ''
-    runs-on: ubuntu-latest
-    timeout-minutes: 20
-    environment:
-      name: staging
-      url: ${{ vars.STAGING_WEB_URL }}
-    steps:
-      - name: Wait for staging to run this commit
-        env:
-          API: ${{ vars.STAGING_API_URL }}
-          SHA: ${{ github.sha }}
-        run: |
-          for i in $(seq 1 90); do
-            version=$(curl -fsS "$API/health" | jq -r .version || true)
-            if [ "$version" = "$SHA" ]; then echo "Staging runs $SHA"; break; fi
-            echo "Staging on '${version:-unreachable}', waiting… ($i/90)"; sleep 10
-          done
-          [ "$version" = "$SHA" ] || { echo "::error::Staging did not pick up $SHA in 15 minutes"; exit 1; }
-      - name: Readiness
-        run: curl -fsS "${{ vars.STAGING_API_URL }}/ready" | jq .
-      - name: Summary
-        run: |
-          {
-            echo "### Staging deployed"
-            echo "- Web: ${{ vars.STAGING_WEB_URL }}"
-            echo "- API: ${{ vars.STAGING_API_URL }}/health"
-            echo "- Commit: \`${{ github.sha }}\`"
-          } >> "$GITHUB_STEP_SUMMARY"
+  # The staging smoke test used to live here as a third job (needs: [check, docker]), gated to
+  # push-to-master. That was a deadlock: `autoDeployTrigger: checksPass` in render.yaml makes
+  # Render wait for every check in *this workflow's own check suite* to finish before it deploys
+  # master -- but that job polled staging for the very deploy Render hadn't triggered yet
+  # (because it was waiting on that same job). It could only ever time out, so master always
+  # showed red and someone had to click "Manual Deploy" in the Render dashboard on every push.
+  # It now lives in its own workflow (staging-smoke.yml), triggered by workflow_run after this
+  # one finishes -- a separate check suite that isn't part of what Render is waiting on, so
+  # `check` + `docker` passing is enough to let the deploy start, and the smoke test then verifies
+  # it afterwards instead of before.

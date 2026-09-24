@@ -1,0 +1,52 @@
+name: Staging smoke test
+
+# Runs after CI finishes on master, once `check` and `docker` have already let Render start
+# deploying (autoDeployTrigger: checksPass in render.yaml). This is deliberately a *separate*
+# workflow -- and so a separate GitHub check suite -- from ci.yml: if this job lived inside
+# ci.yml instead, Render would wait for it too before deploying, but it can't pass until Render
+# has already deployed, which is a deadlock ci.yml used to have (see the comment left in its
+# place there). Keeping it here means "the deploy went out" and "the deploy actually works" are
+# checked separately, in the right order.
+on:
+  workflow_run:
+    workflows: ['CI']
+    types: [completed]
+
+permissions:
+  contents: read
+
+jobs:
+  staging-smoke:
+    name: Staging smoke test
+    if: >-
+      github.event.workflow_run.conclusion == 'success' &&
+      github.event.workflow_run.event == 'push' &&
+      github.event.workflow_run.head_branch == 'master' &&
+      vars.STAGING_API_URL != ''
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    environment:
+      name: staging
+      url: ${{ vars.STAGING_WEB_URL }}
+    steps:
+      - name: Wait for staging to run this commit
+        env:
+          API: ${{ vars.STAGING_API_URL }}
+          SHA: ${{ github.event.workflow_run.head_sha }}
+        run: |
+          for i in $(seq 1 90); do
+            version=$(curl -fsS "$API/health" | jq -r .version || true)
+            if [ "$version" = "$SHA" ]; then echo "Staging runs $SHA"; break; fi
+            echo "Staging on '${version:-unreachable}', waiting… ($i/90)"; sleep 10
+          done
+          [ "$version" = "$SHA" ] || { echo "::error::Staging did not pick up $SHA in 15 minutes"; exit 1; }
+      - name: Readiness
+        run: curl -fsS "${{ vars.STAGING_API_URL }}/ready" | jq .
+      - name: Summary
+        run: |
+          {
+            echo "### Staging deployed"
+            echo "- Web: ${{ vars.STAGING_WEB_URL }}"
+            echo "- API: ${{ vars.STAGING_API_URL }}/health"
+            echo "- Commit: \`${{ github.event.workflow_run.head_sha }}\`"
+          } >> "$GITHUB_STEP_SUMMARY"

@@ -49,29 +49,41 @@ export function ConversationList() {
     if (!parsed.success) return;
     const message = parsed.data;
 
-    queryClient.setQueryData<ConversationSummary[]>(['conversations'], (old) => {
-      if (!old) return old;
-      const idx = old.findIndex((c) => c.id === message.conversationId);
-      if (idx < 0) {
-        // Not a conversation we have cached yet -- most likely one just started by someone else
-        // that immediately sent a message. Refetch instead of fabricating a summary client-side.
-        void queryClient.invalidateQueries({ queryKey: ['conversations'] });
-        return old;
-      }
-      const current = old[idx]!;
+    const old = queryClient.getQueryData<ConversationSummary[]>(['conversations']);
+    if (!old) return;
+    const idx = old.findIndex((c) => c.id === message.conversationId);
+    if (idx < 0) {
+      // Not a conversation we have cached yet -- most likely one just started by someone else
+      // that immediately sent a message. Refetch instead of fabricating a summary client-side.
+      void queryClient.invalidateQueries({ queryKey: ['conversations'] });
+      return;
+    }
+    // A duplicate or out-of-order delivery (reconnect replay, a retried publish) must never
+    // move the conversation's timestamp backwards or re-sort the list -- only a message that is
+    // actually newer than what we've already applied should change anything here.
+    if (message.seq <= old[idx]!.lastSeq) return;
+
+    // A live event can race an in-flight fetch of this same list (e.g. a window-focus refetch)
+    // whose response was computed before this message was persisted; without cancelling it,
+    // that stale response could land after our update below and silently undo the bump.
+    void queryClient.cancelQueries({ queryKey: ['conversations'] });
+
+    queryClient.setQueryData<ConversationSummary[]>(['conversations'], (list) => {
+      if (!list) return list;
+      const i = list.findIndex((c) => c.id === message.conversationId);
+      if (i < 0) return list;
+      const current = list[i]!;
+      if (message.seq <= current.lastSeq) return list;
       const next: ConversationSummary = {
         ...current,
-        lastSeq: Math.max(current.lastSeq, message.seq),
+        lastSeq: message.seq,
         lastMessageAt: message.createdAt,
         // Sending counts as having read your own message (mirrors appendMessage's own
         // bookkeeping server-side), so your own outgoing messages never show up as unread here.
-        lastReadSeq:
-          message.senderId === auth.user?.id
-            ? Math.max(current.lastReadSeq, message.seq)
-            : current.lastReadSeq,
+        lastReadSeq: message.senderId === auth.user?.id ? message.seq : current.lastReadSeq,
       };
-      const copy = old.slice();
-      copy[idx] = next;
+      const copy = list.slice();
+      copy[i] = next;
       copy.sort(byRecency);
       return copy;
     });
