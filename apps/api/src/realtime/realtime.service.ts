@@ -84,6 +84,24 @@ export class RealtimeService implements OnModuleInit, OnModuleDestroy {
     }
   }
 
+  /**
+   * Extends a user's already-open sockets to also hear about one more conversation, without
+   * making them reconnect. `register` only snapshots a socket's conversations at connect time
+   * (see the class comment on `RealtimeSocket`), so without this, starting a brand-new direct
+   * conversation (CHAT-012) with someone who was already connected -- sitting on their inbox,
+   * say -- would leave their open socket unaware of it: the first message sent into it would
+   * publish to `conv:{id}`, but their socket was never added to `byConversation` for that id,
+   * so `deliverLocally` would silently skip them until they happened to reconnect.
+   */
+  addConversationForUser(userId: string, conversationId: string): void {
+    const sockets = this.byUser.get(userId);
+    if (!sockets) return;
+    for (const socket of sockets) {
+      socket.conversationIds?.add(conversationId);
+      addToSetMap(this.byConversation, conversationId, socket);
+    }
+  }
+
   /** Broadcasts to every member of a conversation, on every node. */
   async publishToConversation(conversationId: string, envelope: WsEnvelope): Promise<void> {
     await this.redis.publish(conversationChannel(conversationId), JSON.stringify(envelope));

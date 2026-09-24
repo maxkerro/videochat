@@ -133,4 +133,43 @@ describe('RealtimeService', () => {
     await service.onModuleDestroy();
     expect(subscriber.quit).toHaveBeenCalled();
   });
+
+  describe('addConversationForUser', () => {
+    it('lets an already-open socket start hearing about a conversation it connected before', async () => {
+      const { redis, subscriber } = makeFakeRedis();
+      const service = new RealtimeService(redis);
+      await service.onModuleInit();
+
+      // Connected before this conversation existed, so `register` never saw it.
+      const socket = makeSocket();
+      service.register(socket, 'user-a', []);
+
+      service.addConversationForUser('user-a', 'conv-new');
+      subscriber.emit('pmessage', 'conv:*', 'conv:conv-new', 'hi');
+
+      expect(socket.send).toHaveBeenCalledWith('hi');
+    });
+
+    it('does nothing for a user with no open sockets', () => {
+      const { redis } = makeFakeRedis();
+      const service = new RealtimeService(redis);
+      // Would throw if it assumed a socket set always exists for a known/unknown user.
+      expect(() => service.addConversationForUser('nobody-connected', 'conv-1')).not.toThrow();
+    });
+
+    it('stops delivering once that socket disconnects, same as any other conversation', async () => {
+      const { redis, subscriber } = makeFakeRedis();
+      const service = new RealtimeService(redis);
+      await service.onModuleInit();
+
+      const socket = makeSocket();
+      service.register(socket, 'user-a', []);
+      service.addConversationForUser('user-a', 'conv-new');
+      service.unregister(socket);
+
+      subscriber.emit('pmessage', 'conv:*', 'conv:conv-new', 'hi');
+
+      expect(socket.send).not.toHaveBeenCalled();
+    });
+  });
 });
