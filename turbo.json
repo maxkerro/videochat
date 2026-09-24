@@ -20,7 +20,7 @@
     },
     "test": {
       "dependsOn": ["^build"],
-      "env": ["DATABASE_URL", "TEST_DATABASE_URL", "REDIS_URL"]
+      "env": ["DATABASE_URL", "TEST_DATABASE_URL", "REDIS_URL", "JWT_SECRET"]
     }
   }
 }
