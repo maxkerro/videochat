@@ -2,7 +2,7 @@ import { and, desc, eq, sql } from 'drizzle-orm';
 import { ulid } from 'ulid';
 import type { MessageType } from '@videochat/shared';
 import type { Database, DbExecutor } from './client.js';
-import { conversations, messages, type MessageRow } from './schema.js';
+import { conversations, memberships, messages, type MessageRow } from './schema.js';
 
 export interface AppendMessageInput {
   conversationId: string;
@@ -50,6 +50,21 @@ export async function appendMessage(db: Database, input: AppendMessageInput): Pr
         replyToId: input.replyToId ?? null,
       })
       .returning();
+
+    if (input.senderId) {
+      // Sending a message counts as having read up to it -- without this, the sender's own
+      // lastReadSeq never advances, and their own conversation list would show it as unread.
+      await tx
+        .update(memberships)
+        .set({ lastReadSeq: conv.seq })
+        .where(
+          and(
+            eq(memberships.conversationId, input.conversationId),
+            eq(memberships.userId, input.senderId),
+          ),
+        );
+    }
+
     return row!;
   });
 }

@@ -145,6 +145,24 @@ describe('ChatPane', () => {
     expect(screen.getByRole('link', { name: 'Back to conversations' })).toBeInTheDocument();
   });
 
+  it('shows a generic error, not "not found", when loading the conversation fails for another reason', async () => {
+    vi.stubGlobal(
+      'fetch',
+      routedFetch({
+        'POST /auth/refresh': () => jsonResponse(session()),
+        [`GET /conversations/${conversationId}`]: () =>
+          jsonResponse({ message: 'Server error' }, 500),
+      }),
+    );
+    renderApp(`/c/${conversationId}`);
+    expect(
+      await screen.findByRole('heading', { name: 'Something went wrong' }),
+    ).toBeInTheDocument();
+    expect(
+      screen.queryByRole('heading', { name: 'Conversation not found' }),
+    ).not.toBeInTheDocument();
+  });
+
   it('loads history and shows a sent message optimistically before the server acks', async () => {
     let resolveSend!: (value: Response) => void;
     const sendPromise = new Promise<Response>((resolve) => {
@@ -315,5 +333,48 @@ describe('ChatPane', () => {
     });
 
     expect(await screen.findByText('delivered live')).toBeInTheDocument();
+  });
+
+  it('does not clear a pending bubble because another member happened to reuse its clientMsgId', async () => {
+    // clientMsgId is only unique per sender (the server dedupes on (senderId, clientMsgId)), so
+    // force our own pending send and the peer's incoming message to share one and confirm the
+    // realtime handler still tells them apart by sender.
+    const randomUUID = vi
+      .spyOn(crypto, 'randomUUID')
+      .mockReturnValue('66666666-6666-4666-8666-666666666666' as never);
+    const neverResolves = new Promise<Response>(() => {});
+    vi.stubGlobal(
+      'fetch',
+      routedFetch({
+        'POST /auth/refresh': () => jsonResponse(session()),
+        [`GET /conversations/${conversationId}`]: () => jsonResponse(conversation()),
+        [`GET /conversations/${conversationId}/messages`]: () => jsonResponse([]),
+        [`POST /conversations/${conversationId}/messages`]: () => neverResolves,
+      }),
+    );
+    renderApp(`/c/${conversationId}`);
+    await screen.findByLabelText('Message');
+    await waitFor(() => expect(FakeWebSocket.instances).toHaveLength(1));
+    const socket = FakeWebSocket.instances[0]!;
+    socket.emit('open');
+
+    await userEvent.type(screen.getByLabelText('Message'), 'my pending message');
+    await userEvent.click(screen.getByRole('button', { name: 'Send message' }));
+    expect(screen.getByText('Sending…')).toBeInTheDocument();
+
+    const fromPeer = message({
+      senderId: peer.id,
+      clientMsgId: '66666666-6666-4666-8666-666666666666',
+      body: 'from ben',
+    });
+    socket.emit('message', {
+      data: JSON.stringify(makeEnvelope('message.new', fromPeer, fromPeer.id)),
+    });
+
+    await screen.findByText('from ben');
+    expect(screen.getByText('Sending…')).toBeInTheDocument();
+    expect(screen.getByText('my pending message')).toBeInTheDocument();
+
+    randomUUID.mockRestore();
   });
 });

@@ -11,9 +11,16 @@ const REQUEST_ID_HEADER = 'x-request-id';
 const QUIET_PATHS = new Set(['/health', '/ready', '/metrics']);
 
 /** CHAT-013's realtime gateway authenticates over `?token=` (the WS upgrade request can't carry
- *  an Authorization header), which would otherwise put a live access token straight into every
- *  request log line and, upstream of this app, into Render's own access logs. Redact it rather
- *  than relying on every log consumer to know not to look. */
+ *  an Authorization header). This keeps a live access token out of *this app's own* pino request
+ *  logs for any endpoint that ends up with a `token` query param.
+ *
+ *  It does NOT solve the `/realtime` case specifically: the `ws` adapter (`@nestjs/platform-ws`)
+ *  attaches straight to the HTTP server's `upgrade` event, so a WS upgrade request never runs
+ *  through Nest's Express pipeline or this pino-http serializer at all -- there's nothing here to
+ *  redact for it. It also can't reach logs written upstream of this process (e.g. Render's own
+ *  proxy/access logs), which see the raw request line before it gets here. Actually closing the
+ *  `/realtime?token=` exposure needs a different scheme (a short-lived single-use ticket, or the
+ *  token via `Sec-WebSocket-Protocol`) -- tracked separately, not done here. */
 export function redactUrl(url: string): string {
   const queryIndex = url.indexOf('?');
   if (queryIndex === -1) return url;

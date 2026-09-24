@@ -135,14 +135,19 @@ describe.skipIf(!hasInfra)('messages HTTP flow (CHAT-014)', () => {
     const outsider = await signUpAndLogIn();
     const conversationId = await startDirectConversation(a, b);
 
+    const socketB = new WebSocket(wsUrl(`/realtime?token=${b.accessToken}`));
     const socketOutsider = new WebSocket(wsUrl(`/realtime?token=${outsider.accessToken}`));
-    openSockets.push(socketOutsider);
-    await waitForOpen(socketOutsider);
+    openSockets.push(socketB, socketOutsider);
+    await Promise.all([waitForOpen(socketB), waitForOpen(socketOutsider)]);
 
     const receivedByOutsider: unknown[] = [];
     socketOutsider.on('message', (data: Buffer) =>
       receivedByOutsider.push(JSON.parse(data.toString())),
     );
+    // A member's socket waiting for the same broadcast is the positive control: without it, this
+    // test would pass just as well if fan-out were completely broken (nobody delivered anything)
+    // or if the outsider's socket never actually subscribed.
+    const deliveredToMember = waitForMessage(socketB);
 
     await request(server())
       .post(`/conversations/${conversationId}/messages`)
@@ -150,8 +155,7 @@ describe.skipIf(!hasInfra)('messages HTTP flow (CHAT-014)', () => {
       .send({ clientMsgId: 'c-isolation', body: 'not for you' })
       .expect(201);
 
-    // Give the fan-out a moment to (mis)deliver before asserting nothing arrived.
-    await new Promise((resolve) => setTimeout(resolve, 200));
+    await deliveredToMember;
     expect(receivedByOutsider).toEqual([]);
   });
 
@@ -179,6 +183,16 @@ describe.skipIf(!hasInfra)('messages HTTP flow (CHAT-014)', () => {
       .set(auth(a.accessToken))
       .expect(200);
     expect(historyAC.body).toEqual([]);
+
+    // The dedupe lookup in appendMessage runs before it bumps the conversation's seq counter, so
+    // a rejected cross-conversation reuse must not have consumed a seq for AC either -- confirm
+    // there's no gap by checking the next real send in AC still lands on seq 1.
+    const nextInAC = await request(server())
+      .post(`/conversations/${conversationAC}/messages`)
+      .set(auth(a.accessToken))
+      .send({ clientMsgId: 'unrelated-id', body: 'actually in AC' })
+      .expect(201);
+    expect(nextInAC.body.seq).toBe(1);
   });
 
   it('retrying the same clientMsgId returns the original message instead of a duplicate', async () => {
@@ -204,6 +218,26 @@ describe.skipIf(!hasInfra)('messages HTTP flow (CHAT-014)', () => {
       .set(auth(a.accessToken))
       .expect(200);
     expect(history.body).toHaveLength(1);
+  });
+
+  it("advances the sender's own lastReadSeq, so their own sent message never shows as unread", async () => {
+    const a = await signUpAndLogIn();
+    const b = await signUpAndLogIn();
+    const conversationId = await startDirectConversation(a, b);
+
+    await request(server())
+      .post(`/conversations/${conversationId}/messages`)
+      .set(auth(a.accessToken))
+      .send({ clientMsgId: 'c-read', body: 'hello' })
+      .expect(201);
+
+    const listForA = await request(server())
+      .get('/conversations')
+      .set(auth(a.accessToken))
+      .expect(200);
+    const conv = listForA.body.find((c: { id: string }) => c.id === conversationId);
+    expect(conv.lastSeq).toBe(1);
+    expect(conv.lastReadSeq).toBe(1);
   });
 
   it('rejects a non-member reading or posting with 404', async () => {

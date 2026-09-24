@@ -3,6 +3,7 @@ import { LIMITS, messageSchema, type Message, type WsEnvelope } from '@videochat
 import { useState, type FormEvent, type KeyboardEvent } from 'react';
 import { Link, useParams } from 'react-router';
 import { Avatar, Button } from '../../components/ui';
+import { ApiError } from '../../lib/api';
 import { cx } from '../../lib/cx';
 import { fetchConversation } from '../conversations/conversationsApi';
 import { useAuth, withAuthRetry } from '../auth/AuthContext';
@@ -68,6 +69,7 @@ export function ChatPane() {
     queryKey: ['messages', conversationId],
     queryFn: () => withAuthRetry(auth, (token) => fetchMessages(token, conversationId!)),
     enabled,
+    retry: false,
   });
 
   useRealtimeEvent((envelope: WsEnvelope) => {
@@ -78,7 +80,10 @@ export function ChatPane() {
     queryClient.setQueryData<Message[]>(['messages', conversationId], (old = []) =>
       upsertMessage(old, message),
     );
-    if (message.clientMsgId) {
+    // `clientMsgId` is only unique per sender (the server dedupes on (senderId, clientMsgId)), so
+    // without the sender check another member's message could coincidentally share the id of one
+    // of *our* pending entries and clear a bubble that hasn't actually been confirmed sent.
+    if (message.clientMsgId && message.senderId === auth.user?.id) {
       setPending((prev) => prev.filter((p) => p.clientMsgId !== message.clientMsgId));
     }
   });
@@ -135,10 +140,20 @@ export function ChatPane() {
   }
 
   if (conversationQuery.isError) {
+    // A 404 means the conversation genuinely doesn't exist (or isn't this person's) -- that's
+    // the only case "not found" is an accurate message for. Anything else (a network failure, a
+    // 500) gets a generic message instead, rather than telling someone their conversation is
+    // gone when the server is just having a bad moment.
+    const notFound =
+      conversationQuery.error instanceof ApiError && conversationQuery.error.status === 404;
     return (
       <section className={styles.missing}>
-        <h1>Conversation not found</h1>
-        <p>It may have been deleted, or you’re no longer a member.</p>
+        <h1>{notFound ? 'Conversation not found' : 'Something went wrong'}</h1>
+        <p>
+          {notFound
+            ? 'It may have been deleted, or you’re no longer a member.'
+            : 'Could not load this conversation. Try again in a moment.'}
+        </p>
         <Link to="/">Back to conversations</Link>
       </section>
     );
