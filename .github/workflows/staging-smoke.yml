@@ -1,16 +1,28 @@
 name: Staging smoke test
 
-# Runs after CI finishes on master, once `check` and `docker` have already let Render start
-# deploying (autoDeployTrigger: checksPass in render.yaml). This is deliberately a *separate*
-# workflow -- and so a separate GitHub check suite -- from ci.yml: if this job lived inside
-# ci.yml instead, Render would wait for it too before deploying, but it can't pass until Render
-# has already deployed, which is a deadlock ci.yml used to have (see the comment left in its
-# place there). Keeping it here means "the deploy went out" and "the deploy actually works" are
-# checked separately, in the right order.
+# This intentionally has NO automatic trigger tied to a specific commit -- no `push`, no
+# `pull_request`, and, critically, no `workflow_run` either. All three create a GitHub check run
+# against the SHA that triggered them, and `autoDeployTrigger: checksPass` in render.yaml makes
+# Render wait for *every* check run on a commit -- including ones that show up after the initial
+# push, from a workflow_run-triggered workflow -- before it will deploy. This workflow used to run
+# on `workflow_run` after CI finished, on the theory that a separate workflow file meant a separate
+# check suite Render wouldn't wait on; that turned out to be wrong (confirmed against a real-world
+# report of the identical deadlock: https://github.com/levonmendall/solana-roi-convergence/pull/190,
+# which explicitly forbids push/pull_request/workflow_run for the same reason). GitHub still
+# attaches the workflow_run check to the original commit, so Render was still waiting on it -- and
+# it still can't pass until Render has already deployed. Same deadlock, one hop later: every push
+# to master needed a manual "Deploy" click in the Render dashboard.
+#
+# So this only runs manually (workflow_dispatch) or on a schedule, checking staging against
+# whatever master's current HEAD actually is via the GitHub API, rather than a specific push's SHA
+# -- so it never becomes one of the checks Render is waiting on for any commit, and can't deadlock
+# the deploy it's meant to verify.
 on:
-  workflow_run:
-    workflows: ['CI']
-    types: [completed]
+  workflow_dispatch:
+  schedule:
+    # Every 15 minutes: catches a deploy that silently failed or staging drifting from master,
+    # without ever being "a check" on the commit that caused it.
+    - cron: '*/15 * * * *'
 
 permissions:
   contents: read
@@ -18,35 +30,38 @@ permissions:
 jobs:
   staging-smoke:
     name: Staging smoke test
-    if: >-
-      github.event.workflow_run.conclusion == 'success' &&
-      github.event.workflow_run.event == 'push' &&
-      github.event.workflow_run.head_branch == 'master' &&
-      vars.STAGING_API_URL != ''
+    if: vars.STAGING_API_URL != ''
     runs-on: ubuntu-latest
     timeout-minutes: 20
     environment:
       name: staging
       url: ${{ vars.STAGING_WEB_URL }}
     steps:
-      - name: Wait for staging to run this commit
+      - name: Wait for staging to run master's current HEAD
         env:
           API: ${{ vars.STAGING_API_URL }}
-          SHA: ${{ github.event.workflow_run.head_sha }}
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
         run: |
+          sha=$(gh api "repos/$REPO/commits/master" --jq .sha)
+          echo "master HEAD is $sha"
           for i in $(seq 1 90); do
             version=$(curl -fsS "$API/health" | jq -r .version || true)
-            if [ "$version" = "$SHA" ]; then echo "Staging runs $SHA"; break; fi
+            if [ "$version" = "$sha" ]; then echo "Staging runs $sha"; break; fi
             echo "Staging on '${version:-unreachable}', waiting… ($i/90)"; sleep 10
           done
-          [ "$version" = "$SHA" ] || { echo "::error::Staging did not pick up $SHA in 15 minutes"; exit 1; }
+          [ "$version" = "$sha" ] || { echo "::error::Staging did not pick up $sha in 15 minutes"; exit 1; }
       - name: Readiness
         run: curl -fsS "${{ vars.STAGING_API_URL }}/ready" | jq .
       - name: Summary
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
         run: |
+          sha=$(gh api "repos/$REPO/commits/master" --jq .sha)
           {
             echo "### Staging deployed"
             echo "- Web: ${{ vars.STAGING_WEB_URL }}"
             echo "- API: ${{ vars.STAGING_API_URL }}/health"
-            echo "- Commit: \`${{ github.event.workflow_run.head_sha }}\`"
+            echo "- Commit: \`$sha\`"
           } >> "$GITHUB_STEP_SUMMARY"

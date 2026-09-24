@@ -73,11 +73,13 @@ jobs:
 
   # The staging smoke test used to live here as a third job (needs: [check, docker]), gated to
   # push-to-master. That was a deadlock: `autoDeployTrigger: checksPass` in render.yaml makes
-  # Render wait for every check in *this workflow's own check suite* to finish before it deploys
-  # master -- but that job polled staging for the very deploy Render hadn't triggered yet
-  # (because it was waiting on that same job). It could only ever time out, so master always
-  # showed red and someone had to click "Manual Deploy" in the Render dashboard on every push.
-  # It now lives in its own workflow (staging-smoke.yml), triggered by workflow_run after this
-  # one finishes -- a separate check suite that isn't part of what Render is waiting on, so
-  # `check` + `docker` passing is enough to let the deploy start, and the smoke test then verifies
-  # it afterwards instead of before.
+  # Render wait for every check on the commit to finish before it deploys master -- but that job
+  # polled staging for the very deploy Render hadn't triggered yet (because it was waiting on that
+  # same job). It could only ever time out, so master always showed red and someone had to click
+  # "Manual Deploy" in the Render dashboard on every push.
+  #
+  # It now lives in its own workflow (staging-smoke.yml) with NO automatic trigger tied to a
+  # commit -- not even `workflow_run`. A `workflow_run`-triggered workflow still attaches its check
+  # run to the original commit, so Render still waits on it and the deadlock is unchanged, just one
+  # hop later (confirmed the hard way: moving it to workflow_run alone did not fix this). See
+  # staging-smoke.yml's own header comment for the full explanation and a real-world precedent.
