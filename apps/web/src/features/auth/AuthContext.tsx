@@ -1,3 +1,4 @@
+import { useQueryClient } from '@tanstack/react-query';
 import {
   authSessionSchema,
   loginSchema,
@@ -44,6 +45,12 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [session, setSession] = useState<AuthSession | null | undefined>(undefined);
   // Avoids two overlapping silent-refresh attempts (e.g. StrictMode's double-invoked effect).
   const refreshing = useRef<Promise<string | null> | null>(null);
+  // None of the query keys used across the app (['conversations'], ['conversation', id],
+  // ['messages', id], ...) are scoped by user id, since there's normally only ever one signed-in
+  // user per browser session. Without clearing on logout/login, a second person signing in on the
+  // same tab right after the first signs out would briefly see the previous person's cached
+  // conversations and messages before anything refetches.
+  const queryClient = useQueryClient();
 
   const refresh = useCallback(async (): Promise<string | null> => {
     if (refreshing.current) return refreshing.current;
@@ -69,11 +76,18 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     void refresh();
   }, [refresh]);
 
-  const login = useCallback(async (input: LoginInput) => {
-    loginSchema.parse(input);
-    const next = await apiPost('/auth/login', authSessionSchema, input);
-    setSession(next);
-  }, []);
+  const login = useCallback(
+    async (input: LoginInput) => {
+      loginSchema.parse(input);
+      const next = await apiPost('/auth/login', authSessionSchema, input);
+      // Clear rather than merge: this only matters when someone else's session was left behind
+      // in this tab (normally login only happens from anonymous), but it's cheap and correct
+      // either way -- everything refetches fresh for whoever is signed in now.
+      queryClient.clear();
+      setSession(next);
+    },
+    [queryClient],
+  );
 
   const logout = useCallback(async () => {
     try {
@@ -84,8 +98,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       // didn't match the expected shape, the client still forgets the session locally.
     } finally {
       setSession(null);
+      queryClient.clear();
     }
-  }, []);
+  }, [queryClient]);
 
   const setUser = useCallback((user: Me) => {
     setSession((prev) => (prev ? { ...prev, user } : prev));

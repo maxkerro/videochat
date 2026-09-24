@@ -93,14 +93,20 @@ reffile=$(mktemp "${TMPDIR:-/tmp}/claude-review-hook-refs.XXXXXX") || {
 # be reported as "review failed -- not blocking" and the hook would carry
 # on as if nothing happened. Conventional exit codes: 130 for SIGINT
 # (128+2), 143 for SIGTERM (128+15).
-trap 'rm -f "$reffile" "$errfile" "$outfile"' EXIT
-trap 'rm -f "$reffile" "$errfile" "$outfile"; exit 130' INT
-trap 'rm -f "$reffile" "$errfile" "$outfile"; exit 143' TERM
+# claude_pid (set once the loop below backgrounds a review) is killed here too: a background job
+# started from a non-interactive script has SIGINT ignored by default, so Ctrl-C during a review
+# would otherwise kill this script's `sleep`/`wait` (tripping the INT trap) while leaving claude
+# itself running and billing in the background, writing to files these traps are about to delete
+# out from under it.
+trap '[ -n "$claude_pid" ] && kill "$claude_pid" 2>/dev/null; rm -f "$reffile" "$errfile" "$outfile"' EXIT
+trap '[ -n "$claude_pid" ] && kill "$claude_pid" 2>/dev/null; rm -f "$reffile" "$errfile" "$outfile"; exit 130' INT
+trap '[ -n "$claude_pid" ] && kill "$claude_pid" 2>/dev/null; rm -f "$reffile" "$errfile" "$outfile"; exit 143' TERM
 cat > "$reffile"
 
 zero=0000000000000000000000000000000000000000
 any_reviewed=0
 total_review_seconds=0
+claude_pid=""
 
 # shellcheck disable=SC2034  # remote_ref is part of git's line format; unused here
 while read -r local_ref local_sha remote_ref remote_sha; do
@@ -238,6 +244,9 @@ $diff_text"
     done
     wait "$claude_pid"
     claude_status=$?
+    # Reap'd and done -- clear it so the traps above don't try to kill an already-finished (and
+    # possibly since-recycled) pid if a later ref's review is interrupted instead.
+    claude_pid=""
     review_output=$(cat "$outfile")
   else
     # No temp file to poll -- fall back to a plain blocking call. No

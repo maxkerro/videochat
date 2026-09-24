@@ -37,6 +37,18 @@ function upsertMessage(list: Message[], message: Message): Message[] {
   return [...list, message].sort((a, b) => a.seq - b.seq);
 }
 
+/** A 404 means "not found, or you're not a member" -- retrying won't change that. Anything else
+ *  (a network blip, a 500) is worth a couple of automatic retries before giving up and showing
+ *  an error, just carving out the one status that never helps. `failureCount` is 0-based (react-
+ *  query's own convention: 0 on the first failure), so `< 2` caps this at 3 total attempts
+ *  (~3s of exponential backoff with react-query's default retryDelay) before surfacing an error
+ *  -- long enough to ride out a network blip, short enough that a real failure doesn't leave the
+ *  person staring at a blank pane for too long. */
+export function shouldRetryQuery(failureCount: number, error: unknown): boolean {
+  if (error instanceof ApiError && error.status === 404) return false;
+  return failureCount < 2;
+}
+
 /** Conversation view (CHAT-014): live message history, an optimistic composer with retry, and
  *  realtime delivery of messages sent by others via CHAT-013's WebSocket gateway. */
 export function ChatPane() {
@@ -62,14 +74,14 @@ export function ChatPane() {
     queryKey: ['conversation', conversationId],
     queryFn: () => withAuthRetry(auth, (token) => fetchConversation(token, conversationId!)),
     enabled,
-    retry: false,
+    retry: shouldRetryQuery,
   });
 
   const messagesQuery = useQuery({
     queryKey: ['messages', conversationId],
     queryFn: () => withAuthRetry(auth, (token) => fetchMessages(token, conversationId!)),
     enabled,
-    retry: false,
+    retry: shouldRetryQuery,
   });
 
   useRealtimeEvent((envelope: WsEnvelope) => {
@@ -152,8 +164,15 @@ export function ChatPane() {
         <p>
           {notFound
             ? 'It may have been deleted, or you’re no longer a member.'
-            : 'Could not load this conversation. Try again in a moment.'}
+            : 'Could not load this conversation.'}
         </p>
+        {/* A 404 is final -- retrying won't help. Anything else already got a few automatic
+         *  retries via shouldRetryQuery; this is for once those are exhausted too. */}
+        {!notFound && (
+          <Button type="button" onClick={() => void conversationQuery.refetch()}>
+            Try again
+          </Button>
+        )}
         <Link to="/">Back to conversations</Link>
       </section>
     );
@@ -183,26 +202,40 @@ export function ChatPane() {
         </div>
       </header>
 
-      <ol className={styles.messages} aria-label="Messages">
-        {messages.map((m) => (
-          <li key={m.id} className={cx(styles.message, m.senderId === auth.user?.id && styles.own)}>
-            <span className={styles.bubble}>{m.body ? linkify(m.body) : null}</span>
-            <time className={styles.time}>{timeFor(m.createdAt)}</time>
-          </li>
-        ))}
-        {pendingHere.map((p) => (
-          <li key={p.clientMsgId} className={cx(styles.message, styles.own)}>
-            <span className={styles.bubble}>{linkify(p.body)}</span>
-            {p.status === 'sending' ? (
-              <span className={styles.time}>Sending…</span>
-            ) : (
-              <button type="button" className={styles.retry} onClick={() => handleRetry(p)}>
-                Failed -- tap to retry
-              </button>
-            )}
-          </li>
-        ))}
-      </ol>
+      {messagesQuery.isError ? (
+        // Without this, a failed history load rendered an empty <ol> -- indistinguishable from
+        // "no messages yet" -- rather than telling the person their history didn't actually load.
+        <div className={styles.missing} role="alert">
+          <p>Could not load messages.</p>
+          <Button type="button" onClick={() => void messagesQuery.refetch()}>
+            Try again
+          </Button>
+        </div>
+      ) : (
+        <ol className={styles.messages} aria-label="Messages">
+          {messages.map((m) => (
+            <li
+              key={m.id}
+              className={cx(styles.message, m.senderId === auth.user?.id && styles.own)}
+            >
+              <span className={styles.bubble}>{m.body ? linkify(m.body) : null}</span>
+              <time className={styles.time}>{timeFor(m.createdAt)}</time>
+            </li>
+          ))}
+          {pendingHere.map((p) => (
+            <li key={p.clientMsgId} className={cx(styles.message, styles.own)}>
+              <span className={styles.bubble}>{linkify(p.body)}</span>
+              {p.status === 'sending' ? (
+                <span className={styles.time}>Sending…</span>
+              ) : (
+                <button type="button" className={styles.retry} onClick={() => handleRetry(p)}>
+                  Failed -- tap to retry
+                </button>
+              )}
+            </li>
+          ))}
+        </ol>
+      )}
 
       <form className={styles.composer} onSubmit={handleSubmit}>
         <label htmlFor="composer" className="visually-hidden">

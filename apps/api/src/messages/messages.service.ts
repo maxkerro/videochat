@@ -21,6 +21,11 @@ export class MessagesService {
    * is waiting on to move its optimistic message from "sending" to "sent".
    */
   async send(conversationId: string, senderId: string, input: SendMessageInput): Promise<Message> {
+    // Checked here, outside appendMessage's own transaction: harmless today since there's no way
+    // to leave or be removed from a (direct-only) conversation yet, but once group leave/kick
+    // exists this has a real race -- someone removed between this check and the insert below
+    // could still get one more message in. Re-check membership (with `leftAt IS NULL`) inside
+    // appendMessage's transaction once that lands.
     await this.requireMember(conversationId, senderId);
 
     const row = await appendMessage(this.db, {

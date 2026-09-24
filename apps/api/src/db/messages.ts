@@ -54,9 +54,13 @@ export async function appendMessage(db: Database, input: AppendMessageInput): Pr
     if (input.senderId) {
       // Sending a message counts as having read up to it -- without this, the sender's own
       // lastReadSeq never advances, and their own conversation list would show it as unread.
+      // GREATEST rather than a plain assignment: today the conversation row lock above already
+      // serializes seq allocation, so conv.seq can only ever be higher than what's stored here --
+      // but a future mark-read endpoint mustn't be able to race with this and pull lastReadSeq
+      // backwards, and this stays correct even if that ever runs concurrently.
       await tx
         .update(memberships)
-        .set({ lastReadSeq: conv.seq })
+        .set({ lastReadSeq: sql`GREATEST(${memberships.lastReadSeq}, ${conv.seq})` })
         .where(
           and(
             eq(memberships.conversationId, input.conversationId),
@@ -86,6 +90,12 @@ async function findByClientMsgId(
  * The most recent `limit` messages in a conversation, oldest first (ready to render top-to-
  * bottom). A minimal stand-in for CHAT-016's cursor-paged, virtualized history -- just enough
  * to show a working conversation for CHAT-014's send/receive.
+ *
+ * Deliberately no floor at the caller's `memberships.joinedAt`: a member currently sees the
+ * conversation's *entire* history, including messages from before they joined. Harmless for
+ * direct conversations (both members were there from the start), but this needs an explicit
+ * decision -- not a silent carry-over -- once group conversations exist and someone can join one
+ * partway through its history.
  */
 export async function listRecentMessages(
   db: DbExecutor,
