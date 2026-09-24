@@ -32,6 +32,28 @@ export async function findUserById(db: DbExecutor, id: string): Promise<User | u
   return row;
 }
 
+/**
+ * CHAT-012 "find people": prefix-matches usernames case-insensitively, excluding the searching
+ * user. Ordered alphabetically and capped so a broad query (e.g. a single common letter) can't
+ * be used to enumerate the whole user table.
+ */
+export async function searchUsersByUsernamePrefix(
+  db: DbExecutor,
+  prefix: string,
+  excludeUserId: string,
+  limit: number,
+): Promise<User[]> {
+  // Escape ILIKE's own wildcard characters so a search term containing "%" or "_" is matched
+  // literally, not as a pattern -- otherwise a query like "a%" would match far more than intended.
+  const escaped = prefix.replace(/[\\%_]/g, (c) => `\\${c}`);
+  return db
+    .select()
+    .from(users)
+    .where(and(sql`${users.username} ILIKE ${escaped + '%'}`, ne(users.id, excludeUserId)))
+    .orderBy(users.username)
+    .limit(limit);
+}
+
 /** Case-insensitive; excludes `excludeUserId` so a user can save their own unchanged username. */
 export async function isUsernameTaken(
   db: DbExecutor,

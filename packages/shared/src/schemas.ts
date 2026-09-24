@@ -90,8 +90,25 @@ export const conversationSummarySchema = z.object({
   lastMessageAt: z.iso.datetime().nullable(),
   role: z.enum(MEMBER_ROLES),
   lastReadSeq: z.number().int().nonnegative(),
+  /** The other member, for a direct conversation (null for a group, which uses `title` instead).
+   *  A direct conversation has no title of its own, so the client needs this to show who it's
+   *  with. */
+  peer: publicUserSchema.nullable(),
 });
 export type ConversationSummary = z.infer<typeof conversationSummarySchema>;
+export const conversationsListSchema = z.array(conversationSummarySchema);
+export type ConversationsList = z.infer<typeof conversationsListSchema>;
+
+/** CHAT-012: search by username (prefix match) or exact email (never partial, to avoid
+ *  enumerating accounts by email). */
+export const userSearchQuerySchema = z.object({ q: z.string().trim().min(1).max(254) });
+export type UserSearchQuery = z.infer<typeof userSearchQuerySchema>;
+export const userSearchResultsSchema = z.object({ users: z.array(publicUserSchema) });
+export type UserSearchResults = z.infer<typeof userSearchResultsSchema>;
+
+/** CHAT-012: start (or reopen) a direct conversation with another user. */
+export const startDirectConversationSchema = z.object({ userId: z.uuid() });
+export type StartDirectConversationInput = z.infer<typeof startDirectConversationSchema>;
 
 export const messageSchema = z.object({
   id: ulidSchema,

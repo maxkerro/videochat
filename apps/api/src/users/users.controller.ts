@@ -14,9 +14,11 @@ import { FileInterceptor } from '@nestjs/platform-express';
 import {
   LIMITS,
   updateProfileSchema,
+  userSearchQuerySchema,
   usernameSchema,
   type Me,
   type UsernameAvailability,
+  type UserSearchResults,
 } from '@videochat/shared';
 import { memoryStorage } from 'multer';
 import { z } from 'zod';
@@ -54,6 +56,17 @@ export class UsersController {
       return { available: false };
     }
     return { available: await this.users.isUsernameAvailable(username) };
+  }
+
+  /** CHAT-012 "find people": username prefix or exact email, excluding the caller themselves. */
+  @Get('users/search')
+  @UseGuards(AccessTokenGuard)
+  async searchUsers(
+    @CurrentUserId() userId: string,
+    @Query(new ZodValidationPipe(userSearchQuerySchema))
+    query: z.infer<typeof userSearchQuerySchema>,
+  ): Promise<UserSearchResults> {
+    return { users: await this.users.searchUsers(query.q, userId) };
   }
 
   @Post('me/avatar')

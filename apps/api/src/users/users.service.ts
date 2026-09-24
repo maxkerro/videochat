@@ -1,12 +1,19 @@
 import { ConflictException, Inject, Injectable, NotFoundException } from '@nestjs/common';
-import type { Me, UpdateProfileInput } from '@videochat/shared';
+import { LIMITS, type Me, type PublicUser, type UpdateProfileInput } from '@videochat/shared';
 import type { Database } from '../db/client.js';
 import { DB } from '../infra/tokens.js';
-import { findUserById, isUsernameTaken, setAvatarKey, updateProfile } from '../db/users.js';
+import {
+  findUserByEmail,
+  findUserById,
+  isUsernameTaken,
+  searchUsersByUsernamePrefix,
+  setAvatarKey,
+  updateProfile,
+} from '../db/users.js';
 import { isUniqueViolation } from '../db/pg-errors.js';
 import { S3Service } from '../storage/s3.service.js';
 import { AvatarService, type UploadedAvatarFile } from './avatar.service.js';
-import { toMe } from './user-mapper.js';
+import { toMe, toPublicUser } from './user-mapper.js';
 
 @Injectable()
 export class UsersService {
@@ -44,6 +51,30 @@ export class UsersService {
 
   async isUsernameAvailable(username: string, excludeUserId?: string): Promise<boolean> {
     return !(await isUsernameTaken(this.db, username, excludeUserId));
+  }
+
+  /**
+   * CHAT-012 "find people": a query containing "@" is treated as an exact email lookup (never
+   * partial -- partial email matching would let one user enumerate others' addresses), anything
+   * else as a username prefix search.
+   */
+  async searchUsers(query: string, excludeUserId: string): Promise<PublicUser[]> {
+    if (query.includes('@')) {
+      const user = await findUserByEmail(this.db, query);
+      if (!user || user.id === excludeUserId) return [];
+      const avatarUrl = await this.s3.getAvatarUrl(user.avatarKey);
+      return [toPublicUser(user, avatarUrl)];
+    }
+
+    const matches = await searchUsersByUsernamePrefix(
+      this.db,
+      query,
+      excludeUserId,
+      LIMITS.userSearchMaxResults,
+    );
+    return Promise.all(
+      matches.map(async (user) => toPublicUser(user, await this.s3.getAvatarUrl(user.avatarKey))),
+    );
   }
 
   async uploadAvatar(userId: string, file: UploadedAvatarFile): Promise<Me> {

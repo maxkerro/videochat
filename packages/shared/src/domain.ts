@@ -31,4 +31,6 @@ export const LIMITS = {
   /** Consecutive failed logins before a cool-down (CHAT-010). */
   loginAttemptsBeforeLockout: 5,
   loginLockoutMinutes: 15,
+  /** Max rows returned by the "find people" search (CHAT-012). */
+  userSearchMaxResults: 20,
 } as const;
