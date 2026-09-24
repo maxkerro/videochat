@@ -60,12 +60,16 @@ fi
 
 # Private per-run temp files, not fixed shared paths in /tmp (which would
 # be predictable and shared between users on a multi-user machine), always
-# cleaned up on exit. Trap errfile alone first so it's still cleaned up if
-# the reffile mktemp below fails and we exit early; once reffile exists too,
-# the trap is replaced (not accumulated -- see the reffile comment) to cover
-# both.
+# cleaned up on exit. outfile holds claude's stdout: it's written to by a
+# backgrounded claude process (see the heartbeat loop below) and read back
+# once that process finishes, rather than captured via command substitution,
+# so this script can print progress while claude is still running. Trap
+# both alone first so they're still cleaned up if the reffile mktemp below
+# fails and we exit early; once reffile exists too, the trap is replaced
+# (not accumulated -- see the reffile comment) to cover all three.
 errfile=$(mktemp "${TMPDIR:-/tmp}/claude-review-hook-err.XXXXXX") || errfile=""
-[ -n "$errfile" ] && trap 'rm -f "$errfile"' EXIT INT TERM
+outfile=$(mktemp "${TMPDIR:-/tmp}/claude-review-hook-out.XXXXXX") || outfile=""
+[ -n "$errfile" ] || [ -n "$outfile" ] && trap 'rm -f "$errfile" "$outfile"' EXIT INT TERM
 
 # Read every ref being pushed into a temp file BEFORE reviewing any of
 # them, then loop over that FILE (`done < "$reffile"`, a redirection, not
@@ -89,13 +93,14 @@ reffile=$(mktemp "${TMPDIR:-/tmp}/claude-review-hook-refs.XXXXXX") || {
 # be reported as "review failed -- not blocking" and the hook would carry
 # on as if nothing happened. Conventional exit codes: 130 for SIGINT
 # (128+2), 143 for SIGTERM (128+15).
-trap 'rm -f "$reffile" "$errfile"' EXIT
-trap 'rm -f "$reffile" "$errfile"; exit 130' INT
-trap 'rm -f "$reffile" "$errfile"; exit 143' TERM
+trap 'rm -f "$reffile" "$errfile" "$outfile"' EXIT
+trap 'rm -f "$reffile" "$errfile" "$outfile"; exit 130' INT
+trap 'rm -f "$reffile" "$errfile" "$outfile"; exit 143' TERM
 cat > "$reffile"
 
 zero=0000000000000000000000000000000000000000
 any_reviewed=0
+total_review_seconds=0
 
 # shellcheck disable=SC2034  # remote_ref is part of git's line format; unused here
 while read -r local_ref local_sha remote_ref remote_sha; do
@@ -148,7 +153,8 @@ while read -r local_ref local_sha remote_ref remote_sha; do
   [ "$commit_count" -eq 0 ] && continue
   any_reviewed=1
 
-  echo "[review-hook] Reviewing $commit_count commit(s) on $local_ref before push (this can take a minute)..."
+  review_started_epoch=$(date +%s)
+  echo "[review-hook] Reviewing $commit_count commit(s) on $local_ref before push, started $(date '+%Y-%m-%d %H:%M:%S %Z') (this can take a minute)..."
 
   log_text=$(git log --oneline "$range")
   # Lockfile diffs (pnpm-lock.yaml) are excluded: they're routine, rarely
@@ -203,12 +209,51 @@ $diff_text"
   #                           files, so previously-allowed tools don't leak in
   #  --strict-mcp-config    -- with no --mcp-config given, loads zero MCP
   #                           servers (connectors), regardless of project config
-  if [ -n "$errfile" ]; then
-    review_output=$(printf '%s' "$prompt" | claude -p --model opus --tools "" --restricted --strict-mcp-config 2>"$errfile")
+  # Run claude in the background and write its stdout to outfile, rather
+  # than capturing it via command substitution: that would sit silently
+  # until claude exits, which the "this can take a minute" warning above
+  # exists only because there was nothing better to say. With outfile
+  # available, poll instead so this prints something every few seconds
+  # while the review is actually running.
+  if [ -n "$outfile" ]; then
+    if [ -n "$errfile" ]; then
+      printf '%s' "$prompt" | claude -p --model opus --tools "" --restricted --strict-mcp-config >"$outfile" 2>"$errfile" &
+    else
+      printf '%s' "$prompt" | claude -p --model opus --tools "" --restricted --strict-mcp-config >"$outfile" 2>&1 &
+    fi
+    claude_pid=$!
+    # Poll once a second (cheap: this is just a `kill -0` and a sleep), but
+    # only print a heartbeat line every 5th tick. A quick review can finish
+    # in well under 5s (a fast answer, or claude failing to start at all --
+    # see the claude_status check below), and polling at 5s intervals would
+    # add up to a spurious 5s of dead time to every push waiting on the
+    # first check to even notice.
+    elapsed=0
+    while kill -0 "$claude_pid" 2>/dev/null; do
+      sleep 1
+      elapsed=$((elapsed + 1))
+      if [ $((elapsed % 5)) -eq 0 ] && kill -0 "$claude_pid" 2>/dev/null; then
+        echo "[review-hook] ...still reviewing $local_ref (${elapsed}s elapsed)"
+      fi
+    done
+    wait "$claude_pid"
+    claude_status=$?
+    review_output=$(cat "$outfile")
   else
-    review_output=$(printf '%s' "$prompt" | claude -p --model opus --tools "" --restricted --strict-mcp-config 2>&1)
+    # No temp file to poll -- fall back to a plain blocking call. No
+    # progress output while claude runs, but still correct.
+    if [ -n "$errfile" ]; then
+      review_output=$(printf '%s' "$prompt" | claude -p --model opus --tools "" --restricted --strict-mcp-config 2>"$errfile")
+    else
+      review_output=$(printf '%s' "$prompt" | claude -p --model opus --tools "" --restricted --strict-mcp-config 2>&1)
+    fi
+    claude_status=$?
   fi
-  claude_status=$?
+
+  review_finished_epoch=$(date +%s)
+  review_duration=$((review_finished_epoch - review_started_epoch))
+  total_review_seconds=$((total_review_seconds + review_duration))
+  echo "[review-hook] Review of $local_ref finished in ${review_duration}s (claude exited $claude_status)."
 
   if [ $claude_status -ne 0 ]; then
     echo "[review-hook] Review failed to run (claude exited $claude_status) -- not blocking the push."
@@ -264,7 +309,10 @@ done < "$reffile"
 # harmless but repetitive.
 if [ "$any_reviewed" -eq 0 ]; then
   echo "[review-hook] No new commits to review."
-elif ! confirm_push; then
+else
+  echo "[review-hook] Total review time: ${total_review_seconds}s."
+fi
+if [ "$any_reviewed" -ne 0 ] && ! confirm_push; then
   echo "[review-hook] Not confirmed. Push aborted."
   echo "[review-hook] Push anyway with: git push --no-verify"
   exit 1
