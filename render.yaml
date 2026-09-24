@@ -84,26 +84,30 @@ services:
       # SameSite=None doesn't hold up either once Safari/Chrome block third-party cookies.
       # Proxying makes every request the browser sees same-origin, so the cookie just works.
       # These rules must come before the catch-all SPA rewrite below (first match wins).
-      # Order matters: Render's static-site hostname is fixed as <service name>.onrender.com,
-      # so this can be hardcoded rather than filled in after first deploy.
+      # IMPORTANT: <service name>.onrender.com is only the hostname if that plain name was free
+      # globally across all Render accounts -- Render silently appends a random suffix
+      # (videochat-api-p6sw.onrender.com, not videochat-api.onrender.com) when it collides. The
+      # hostname below MUST be the actual assigned one from the Render dashboard, not the
+      # `name:` field above. If this service is ever deleted and recreated under a new name,
+      # update every destination below to match.
       - type: rewrite
         source: /auth/*
-        destination: https://videochat-api.onrender.com/auth/:splat
+        destination: https://videochat-api-p6sw.onrender.com/auth/:splat
       - type: rewrite
         source: /me
-        destination: https://videochat-api.onrender.com/me
+        destination: https://videochat-api-p6sw.onrender.com/me
       - type: rewrite
         source: /me/*
-        destination: https://videochat-api.onrender.com/me/:splat
+        destination: https://videochat-api-p6sw.onrender.com/me/:splat
       - type: rewrite
         source: /users/*
-        destination: https://videochat-api.onrender.com/users/:splat
+        destination: https://videochat-api-p6sw.onrender.com/users/:splat
       - type: rewrite
         source: /health
-        destination: https://videochat-api.onrender.com/health
+        destination: https://videochat-api-p6sw.onrender.com/health
       - type: rewrite
         source: /ready
-        destination: https://videochat-api.onrender.com/ready
+        destination: https://videochat-api-p6sw.onrender.com/ready
       # Client-side routing: every other path serves the SPA.
       - type: rewrite
         source: /*
