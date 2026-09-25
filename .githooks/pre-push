@@ -1,14 +1,22 @@
 #!/bin/sh
-# Two checks before each push:
-#  1. `pnpm typecheck` -- a hard gate. Failing this always blocks the push.
+# Several checks before each push, in the same order as the `check` job in
+# .github/workflows/ci.yml, so a push either matches what CI will say or
+# never leaves your machine:
+#  1. `pnpm format:check`, `pnpm lint`, `pnpm typecheck`, `pnpm test`,
+#     `pnpm build` -- hard gates. Failing any of these always blocks the
+#     push. Before `pnpm test`, scripts/check-infra.mjs confirms the local
+#     Postgres/Redis it needs are actually reachable (not just configured --
+#     see that script for why this matters), since a silently-skipped e2e
+#     suite would otherwise report a false green here that CI won't repeat.
 #  2. An automated code review of the commits being pushed, via the Claude Code
 #     CLI (Opus), followed by a manual confirmation prompt.
 #
-# The review step never blocks a push solely because a tool is missing or
-# broken -- it only blocks when the review actually ran and found a
-# blocking-severity issue, or when you decline the confirmation prompt shown
-# after the review (whether the review itself ran or not). Bypass any time
-# with: git push --no-verify
+# The review step (and the infra check, and a missing scripts/check-infra.mjs
+# entirely) never blocks a push solely because a tool is missing or broken --
+# only the five hard gates above do that. The review only blocks when it
+# actually ran and found a blocking-severity issue, or when you decline the
+# confirmation prompt shown after it (whether the review itself ran or not).
+# Bypass any time with: git push --no-verify
 #
 # The confirmation prompt reads from /dev/tty, not from git's own stdin
 # (which this hook also reads, for the list of refs being pushed) -- if
@@ -18,11 +26,35 @@
 # Installed automatically on `pnpm install` (see the root package.json
 # "prepare" script), or by hand with: git config core.hooksPath .githooks
 
-echo "[pre-push] Running typecheck..."
-if ! pnpm typecheck; then
-  echo "[pre-push] Typecheck failed. Push aborted."
-  exit 1
+run_step() {
+  # $1 = human label, remaining args = the command to run.
+  label="$1"
+  shift
+  echo "[pre-push] Running $label..."
+  if ! "$@"; then
+    echo "[pre-push] $label failed. Push aborted."
+    echo "[pre-push] Push anyway with: git push --no-verify"
+    exit 1
+  fi
+}
+
+run_step "format check" pnpm format:check
+run_step "lint" pnpm lint
+run_step "typecheck" pnpm typecheck
+
+if [ -f scripts/check-infra.mjs ] && command -v node >/dev/null 2>&1; then
+  echo "[pre-push] Checking local test infra (Postgres/Redis)..."
+  if ! node scripts/check-infra.mjs; then
+    echo "[pre-push] Push aborted -- local test infra isn't ready (see above)."
+    echo "[pre-push] Push anyway with: git push --no-verify"
+    exit 1
+  fi
+else
+  echo "[pre-push] scripts/check-infra.mjs or node not found -- skipping the infra check."
 fi
+
+run_step "tests" pnpm test
+run_step "build" pnpm build
 
 # Prompts on /dev/tty and returns success only on an explicit y/yes.
 # Returns success (without asking) if no terminal is attached at all, so
