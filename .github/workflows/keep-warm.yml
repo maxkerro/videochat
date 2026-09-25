@@ -1,0 +1,37 @@
+name: Keep API warm
+
+# Render's free plan spins videochat-api down after roughly 15 minutes with no traffic; the next
+# request then has to cold-start the container (commonly 30-60+s). That was directly responsible
+# for two things looking broken: the "Log in" button not appearing until the page's silent
+# session-refresh finally resolved, and a new message taking a long time to show up for the other
+# person (their WebSocket connection was killed when the container spun down, and had to
+# reconnect through that same cold start before delivery could resume). Pinging /health well
+# inside the 15-minute window keeps the instance warm, with no change to the app itself.
+#
+# This is unrelated to ci.yml's deploy-gating checks and to staging-smoke.yml (which just verifies
+# a deploy landed) -- it never blocks anything, and a failed run here doesn't mean the app is
+# broken, only that this one ping missed (Render restarting for a deploy, a transient blip, etc).
+
+on:
+  schedule:
+    # GitHub Actions cron is best-effort, not exact -- runs can lag by several minutes,
+    # especially under high GitHub-wide load, and can occasionally be skipped outright. Every 10
+    # minutes leaves comfortable margin under Render's ~15-minute spin-down window even so.
+    #
+    # NOTE: GitHub auto-disables a repo's scheduled workflows after 60 days with no commits at
+    # all to the repo. If pings silently stop, check the Actions tab for a "workflow disabled"
+    # notice and re-enable it there.
+    - cron: '*/10 * * * *'
+  workflow_dispatch: {}
+
+jobs:
+  ping:
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    steps:
+      # IMPORTANT: this must be the actual assigned hostname from the Render dashboard, same
+      # caveat as render.yaml's proxy routes -- update it here too if the service is ever
+      # recreated under a new name.
+      - name: Ping videochat-api health endpoint
+        continue-on-error: true # a missed ping isn't a real failure worth alerting on
+        run: curl -fsS --max-time 90 https://videochat-api-p6sw.onrender.com/health
