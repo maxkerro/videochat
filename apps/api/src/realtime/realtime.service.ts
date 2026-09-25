@@ -14,6 +14,13 @@ import { REDIS } from '../infra/tokens.js';
 export interface RealtimeSocket extends WebSocket {
   isAlive?: boolean;
   userId?: string;
+  /** CHAT-020: this connection's own display name, cached at connect time so the gateway can
+   *  embed it in a typing event without a DB round trip per keystroke (see `RealtimeGateway`'s
+   *  `handleConnection`). */
+  displayName?: string;
+  /** CHAT-020: `Date.now()` of the last typing signal accepted from this connection -- the
+   *  server-side defense-in-depth throttle (see `TYPING_MIN_INTERVAL_MS`). */
+  lastTypingAt?: number;
   /** Snapshot, taken at connect time, of the conversations this socket should hear about.
    *  CHAT-013 doesn't push live updates into this set when membership changes mid-connection, but
    *  `RealtimeService.addConversationForUser`/`removeConversationForUser` (CHAT-012/CHAT-018) patch

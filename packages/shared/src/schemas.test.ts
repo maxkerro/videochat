@@ -7,6 +7,8 @@ import {
   memberSummarySchema,
   messagesPageQuerySchema,
   renameConversationSchema,
+  typingEventSchema,
+  typingSignalSchema,
   usernameSchema,
   ulidSchema,
   wsEnvelopeSchema,
@@ -136,5 +138,39 @@ describe('memberSummarySchema (CHAT-018)', () => {
       joinedAt: '2026-01-01T00:00:00.000Z',
     });
     expect(result.success).toBe(false);
+  });
+});
+
+describe('typingSignalSchema and typingEventSchema (CHAT-020)', () => {
+  const uuid = '00000000-0000-4000-8000-000000000001';
+
+  it('typingSignalSchema accepts just a conversationId -- the client never supplies its own identity', () => {
+    expect(typingSignalSchema.safeParse({ conversationId: uuid }).success).toBe(true);
+    expect(typingSignalSchema.safeParse({}).success).toBe(false);
+    expect(typingSignalSchema.safeParse({ conversationId: 'not-a-uuid' }).success).toBe(false);
+  });
+
+  it('typingEventSchema accepts the full server-filled shape', () => {
+    const result = typingEventSchema.safeParse({
+      conversationId: uuid,
+      userId: uuid,
+      displayName: 'Anna',
+    });
+    expect(result.success).toBe(true);
+  });
+
+  it('typingEventSchema rejects a missing displayName or userId', () => {
+    expect(typingEventSchema.safeParse({ conversationId: uuid, userId: uuid }).success).toBe(false);
+    expect(typingEventSchema.safeParse({ conversationId: uuid, displayName: 'Anna' }).success).toBe(
+      false,
+    );
+  });
+
+  it('round-trips through makeEnvelope/wsEnvelopeSchema like other realtime events', () => {
+    const payload = { conversationId: uuid, userId: uuid, displayName: 'Anna' };
+    const env = makeEnvelope('conversation.typing', payload, 'evt-typing-1');
+    const parsed = wsEnvelopeSchema.parse(env);
+    expect(parsed).toMatchObject({ v: 1, type: 'conversation.typing' });
+    expect(typingEventSchema.parse(parsed.payload)).toEqual(payload);
   });
 });

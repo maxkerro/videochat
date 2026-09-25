@@ -1,11 +1,22 @@
 import type { JwtService } from '@nestjs/jwt';
+import { makeEnvelope } from '@videochat/shared';
 import type { Database } from '../db/client.js';
 import * as conversationsDb from '../db/conversations.js';
-import { HEARTBEAT_INTERVAL_MS, RealtimeGateway } from './realtime.gateway.js';
+import * as usersDb from '../db/users.js';
+import {
+  HEARTBEAT_INTERVAL_MS,
+  RealtimeGateway,
+  TYPING_MIN_INTERVAL_MS,
+} from './realtime.gateway.js';
 import type { RealtimeService, RealtimeSocket } from './realtime.service.js';
 
 vi.mock('../db/conversations.js', () => ({
   listConversationIdsForUser: vi.fn(),
+  isConversationMember: vi.fn(),
+}));
+
+vi.mock('../db/users.js', () => ({
+  findUserById: vi.fn(),
 }));
 
 function makeClient(): RealtimeSocket {
@@ -22,13 +33,23 @@ function makeClient(): RealtimeSocket {
 
 describe('RealtimeGateway', () => {
   let jwt: { verify: ReturnType<typeof vi.fn> };
-  let realtime: { register: ReturnType<typeof vi.fn>; unregister: ReturnType<typeof vi.fn> };
+  let realtime: {
+    register: ReturnType<typeof vi.fn>;
+    unregister: ReturnType<typeof vi.fn>;
+    publishToConversation: ReturnType<typeof vi.fn>;
+  };
   let gateway: RealtimeGateway;
 
   beforeEach(() => {
     vi.mocked(conversationsDb.listConversationIdsForUser).mockResolvedValue(['conv-1']);
+    vi.mocked(conversationsDb.isConversationMember).mockResolvedValue(true);
+    vi.mocked(usersDb.findUserById).mockResolvedValue({ displayName: 'Anna' } as never);
     jwt = { verify: vi.fn() };
-    realtime = { register: vi.fn(), unregister: vi.fn() };
+    realtime = {
+      register: vi.fn(),
+      unregister: vi.fn(),
+      publishToConversation: vi.fn().mockResolvedValue(undefined),
+    };
     gateway = new RealtimeGateway(
       jwt as unknown as JwtService,
       realtime as unknown as RealtimeService,
@@ -82,6 +103,120 @@ describe('RealtimeGateway', () => {
       pongHandler?.();
 
       expect(client.isAlive).toBe(true);
+    });
+  });
+
+  describe('handleClientMessage (CHAT-020 typing)', () => {
+    const conversationId = '00000000-0000-4000-8000-000000000001';
+
+    async function connectedClient(): Promise<RealtimeSocket> {
+      jwt.verify.mockReturnValue({ sub: 'user-1' });
+      const client = makeClient();
+      await gateway.handleConnection(client, { url: '/realtime?token=good' } as never);
+      // The real RealtimeService.register sets this; the mock above doesn't, so it's set here to
+      // simulate a fully-registered connection the way handleClientMessage expects to find one.
+      client.userId = 'user-1';
+      return client;
+    }
+
+    // The gateway's own `on('message', ...)` listener fires-and-forgets the async handler (`void
+    // this.handleClientMessage(...)`), so a test driving it through that listener can't await
+    // completion. Calling the private method directly (still exercising the real registered
+    // handler's logic -- this *is* what the listener calls) keeps every assertion below
+    // deterministic instead of racing a background promise.
+    function messageHandler(client: RealtimeSocket): (data: Buffer) => Promise<void> {
+      expect(vi.mocked(client.on).mock.calls.some(([event]) => event === 'message')).toBe(true);
+      return (data: Buffer) =>
+        (
+          gateway as unknown as {
+            handleClientMessage: (c: RealtimeSocket, d: Buffer) => Promise<void>;
+          }
+        ).handleClientMessage(client, data);
+    }
+
+    it('re-broadcasts a valid typing signal with the server-known identity, never the client-supplied one', async () => {
+      const client = await connectedClient();
+      const envelope = makeEnvelope(
+        'conversation.typing',
+        { conversationId, userId: 'someone-else', displayName: 'Not Anna' },
+        'evt-1',
+      );
+
+      await messageHandler(client)(Buffer.from(JSON.stringify(envelope)));
+
+      expect(conversationsDb.isConversationMember).toHaveBeenCalledWith(
+        expect.anything(),
+        conversationId,
+        'user-1',
+      );
+      expect(realtime.publishToConversation).toHaveBeenCalledWith(
+        conversationId,
+        expect.objectContaining({
+          type: 'conversation.typing',
+          payload: { conversationId, userId: 'user-1', displayName: 'Anna' },
+        }),
+      );
+    });
+
+    it('does nothing for a conversation the connection is not a member of', async () => {
+      vi.mocked(conversationsDb.isConversationMember).mockResolvedValue(false);
+      const client = await connectedClient();
+      const envelope = makeEnvelope('conversation.typing', { conversationId }, 'evt-1');
+
+      await messageHandler(client)(Buffer.from(JSON.stringify(envelope)));
+
+      expect(realtime.publishToConversation).not.toHaveBeenCalled();
+    });
+
+    it('ignores an envelope of an unknown type', async () => {
+      const client = await connectedClient();
+      const envelope = makeEnvelope('some.other.type', { conversationId }, 'evt-1');
+
+      await messageHandler(client)(Buffer.from(JSON.stringify(envelope)));
+
+      expect(realtime.publishToConversation).not.toHaveBeenCalled();
+    });
+
+    it('ignores malformed JSON and a payload missing conversationId, without throwing', async () => {
+      const client = await connectedClient();
+
+      await expect(messageHandler(client)(Buffer.from('not json'))).resolves.toBeUndefined();
+      await messageHandler(client)(
+        Buffer.from(JSON.stringify(makeEnvelope('conversation.typing', {}, 'evt-1'))),
+      );
+
+      expect(realtime.publishToConversation).not.toHaveBeenCalled();
+    });
+
+    it('ignores a message received before registration finishes (no userId yet)', async () => {
+      jwt.verify.mockReturnValue({ sub: 'user-1' });
+      const client = makeClient();
+      await gateway.handleConnection(client, { url: '/realtime?token=good' } as never);
+      // Deliberately not setting client.userId, simulating a message that races ahead of
+      // RealtimeService.register (see the comment on this in handleConnection/handleClientMessage).
+
+      const envelope = makeEnvelope('conversation.typing', { conversationId }, 'evt-1');
+      await messageHandler(client)(Buffer.from(JSON.stringify(envelope)));
+
+      expect(realtime.publishToConversation).not.toHaveBeenCalled();
+    });
+
+    it('throttles a second typing signal from the same connection inside the minimum interval', async () => {
+      vi.useFakeTimers();
+      try {
+        const client = await connectedClient();
+        const envelope = makeEnvelope('conversation.typing', { conversationId }, 'evt-1');
+
+        await messageHandler(client)(Buffer.from(JSON.stringify(envelope)));
+        await messageHandler(client)(Buffer.from(JSON.stringify(envelope)));
+        expect(realtime.publishToConversation).toHaveBeenCalledTimes(1);
+
+        vi.advanceTimersByTime(TYPING_MIN_INTERVAL_MS);
+        await messageHandler(client)(Buffer.from(JSON.stringify(envelope)));
+        expect(realtime.publishToConversation).toHaveBeenCalledTimes(2);
+      } finally {
+        vi.useRealTimers();
+      }
     });
   });
 

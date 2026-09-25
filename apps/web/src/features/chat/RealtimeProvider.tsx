@@ -1,5 +1,5 @@
 import { useQueryClient } from '@tanstack/react-query';
-import type { WsEnvelope } from '@videochat/shared';
+import { makeEnvelope, type TypingSignalInput, type WsEnvelope } from '@videochat/shared';
 import { createContext, useContext, useEffect, useRef, useState, type ReactNode } from 'react';
 import { RealtimeClient, type RealtimeStatus } from '../../lib/realtime';
 import { getLastSeenSeq, recordSeenSeq, trackedConversationIds } from '../../lib/lastSeenSeq';
@@ -17,6 +17,17 @@ interface RealtimeContextValue {
   subscribe: (listener: EventListener) => () => void;
   subscribeStatus: (listener: StatusListener) => () => void;
   getStatus: () => RealtimeStatus;
+  /** CHAT-020: sends a "I'm typing in this conversation" signal over the socket. Best-effort and
+   *  a no-op while disconnected -- see `RealtimeClient.send`. */
+  sendTyping: (conversationId: string) => void;
+}
+
+let envelopeIdCounter = 0;
+/** A cheap, locally-unique-enough id for an outgoing envelope -- unlike a message's own
+ *  `clientMsgId`, nothing server-side ever dedupes on this, so it doesn't need to be a real UUID. */
+function nextEnvelopeId(): string {
+  envelopeIdCounter += 1;
+  return `typing-${Date.now()}-${envelopeIdCounter}`;
 }
 
 const RealtimeContext = createContext<RealtimeContextValue | null>(null);
@@ -60,6 +71,15 @@ function createRealtimeSingleton(): RealtimeSingleton {
         return () => statusListeners.delete(listener);
       },
       getStatus: () => status,
+      sendTyping: (conversationId) => {
+        client.send(
+          makeEnvelope<TypingSignalInput>(
+            'conversation.typing',
+            { conversationId },
+            nextEnvelopeId(),
+          ),
+        );
+      },
     },
   };
 }
@@ -166,6 +186,13 @@ export function useRealtimeEvent(handler: EventListener): void {
     handlerRef.current = handler;
   });
   useEffect(() => ctx.subscribe((envelope) => handlerRef.current(envelope)), [ctx]);
+}
+
+/** CHAT-020: sends a typing signal for `conversationId` over the shared socket. */
+export function useSendTyping(): (conversationId: string) => void {
+  const ctx = useContext(RealtimeContext);
+  if (!ctx) throw new Error('useSendTyping must be used inside <RealtimeProvider>');
+  return ctx.sendTyping;
 }
 
 /** CHAT-017: the realtime connection's current status, kept in sync as it changes -- for the

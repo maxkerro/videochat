@@ -4,6 +4,7 @@ import {
   conversationReadEventSchema,
   LIMITS,
   messageSchema,
+  typingEventSchema,
   type ConversationSummary,
   type MembersList,
   type Message,
@@ -37,8 +38,20 @@ import { linkify } from './linkify';
 import { appendToLatestPage, type MessagesData } from './messagesCache';
 import { fetchMessages, sendMessage } from './messagesApi';
 import { ReadReceiptThrottle } from './readReceipts';
-import { useRealtimeEvent } from './RealtimeProvider';
+import { useRealtimeEvent, useSendTyping } from './RealtimeProvider';
+import { TypingThrottle } from './typingThrottle';
+import {
+  formatTypingLabel,
+  pruneExpiredTyping,
+  withTypingEvent,
+  type TypingEntry,
+} from './typingIndicator';
 import styles from './ChatPane.module.css';
+
+/** How often the typing-indicator map is checked for entries that have gone stale (see
+ *  `pruneExpiredTyping`) -- frequent enough that "disappears within 6s" (AC) is comfortably met,
+ *  cheap enough to not matter running in the background of every open conversation. */
+const TYPING_PRUNE_INTERVAL_MS = 1000;
 
 interface PendingMessage {
   clientMsgId: string;
@@ -157,6 +170,7 @@ export function ChatPane() {
   const [pending, setPending] = useState<PendingMessage[]>([]);
   const [newArrivals, setNewArrivals] = useState(0);
   const [atLatest, setAtLatest] = useState(true);
+  const [typingEntries, setTypingEntries] = useState<ReadonlyMap<string, TypingEntry>>(new Map());
   const scrollRef = useRef<HTMLDivElement>(null);
   // Captured once per conversation (see the `landedRef` reset below), so the "New messages"
   // divider and initial scroll target stay put even after later reads move `lastReadSeq` on.
@@ -175,6 +189,7 @@ export function ChatPane() {
     landedRef.current = false;
     setNewArrivals(0);
     setAtLatest(true);
+    setTypingEntries(new Map());
   }
 
   const enabled = auth.status === 'authenticated' && Boolean(conversationId);
@@ -269,6 +284,30 @@ export function ChatPane() {
     );
   });
 
+  // CHAT-020: another member's "I'm typing" signal. Own events are skipped -- the conversation
+  // channel also reaches this person's *own* other open sockets (same as `conversation.read`),
+  // and someone doesn't need to be told they themselves are typing. Purely client-side state:
+  // nothing here is persisted (see `typingEventSchema`'s comment), and `pruneExpiredTyping` below
+  // is what makes an entry disappear again if no refresh follows.
+  useRealtimeEvent((envelope: WsEnvelope) => {
+    if (envelope.type !== 'conversation.typing') return;
+    const parsed = typingEventSchema.safeParse(envelope.payload);
+    if (!parsed.success) return;
+    const event = parsed.data;
+    if (event.conversationId !== conversationId || event.userId === auth.user?.id) return;
+    setTypingEntries((prev) => withTypingEvent(prev, event, Date.now()));
+  });
+
+  // Prunes entries that haven't been refreshed within TYPING_EXPIRY_MS, on a plain interval
+  // rather than one timer per typer -- simpler, and "disappears within 6s" doesn't need
+  // millisecond precision on when exactly that happens.
+  useEffect(() => {
+    const timer = setInterval(() => {
+      setTypingEntries((prev) => pruneExpiredTyping(prev, Date.now()));
+    }, TYPING_PRUNE_INTERVAL_MS);
+    return () => clearInterval(timer);
+  }, []);
+
   const allMessages = useMemo(
     () => messagesQuery.data?.pages.flatMap((page) => page.messages) ?? [],
     [messagesQuery.data],
@@ -332,6 +371,20 @@ export function ChatPane() {
       }),
   );
   const documentVisible = useDocumentVisible();
+
+  // CHAT-020: sends a throttled "I'm typing" signal as the person types. `sendTypingRef` mirrors
+  // the `authRef` pattern just above -- the throttle instance is built once (lazy `useState`
+  // initializer) and must always call the *current* `sendTyping`, not whatever it closed over.
+  const sendTyping = useSendTyping();
+  const sendTypingRef = useRef(sendTyping);
+  sendTypingRef.current = sendTyping;
+  const [typingThrottle] = useState(
+    () => new TypingThrottle((targetConversationId) => sendTypingRef.current(targetConversationId)),
+  );
+  const typingLabel = useMemo(
+    () => formatTypingLabel([...typingEntries.values()].map((e) => e.displayName)),
+    [typingEntries],
+  );
 
   // AC: "receipts are not sent while the tab is hidden" -- drops (never sends) whatever was
   // pending for this conversation the moment it goes hidden, rather than letting it fire the
@@ -670,6 +723,12 @@ export function ChatPane() {
         </div>
       )}
 
+      {typingLabel && (
+        <div className={styles.typingIndicator} role="status" aria-live="polite">
+          {typingLabel}
+        </div>
+      )}
+
       <form className={styles.composer} onSubmit={handleSubmit}>
         <label htmlFor="composer" className="visually-hidden">
           Message
@@ -681,7 +740,13 @@ export function ChatPane() {
           placeholder="Write a message…"
           value={draft}
           maxLength={LIMITS.messageMaxLength}
-          onChange={(event) => setDraft(event.target.value)}
+          onChange={(event) => {
+            const value = event.target.value;
+            setDraft(value);
+            // AC: "throttled to one per 3s per user" -- only while there's actually something
+            // being typed; clearing the composer (or never having typed anything) sends nothing.
+            if (value.trim() && conversationId) typingThrottle.notifyTyping(conversationId);
+          }}
           onKeyDown={handleKeyDown}
         />
         {remaining <= COUNTER_THRESHOLD && (

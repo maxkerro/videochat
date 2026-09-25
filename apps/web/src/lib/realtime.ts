@@ -57,6 +57,19 @@ export class RealtimeClient {
     this.open();
   }
 
+  /**
+   * CHAT-020: sends a client->server envelope over the already-open socket -- the first thing
+   * this client sends rather than only receives. Silently a no-op when the socket isn't open
+   * (not connected yet, or between a drop and reconnect): the caller (a typing signal) is
+   * inherently best-effort and ephemeral, so there's nothing useful to queue or retry here, unlike
+   * a message send which goes through the outbox instead.
+   */
+  send(envelope: WsEnvelope): void {
+    if (this.socket && this.socket.readyState === this.socket.OPEN) {
+      this.socket.send(JSON.stringify(envelope));
+    }
+  }
+
   /** Closes the socket and stops reconnecting. Call this on logout. */
   disconnect(): void {
     this.disconnected = true;

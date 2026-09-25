@@ -242,6 +242,26 @@ export const conversationReadEventSchema = z.object({
 });
 export type ConversationReadEvent = z.infer<typeof conversationReadEventSchema>;
 
+/**
+ * CHAT-020: "someone is typing" -- purely ephemeral, never persisted (no DB table, no message
+ * row). The client sends `typingSignalSchema` (just the conversation it's typing in) over the
+ * already-open realtime socket; the server never trusts a client-supplied identity, so it fills
+ * in `userId`/`displayName` itself from the authenticated connection before re-broadcasting this
+ * shape (as a `conversation.typing` `WsEnvelope`, matching `conversation.read`'s noun.verb naming)
+ * to the rest of the conversation via `RealtimeService.publishToConversation`. `displayName`
+ * travels inline rather than just `userId` because there's no persisted row for the receiving
+ * client to join against afterwards -- this event is gone the moment it's delivered.
+ */
+export const typingSignalSchema = z.object({ conversationId: z.uuid() });
+export type TypingSignalInput = z.infer<typeof typingSignalSchema>;
+
+export const typingEventSchema = z.object({
+  conversationId: z.uuid(),
+  userId: z.uuid(),
+  displayName: displayNameSchema,
+});
+export type TypingEvent = z.infer<typeof typingEventSchema>;
+
 /** Health endpoint contract, consumed by the web shell's status indicator. */
 export const dependencyStatusSchema = z.enum(['up', 'down']);
 export const healthResponseSchema = z.object({

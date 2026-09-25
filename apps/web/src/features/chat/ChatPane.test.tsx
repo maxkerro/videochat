@@ -109,8 +109,12 @@ function routedFetch(
  *  RealtimeProvider's connection from the outside and simulate a `message.new` arriving live. */
 class FakeWebSocket {
   static instances: FakeWebSocket[] = [];
+  readonly OPEN = 1;
   listeners: Record<string, ((event?: unknown) => void)[]> = {};
   readyState = 0;
+  /** CHAT-020: records every client->server send (e.g. a typing signal), so a test can assert on
+   *  what actually went out over the socket. */
+  sent: string[] = [];
   constructor(public url: string) {
     FakeWebSocket.instances.push(this);
   }
@@ -118,12 +122,18 @@ class FakeWebSocket {
     (this.listeners[type] ??= []).push(handler);
   }
   removeEventListener() {}
-  send() {}
+  send(data: string) {
+    this.sent.push(data);
+  }
   close() {
     this.readyState = 3;
     this.emit('close');
   }
   emit(type: string, event?: unknown) {
+    // CHAT-020: RealtimeClient.send() gates on `readyState === OPEN` -- without this, `open`
+    // events simulated in existing tests would leave the fake socket looking permanently closed
+    // to that check, so an outbound-send test could never pass.
+    if (type === 'open') this.readyState = 1;
     for (const handler of this.listeners[type] ?? []) handler(event);
   }
 }
@@ -662,6 +672,212 @@ describe('ChatPane', () => {
       renderApp(`/c/${conversationId}`);
       await screen.findByRole('heading', { name: 'Ben Okafor' });
       expect(screen.queryByRole('button', { name: 'Members' })).not.toBeInTheDocument();
+    });
+  });
+
+  describe('CHAT-020 typing indicators', () => {
+    function typingEnvelope(
+      userId: string,
+      displayName: string,
+      forConversationId = conversationId,
+    ) {
+      return makeEnvelope(
+        'conversation.typing',
+        { conversationId: forConversationId, userId, displayName },
+        `typing-${userId}`,
+      );
+    }
+
+    it('sends a throttled typing signal over the socket as the person types', async () => {
+      vi.stubGlobal(
+        'fetch',
+        routedFetch({
+          'POST /auth/refresh': () => jsonResponse(session()),
+          [`GET /conversations/${conversationId}`]: () => jsonResponse(conversation()),
+          [`GET /conversations/${conversationId}/messages`]: () =>
+            jsonResponse({ messages: [], hasMore: false }),
+        }),
+      );
+      renderApp(`/c/${conversationId}`);
+      const textarea = await screen.findByLabelText('Message');
+      await waitFor(() => expect(FakeWebSocket.instances).toHaveLength(1));
+      const socket = FakeWebSocket.instances[0]!;
+      socket.emit('open');
+
+      fireEvent.change(textarea, { target: { value: 'h' } });
+      fireEvent.change(textarea, { target: { value: 'hi' } });
+      fireEvent.change(textarea, { target: { value: 'hi there' } });
+
+      // Leading-edge throttle: several keystrokes in quick succession only ever send once.
+      const typingSends = socket.sent.filter(
+        (raw) => JSON.parse(raw).type === 'conversation.typing',
+      );
+      expect(typingSends).toHaveLength(1);
+      expect(JSON.parse(typingSends[0]!).payload).toEqual({ conversationId });
+    });
+
+    it('does not send a typing signal for an empty composer', async () => {
+      vi.stubGlobal(
+        'fetch',
+        routedFetch({
+          'POST /auth/refresh': () => jsonResponse(session()),
+          [`GET /conversations/${conversationId}`]: () => jsonResponse(conversation()),
+          [`GET /conversations/${conversationId}/messages`]: () =>
+            jsonResponse({ messages: [], hasMore: false }),
+        }),
+      );
+      renderApp(`/c/${conversationId}`);
+      const textarea = await screen.findByLabelText('Message');
+      await waitFor(() => expect(FakeWebSocket.instances).toHaveLength(1));
+      const socket = FakeWebSocket.instances[0]!;
+      socket.emit('open');
+
+      fireEvent.change(textarea, { target: { value: 'draft' } });
+      fireEvent.change(textarea, { target: { value: '' } });
+
+      const typingSends = socket.sent.filter(
+        (raw) => JSON.parse(raw).type === 'conversation.typing',
+      );
+      expect(typingSends).toHaveLength(1); // only from the one non-empty change above
+    });
+
+    it('shows "<name> is typing…" when a single other member\'s signal arrives', async () => {
+      vi.stubGlobal(
+        'fetch',
+        routedFetch({
+          'POST /auth/refresh': () => jsonResponse(session()),
+          [`GET /conversations/${conversationId}`]: () => jsonResponse(conversation()),
+          [`GET /conversations/${conversationId}/messages`]: () =>
+            jsonResponse({ messages: [], hasMore: false }),
+        }),
+      );
+      renderApp(`/c/${conversationId}`);
+      await screen.findByLabelText('Message');
+      await waitFor(() => expect(FakeWebSocket.instances).toHaveLength(1));
+      const socket = FakeWebSocket.instances[0]!;
+      socket.emit('open');
+
+      socket.emit('message', { data: JSON.stringify(typingEnvelope(peer.id, peer.displayName)) });
+
+      expect(await screen.findByText('Ben Okafor is typing…')).toBeInTheDocument();
+    });
+
+    it("never shows an indicator for the signed-in person's own typing signal echoed back", async () => {
+      vi.stubGlobal(
+        'fetch',
+        routedFetch({
+          'POST /auth/refresh': () => jsonResponse(session()),
+          [`GET /conversations/${conversationId}`]: () => jsonResponse(conversation()),
+          [`GET /conversations/${conversationId}/messages`]: () =>
+            jsonResponse({ messages: [], hasMore: false }),
+        }),
+      );
+      renderApp(`/c/${conversationId}`);
+      await screen.findByLabelText('Message');
+      await waitFor(() => expect(FakeWebSocket.instances).toHaveLength(1));
+      const socket = FakeWebSocket.instances[0]!;
+      socket.emit('open');
+
+      socket.emit('message', {
+        data: JSON.stringify(typingEnvelope(baseUser.id, baseUser.displayName)),
+      });
+
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      expect(screen.queryByText(/is typing…$/)).not.toBeInTheDocument();
+    });
+
+    it('ignores a typing signal for a different conversation than the one open', async () => {
+      vi.stubGlobal(
+        'fetch',
+        routedFetch({
+          'POST /auth/refresh': () => jsonResponse(session()),
+          [`GET /conversations/${conversationId}`]: () => jsonResponse(conversation()),
+          [`GET /conversations/${conversationId}/messages`]: () =>
+            jsonResponse({ messages: [], hasMore: false }),
+        }),
+      );
+      renderApp(`/c/${conversationId}`);
+      await screen.findByLabelText('Message');
+      await waitFor(() => expect(FakeWebSocket.instances).toHaveLength(1));
+      const socket = FakeWebSocket.instances[0]!;
+      socket.emit('open');
+
+      socket.emit('message', {
+        data: JSON.stringify(typingEnvelope(peer.id, peer.displayName, otherConversationId)),
+      });
+
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      expect(screen.queryByText(/is typing…$/)).not.toBeInTheDocument();
+    });
+
+    describe('group name-count thresholds', () => {
+      const groupId = '88888888-8888-4888-8888-888888888888';
+      const memberA = { id: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa', displayName: 'Anna' };
+      const memberB = { id: 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb', displayName: 'Ben' };
+      const memberC = { id: 'cccccccc-cccc-4ccc-8ccc-cccccccccccc', displayName: 'Cara' };
+      const memberD = { id: 'dddddddd-dddd-4ddd-8ddd-dddddddddddd', displayName: 'Dev' };
+
+      function groupConversation() {
+        return {
+          id: groupId,
+          type: 'group' as const,
+          title: 'Team chat',
+          lastSeq: 0,
+          lastMessageAt: null,
+          role: 'member' as const,
+          lastReadSeq: 0,
+          peer: null,
+        };
+      }
+
+      async function openGroup() {
+        vi.stubGlobal(
+          'fetch',
+          routedFetch({
+            'POST /auth/refresh': () => jsonResponse(session()),
+            [`GET /conversations/${groupId}`]: () => jsonResponse(groupConversation()),
+            [`GET /conversations/${groupId}/messages`]: () =>
+              jsonResponse({ messages: [], hasMore: false }),
+          }),
+        );
+        renderApp(`/c/${groupId}`);
+        await screen.findByRole('heading', { name: 'Team chat' });
+        await waitFor(() => expect(FakeWebSocket.instances).toHaveLength(1));
+        const socket = FakeWebSocket.instances[0]!;
+        socket.emit('open');
+        return socket;
+      }
+
+      it('names up to 3 concurrent typers, joined naturally', async () => {
+        const socket = await openGroup();
+
+        socket.emit('message', {
+          data: JSON.stringify(typingEnvelope(memberA.id, memberA.displayName, groupId)),
+        });
+        expect(await screen.findByText('Anna is typing…')).toBeInTheDocument();
+
+        socket.emit('message', {
+          data: JSON.stringify(typingEnvelope(memberB.id, memberB.displayName, groupId)),
+        });
+        expect(await screen.findByText('Anna and Ben are typing…')).toBeInTheDocument();
+
+        socket.emit('message', {
+          data: JSON.stringify(typingEnvelope(memberC.id, memberC.displayName, groupId)),
+        });
+        expect(await screen.findByText('Anna, Ben and Cara are typing…')).toBeInTheDocument();
+      });
+
+      it('collapses to "Several people are typing…" once a 4th person joins in', async () => {
+        const socket = await openGroup();
+
+        for (const m of [memberA, memberB, memberC, memberD]) {
+          socket.emit('message', {
+            data: JSON.stringify(typingEnvelope(m.id, m.displayName, groupId)),
+          });
+        }
+
+        expect(await screen.findByText('Several people are typing…')).toBeInTheDocument();
+      });
     });
   });
 });
