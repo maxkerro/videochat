@@ -6,7 +6,11 @@ import type { RealtimeService } from '../realtime/realtime.service.js';
 import { MessagesService } from './messages.service.js';
 
 vi.mock('../db/conversations.js', () => ({ isConversationMember: vi.fn() }));
-vi.mock('../db/messages.js', () => ({ appendMessage: vi.fn(), listMessagesPage: vi.fn() }));
+vi.mock('../db/messages.js', () => ({
+  appendMessage: vi.fn(),
+  listMessagesPage: vi.fn(),
+  listMessagesAfter: vi.fn(),
+}));
 
 function makeMessageRow(overrides: Partial<Record<string, unknown>> = {}) {
   return {
@@ -132,6 +136,34 @@ describe('MessagesService', () => {
         {},
         'conv-1',
         expect.objectContaining({ beforeSeq: 42 }),
+      );
+    });
+  });
+
+  describe('listAfter', () => {
+    it('rejects a non-member with 404', async () => {
+      vi.mocked(conversationsDb.isConversationMember).mockResolvedValue(false);
+      await expect(service.listAfter('conv-1', 'user-1', 5)).rejects.toThrow(NotFoundException);
+    });
+
+    it('returns messages ascending, mapped to the API shape, with hasMore passed through', async () => {
+      vi.mocked(conversationsDb.isConversationMember).mockResolvedValue(true);
+      vi.mocked(messagesDb.listMessagesAfter).mockResolvedValue({
+        rows: [
+          makeMessageRow({ seq: 3, id: 'a'.repeat(26) }),
+          makeMessageRow({ seq: 4, id: 'b'.repeat(26) }),
+        ],
+        hasMore: true,
+      });
+
+      const result = await service.listAfter('conv-1', 'user-1', 2);
+
+      expect(result.messages.map((m) => m.seq)).toEqual([3, 4]);
+      expect(result.hasMore).toBe(true);
+      expect(messagesDb.listMessagesAfter).toHaveBeenCalledWith(
+        {},
+        'conv-1',
+        expect.objectContaining({ afterSeq: 2 }),
       );
     });
   });

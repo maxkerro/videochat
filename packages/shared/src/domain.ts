@@ -36,4 +36,8 @@ export const LIMITS = {
   /** Messages returned by the initial (non-paged) history load (CHAT-014). Full cursor-based
    *  paging arrives with CHAT-016. */
   messageHistoryPageSize: 50,
+  /** Messages returned per round trip when catching up after a reconnect (CHAT-017's gap sync).
+   *  Bounded, like the history page, but larger -- there's no scroll-jank concern to keep it small
+   *  for, and a bigger page means fewer round trips for someone who was offline a while. */
+  messageGapSyncPageSize: 200,
 } as const;

@@ -1,4 +1,4 @@
-import { directKeyFor, listMessagesPage } from './messages.js';
+import { directKeyFor, listMessagesAfter, listMessagesPage } from './messages.js';
 
 /** A minimal fake of the drizzle query-builder chain `listMessagesPage` calls -- just enough to
  *  drive its `hasMore`/ordering logic without a real database. `where`/`orderBy` are no-ops that
@@ -56,6 +56,63 @@ describe('listMessagesPage', () => {
     const { db } = fakeDb([]);
 
     const page = await listMessagesPage(db, 'conv-1', { limit: 5 });
+
+    expect(page.rows).toEqual([]);
+    expect(page.hasMore).toBe(false);
+  });
+});
+
+/** Same idea as {@link fakeDb} above, but for `listMessagesAfter`'s ascending query -- rows are
+ *  handed in seq-ascending order (matching what the real `ORDER BY seq ASC` returns) and `limit`
+ *  slices from the front the same way. */
+function fakeDbAsc(rowsBySeqAsc: { seq: number }[]) {
+  const limitCalls: number[] = [];
+  const builder = {
+    select: vi.fn(() => builder),
+    from: vi.fn(() => builder),
+    where: vi.fn(() => builder),
+    orderBy: vi.fn(() => builder),
+    limit: vi.fn((n: number) => {
+      limitCalls.push(n);
+      return Promise.resolve(rowsBySeqAsc.slice(0, n));
+    }),
+  };
+  return { db: builder as never, limitCalls };
+}
+
+describe('listMessagesAfter', () => {
+  it('requests limit + 1 rows ascending, and reports hasMore=false when short', async () => {
+    const { db, limitCalls } = fakeDbAsc([{ seq: 3 }, { seq: 4 }, { seq: 5 }]);
+
+    const page = await listMessagesAfter(db, 'conv-1', { afterSeq: 2, limit: 5 });
+
+    expect(limitCalls).toEqual([6]);
+    expect(page.hasMore).toBe(false);
+    expect(page.rows.map((r) => r.seq)).toEqual([3, 4, 5]);
+  });
+
+  it('reports hasMore=true and drops the extra probe row on the boundary', async () => {
+    const { db, limitCalls } = fakeDbAsc([
+      { seq: 1 },
+      { seq: 2 },
+      { seq: 3 },
+      { seq: 4 },
+      { seq: 5 },
+      { seq: 6 },
+    ]);
+
+    const page = await listMessagesAfter(db, 'conv-1', { afterSeq: 0, limit: 5 });
+
+    expect(limitCalls).toEqual([6]);
+    expect(page.hasMore).toBe(true);
+    expect(page.rows).toHaveLength(5);
+    expect(page.rows.map((r) => r.seq)).toEqual([1, 2, 3, 4, 5]);
+  });
+
+  it('with no rows at all, returns an empty page and hasMore=false', async () => {
+    const { db } = fakeDbAsc([]);
+
+    const page = await listMessagesAfter(db, 'conv-1', { afterSeq: 0, limit: 5 });
 
     expect(page.rows).toEqual([]);
     expect(page.hasMore).toBe(false);

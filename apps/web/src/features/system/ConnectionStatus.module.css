@@ -16,7 +16,7 @@
 .online {
   background: var(--color-success);
 }
-.degraded {
+.checking {
   background: var(--color-warning);
 }
 .offline {

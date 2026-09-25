@@ -21,7 +21,7 @@ import { messageResponseSchema } from './authApi';
 
 export type AuthStatus = 'loading' | 'authenticated' | 'anonymous';
 
-interface AuthContextValue {
+export interface AuthContextValue {
   status: AuthStatus;
   user: Me | null;
   accessToken: string | null;

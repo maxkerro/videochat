@@ -23,6 +23,11 @@ export class MessagesController {
     @Query(new ZodValidationPipe(messagesPageQuerySchema))
     query: z.infer<typeof messagesPageQuerySchema>,
   ): Promise<MessagePage> {
+    // CHAT-017: `after` is the gap-sync path (catching up post-reconnect); `before` is CHAT-016's
+    // history paging. The schema's own refine() already rejects passing both.
+    if (query.after !== undefined) {
+      return this.messages.listAfter(conversationId, userId, query.after);
+    }
     return this.messages.listPage(conversationId, userId, query.before);
   }
 

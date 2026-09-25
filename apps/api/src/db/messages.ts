@@ -1,4 +1,4 @@
-import { and, desc, eq, lt, sql } from 'drizzle-orm';
+import { and, asc, desc, eq, gt, lt, sql } from 'drizzle-orm';
 import { ulid } from 'ulid';
 import type { MessageType } from '@videochat/shared';
 import type { Database, DbExecutor } from './client.js';
@@ -125,6 +125,29 @@ export async function listMessagesPage(
 
   const hasMore = rows.length > options.limit;
   return { rows: rows.slice(0, options.limit).reverse(), hasMore };
+}
+
+/**
+ * CHAT-017: gap sync -- everything the caller missed while disconnected, *ascending* (oldest of
+ * the missed messages first, ready to append onto the end of what they already have), unlike
+ * {@link listMessagesPage}'s newest-first history page. `hasMore` again comes from a limit+1
+ * fetch, so a client that gets `hasMore: true` knows to call again with the new highest `seq` it
+ * just received rather than assuming it's caught up.
+ */
+export async function listMessagesAfter(
+  db: DbExecutor,
+  conversationId: string,
+  options: { afterSeq: number; limit: number },
+): Promise<MessagesPage> {
+  const rows = await db
+    .select()
+    .from(messages)
+    .where(and(eq(messages.conversationId, conversationId), gt(messages.seq, options.afterSeq)))
+    .orderBy(asc(messages.seq))
+    .limit(options.limit + 1);
+
+  const hasMore = rows.length > options.limit;
+  return { rows: rows.slice(0, options.limit), hasMore };
 }
 
 /** Stable key for a direct conversation between two users, order-independent. */

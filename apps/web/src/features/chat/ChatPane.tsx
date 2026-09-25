@@ -1,19 +1,9 @@
-import {
-  useInfiniteQuery,
-  useQuery,
-  useQueryClient,
-  type InfiniteData,
-} from '@tanstack/react-query';
+import { useInfiniteQuery, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useVirtualizer } from '@tanstack/react-virtual';
-import {
-  LIMITS,
-  messageSchema,
-  type Message,
-  type MessagePage,
-  type WsEnvelope,
-} from '@videochat/shared';
+import { LIMITS, messageSchema, type Message, type WsEnvelope } from '@videochat/shared';
 import {
   useCallback,
+  useEffect,
   useLayoutEffect,
   useMemo,
   useRef,
@@ -25,9 +15,12 @@ import { Link, useParams } from 'react-router';
 import { Avatar, Button } from '../../components/ui';
 import { ApiError } from '../../lib/api';
 import { cx } from '../../lib/cx';
+import { recordSeenSeq } from '../../lib/lastSeenSeq';
+import { enqueueOutboxMessage, removeOutboxMessage } from '../../lib/outbox';
 import { fetchConversation } from '../conversations/conversationsApi';
 import { useAuth, withAuthRetry } from '../auth/AuthContext';
 import { linkify } from './linkify';
+import { appendToLatestPage, type MessagesData } from './messagesCache';
 import { fetchMessages, sendMessage } from './messagesApi';
 import { useRealtimeEvent } from './RealtimeProvider';
 import styles from './ChatPane.module.css';
@@ -74,29 +67,6 @@ function newClientMsgId(): string {
   return typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function'
     ? crypto.randomUUID()
     : `c-${Date.now()}-${Math.random().toString(36).slice(2)}`;
-}
-
-function upsertMessage(list: Message[], message: Message): Message[] {
-  if (list.some((m) => m.id === message.id)) return list;
-  return [...list, message].sort((a, b) => a.seq - b.seq);
-}
-
-type MessagesData = InfiniteData<MessagePage, number | undefined>;
-
-/** Appends a live/sent message to the newest (last) loaded page -- the only page a new message
- *  can ever belong in, since pages before it are strictly older history. */
-function appendToLatestPage(
-  data: MessagesData | undefined,
-  message: Message,
-): MessagesData | undefined {
-  if (!data || data.pages.length === 0) return data;
-  const pages = [...data.pages];
-  const lastIndex = pages.length - 1;
-  pages[lastIndex] = {
-    ...pages[lastIndex]!,
-    messages: upsertMessage(pages[lastIndex]!.messages, message),
-  };
-  return { ...data, pages };
 }
 
 /** A 404 means "not found, or you're not a member" -- retrying won't change that. Anything else
@@ -222,20 +192,29 @@ export function ChatPane() {
   }
 
   useRealtimeEvent((envelope: WsEnvelope) => {
-    if (envelope.type !== 'message.new' || !conversationId) return;
+    if (envelope.type !== 'message.new') return;
     const parsed = messageSchema.safeParse(envelope.payload);
-    if (!parsed.success || parsed.data.conversationId !== conversationId) return;
+    if (!parsed.success) return;
     const message = parsed.data;
-    queryClient.setQueryData<MessagesData>(['messages', conversationId], (old) =>
-      appendToLatestPage(old, message),
-    );
     const isOwn = message.senderId === auth.user?.id;
-    // `clientMsgId` is only unique per sender (the server dedupes on (senderId, clientMsgId)), so
-    // without the sender check another member's message could coincidentally share the id of one
-    // of *our* pending entries and clear a bubble that hasn't actually been confirmed sent.
+    // Own messages are cleared out of `pending` (and the offline outbox) regardless of which
+    // conversation is currently open -- CHAT-017's outbox flush can complete a send for a
+    // conversation the person has since navigated away from, and the "sending…" bubble for it
+    // needs to clear the moment that happens, not only once they scroll back to it. `clientMsgId`
+    // is only unique per sender (the server dedupes on (senderId, clientMsgId)), so without the
+    // sender check another member's message could coincidentally share the id of one of *our*
+    // pending entries and clear a bubble that hasn't actually been confirmed sent.
     if (message.clientMsgId && isOwn) {
       setPending((prev) => prev.filter((p) => p.clientMsgId !== message.clientMsgId));
+      void removeOutboxMessage(message.clientMsgId);
     }
+    // Likewise, the query cache is keyed by the message's own conversation, so this merges
+    // correctly whether or not that conversation is the one currently rendered.
+    queryClient.setQueryData<MessagesData>(['messages', message.conversationId], (old) =>
+      appendToLatestPage(old, message),
+    );
+    recordSeenSeq(message.conversationId, message.seq);
+    if (message.conversationId !== conversationId) return;
     if (!isOwn && !atLatest) setNewArrivals((n) => n + 1);
   });
 
@@ -243,6 +222,14 @@ export function ChatPane() {
     () => messagesQuery.data?.pages.flatMap((page) => page.messages) ?? [],
     [messagesQuery.data],
   );
+  // Seeds the gap-sync bookmark from ordinary history loading too, not just live events -- so a
+  // conversation opened for the first time (or reopened after being closed) has a bookmark before
+  // it's ever received a live message, letting the very first reconnect actually catch up.
+  const latestLoadedSeq = allMessages.at(-1)?.seq;
+  useEffect(() => {
+    if (conversationId && latestLoadedSeq !== undefined)
+      recordSeenSeq(conversationId, latestLoadedSeq);
+  }, [conversationId, latestLoadedSeq]);
   const remaining = LIMITS.messageMaxLength - draft.length;
   // `ChatPane` is reused across a conversation switch (the route just changes `:conversationId`
   // on the same component instance), so `pending` can hold entries left over from a conversation
@@ -317,7 +304,26 @@ export function ChatPane() {
         appendToLatestPage(old, message),
       );
       setPending((prev) => prev.filter((p) => p.clientMsgId !== target.clientMsgId));
-    } catch {
+      // CHAT-017: a message that made it to the server is also done as far as the outbox is
+      // concerned -- most commonly because `RealtimeProvider`'s own flush just sent it, but this
+      // covers the ordinary in-app send path too, in case it was queued by an earlier failed
+      // attempt this session.
+      void removeOutboxMessage(target.clientMsgId);
+    } catch (error) {
+      // CHAT-017: `ApiError` means the server was reached and said no (validation, a conflict,
+      // being removed from the conversation) -- retrying that unattended would just fail again, so
+      // it stays "failed" for a person to explicitly retry. Anything else (a `TypeError` from
+      // `fetch` itself, offline) never reached the server at all: queue it in the outbox so
+      // `RealtimeProvider` sends it automatically, in order, the moment the connection comes back,
+      // rather than leaving it stranded on a "tap to retry" the person has to remember to press.
+      if (!(error instanceof ApiError)) {
+        void enqueueOutboxMessage({
+          clientMsgId: target.clientMsgId,
+          conversationId: target.conversationId,
+          body: target.body,
+          queuedAt: Date.now(),
+        });
+      }
       setPending((prev) =>
         prev.map((p) => (p.clientMsgId === target.clientMsgId ? { ...p, status: 'failed' } : p)),
       );

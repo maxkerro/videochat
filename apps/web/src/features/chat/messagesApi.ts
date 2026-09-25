@@ -25,6 +25,18 @@ export function fetchMessages(
   });
 }
 
+/** CHAT-017: everything after `afterSeq`, ascending -- the gap-sync counterpart to
+ *  {@link fetchMessages}'s `before`. Used to catch up a conversation after a reconnect. */
+export function fetchMessagesAfter(
+  accessToken: string,
+  conversationId: string,
+  afterSeq: number,
+): Promise<MessagePage> {
+  return apiGet(`/conversations/${conversationId}/messages?after=${afterSeq}`, messagePageSchema, {
+    headers: authHeader(accessToken),
+  });
+}
+
 /** CHAT-014: `input.clientMsgId` makes a retried call safe -- the server returns the original
  *  message instead of creating a duplicate. */
 export function sendMessage(

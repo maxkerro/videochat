@@ -203,6 +203,62 @@ describe.skipIf(!hasInfra)('messages HTTP flow (CHAT-014)', () => {
       .expect(400);
   });
 
+  it('CHAT-017: `after` returns missed messages ascending, for gap sync on reconnect', async () => {
+    const a = await signUpAndLogIn();
+    const b = await signUpAndLogIn();
+    const conversationId = await startDirectConversation(a, b);
+
+    for (let i = 1; i <= 3; i += 1) {
+      await request(server())
+        .post(`/conversations/${conversationId}/messages`)
+        .set(auth(a.accessToken))
+        .send({ clientMsgId: `c-gap-${i}`, body: `msg ${i}` })
+        .expect(201);
+    }
+
+    // b was "offline" and only ever saw seq 1 -- catching up should return 2 and 3, ascending.
+    const missed = await request(server())
+      .get(`/conversations/${conversationId}/messages`)
+      .query({ after: 1 })
+      .set(auth(b.accessToken))
+      .expect(200);
+    expect(missed.body.messages.map((m: { seq: number }) => m.seq)).toEqual([2, 3]);
+    expect(missed.body.hasMore).toBe(false);
+
+    // Fully caught up: nothing left after the latest seq.
+    const nothingLeft = await request(server())
+      .get(`/conversations/${conversationId}/messages`)
+      .query({ after: 3 })
+      .set(auth(b.accessToken))
+      .expect(200);
+    expect(nothingLeft.body).toEqual({ messages: [], hasMore: false });
+
+    // `after: 0` catches up someone who has never seen this conversation before.
+    const everything = await request(server())
+      .get(`/conversations/${conversationId}/messages`)
+      .query({ after: 0 })
+      .set(auth(b.accessToken))
+      .expect(200);
+    expect(everything.body.messages.map((m: { seq: number }) => m.seq)).toEqual([1, 2, 3]);
+  });
+
+  it('rejects passing both `before` and `after`, and a negative `after`, with 400', async () => {
+    const a = await signUpAndLogIn();
+    const b = await signUpAndLogIn();
+    const conversationId = await startDirectConversation(a, b);
+
+    await request(server())
+      .get(`/conversations/${conversationId}/messages`)
+      .query({ before: 3, after: 1 })
+      .set(auth(a.accessToken))
+      .expect(400);
+    await request(server())
+      .get(`/conversations/${conversationId}/messages`)
+      .query({ after: -1 })
+      .set(auth(a.accessToken))
+      .expect(400);
+  });
+
   it('does not deliver a message to a socket connected as someone outside the conversation', async () => {
     const a = await signUpAndLogIn();
     const b = await signUpAndLogIn();

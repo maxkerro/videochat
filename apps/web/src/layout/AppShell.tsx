@@ -6,7 +6,7 @@ import { AccountMenu } from '../features/auth/AccountMenu';
 import { useAuth, withAuthRetry } from '../features/auth/AuthContext';
 import { searchUsers, startDirectConversation } from '../features/conversations/conversationsApi';
 import { ConversationList } from '../features/conversations/ConversationList';
-import { ApiStatus } from '../features/system/ApiStatus';
+import { ConnectionStatus } from '../features/system/ConnectionStatus';
 import { ThemeMenu } from '../features/system/ThemeMenu';
 import { useDebouncedValue } from '../lib/useDebouncedValue';
 import { cx } from '../lib/cx';
@@ -115,7 +115,7 @@ export function AppShell() {
         </header>
         <ConversationList />
         <footer className={styles.sidebarFooter}>
-          <ApiStatus />
+          <ConnectionStatus />
           <Link to="/ui" className={styles.footerLink}>
             UI kit
           </Link>

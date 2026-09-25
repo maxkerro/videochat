@@ -3,13 +3,6 @@ import userEvent from '@testing-library/user-event';
 import { jsonResponse } from '../test/mockFetch';
 import { renderApp } from '../test/renderApp';
 
-const health = {
-  status: 'ok',
-  version: 'test',
-  uptimeSeconds: 5,
-  checks: { database: 'up', redis: 'up' },
-};
-
 const baseUser = {
   id: '11111111-1111-4111-8111-111111111111',
   username: 'anna',
@@ -101,7 +94,6 @@ function routedFetch(
 
 function authedFetch(extra: Record<string, (url: URL, init?: RequestInit) => Response> = {}) {
   return routedFetch({
-    'GET /health': () => jsonResponse(health),
     'POST /auth/refresh': () => jsonResponse(session()),
     'GET /conversations': () => jsonResponse(conversations()),
     ...extra,
@@ -246,14 +238,5 @@ describe('App shell', () => {
     vi.stubGlobal('fetch', authedFetch());
     renderApp('/ui');
     expect(await screen.findByRole('heading', { name: 'UI kit' })).toBeInTheDocument();
-  });
-
-  it('reports when the API is unreachable', async () => {
-    vi.stubGlobal('fetch', vi.fn().mockRejectedValue(new TypeError('Failed to fetch')));
-    renderApp('/');
-    await waitFor(
-      () => expect(screen.getByRole('status')).toHaveTextContent('Can’t reach the server'),
-      { timeout: 4000 },
-    );
   });
 });

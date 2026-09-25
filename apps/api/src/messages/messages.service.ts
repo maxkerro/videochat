@@ -8,7 +8,7 @@ import {
 } from '@videochat/shared';
 import type { Database } from '../db/client.js';
 import { isConversationMember } from '../db/conversations.js';
-import { appendMessage, listMessagesPage } from '../db/messages.js';
+import { appendMessage, listMessagesAfter, listMessagesPage } from '../db/messages.js';
 import { DB } from '../infra/tokens.js';
 import { RealtimeService } from '../realtime/realtime.service.js';
 import { toMessage } from './message-mapper.js';
@@ -65,6 +65,18 @@ export class MessagesService {
     const { rows, hasMore } = await listMessagesPage(this.db, conversationId, {
       beforeSeq,
       limit: LIMITS.messageHistoryPageSize,
+    });
+    return { messages: rows.map(toMessage), hasMore };
+  }
+
+  /** CHAT-017: gap sync -- messages after `afterSeq`, ascending, for a client catching up after a
+   *  reconnect. `hasMore: true` means the client should call again with the highest `seq` it just
+   *  received, since more than one page was missed. */
+  async listAfter(conversationId: string, userId: string, afterSeq: number): Promise<MessagePage> {
+    await this.requireMember(conversationId, userId);
+    const { rows, hasMore } = await listMessagesAfter(this.db, conversationId, {
+      afterSeq,
+      limit: LIMITS.messageGapSyncPageSize,
     });
     return { messages: rows.map(toMessage), hasMore };
   }
