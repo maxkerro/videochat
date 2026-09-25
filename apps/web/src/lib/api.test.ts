@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { apiGet, apiPatch, apiPost, apiUpload, ApiError } from './api.js';
+import { apiDelete, apiGet, apiPatch, apiPost, apiUpload, ApiError } from './api.js';
 
 const schema = z.object({ ok: z.boolean() });
 
@@ -25,6 +25,11 @@ describe('apiGet', () => {
     const error = await apiGet('/thing', schema).catch((e: unknown) => e);
     expect(error).toBeInstanceOf(ApiError);
     expect(error).toMatchObject({ status: 500, requestId: 'req-42' });
+  });
+
+  it('CHAT-018: treats a successful response with an empty body (e.g. Nest 200/201 for a `Promise<void>` endpoint, not just 204) as undefined rather than throwing on JSON.parse', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response(null, { status: 200 })));
+    await expect(apiGet('/thing', z.undefined())).resolves.toBeUndefined();
   });
 
   it('does not throw for a status listed in acceptStatuses', async () => {
@@ -97,6 +102,25 @@ describe('apiPatch', () => {
     await apiPatch('/thing', schema, { a: 1 });
     const [, init] = fetchMock.mock.calls[0] as [string, RequestInit];
     expect(init.method).toBe('PATCH');
+  });
+});
+
+describe('apiDelete (CHAT-018)', () => {
+  it('sends a DELETE request with no body and parses an empty response as undefined', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(new Response(null, { status: 200 }));
+    vi.stubGlobal('fetch', fetchMock);
+    await expect(apiDelete('/thing/1', z.undefined())).resolves.toBeUndefined();
+    const [, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+    expect(init.method).toBe('DELETE');
+    expect(init.body).toBeUndefined();
+  });
+
+  it('throws ApiError on a non-ok response', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockResolvedValue(jsonResponse({ message: 'nope' }, { status: 403 })),
+    );
+    await expect(apiDelete('/thing/1', z.undefined())).rejects.toMatchObject({ status: 403 });
   });
 });
 

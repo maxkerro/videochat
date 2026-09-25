@@ -1,4 +1,4 @@
-import { and, desc, eq, inArray, isNull, ne } from 'drizzle-orm';
+import { and, asc, desc, eq, inArray, isNull, ne, sql } from 'drizzle-orm';
 import type { Database, DbExecutor } from './client.js';
 import { conversations, memberships, users, type Conversation, type Membership } from './schema.js';
 import { directKeyFor } from './messages.js';
@@ -172,6 +172,232 @@ export async function listConversationsForUser(
     lastReadSeq: r.lastReadSeq,
     peer: peersByConversationId.get(r.conversation.id),
   }));
+}
+
+/**
+ * CHAT-018: creates a group conversation with `createdBy` as its sole admin and everyone else a
+ * plain member, in one transaction -- so a crash between the two inserts can never leave a
+ * "group" row with no memberships at all pointing at it.
+ */
+export async function createGroupConversation(
+  db: Database,
+  input: { title: string; createdBy: string; memberIds: string[] },
+): Promise<ConversationWithMembership> {
+  return db.transaction(async (tx) => {
+    const [conv] = await tx
+      .insert(conversations)
+      .values({ type: 'group', title: input.title, createdBy: input.createdBy })
+      .returning();
+    await tx.insert(memberships).values([
+      { conversationId: conv!.id, userId: input.createdBy, role: 'admin' },
+      ...input.memberIds.map((userId) => ({
+        conversationId: conv!.id,
+        userId,
+        role: 'member' as const,
+      })),
+    ]);
+    return { ...conv!, role: 'admin' as const, lastReadSeq: 0 };
+  });
+}
+
+/** The caller's own current (not left) membership row, or undefined if they aren't an active
+ *  member -- used where the *role* is needed, not just the yes/no {@link isConversationMember}
+ *  gives. */
+export async function getMembership(
+  db: DbExecutor,
+  conversationId: string,
+  userId: string,
+): Promise<Membership | undefined> {
+  const [row] = await db
+    .select()
+    .from(memberships)
+    .where(
+      and(
+        eq(memberships.conversationId, conversationId),
+        eq(memberships.userId, userId),
+        isNull(memberships.leftAt),
+      ),
+    )
+    .limit(1);
+  return row;
+}
+
+/** How many active (not left) members a conversation currently has -- used to enforce
+ *  `LIMITS.groupMaxMembers` when adding more. */
+export async function countActiveMembers(db: DbExecutor, conversationId: string): Promise<number> {
+  const rows = await db
+    .select({ userId: memberships.userId })
+    .from(memberships)
+    .where(and(eq(memberships.conversationId, conversationId), isNull(memberships.leftAt)));
+  return rows.length;
+}
+
+export async function renameConversation(
+  db: DbExecutor,
+  conversationId: string,
+  title: string,
+): Promise<Conversation> {
+  const [row] = await db
+    .update(conversations)
+    .set({ title })
+    .where(eq(conversations.id, conversationId))
+    .returning();
+  if (!row) throw new Error(`Conversation ${conversationId} not found`);
+  return row;
+}
+
+/**
+ * CHAT-018: adds members to a group, skipping anyone who's already an active member (so a
+ * double-submitted "add" is harmless rather than a constraint error). Someone who previously left
+ * or was removed has a membership row already (the primary key is (conversationId, userId), and
+ * `leftAt` just marks it inactive) -- re-adding them upserts that row back to active rather than
+ * trying, and failing, to insert a second one for the same pair. They always rejoin as a plain
+ * member, never with whatever role they had before leaving.
+ *
+ * Returns only the userIds that were actually (re)activated by this call, in input order, so the
+ * caller can build a "X added Ben and Carl" system message that doesn't mention someone who was
+ * already there.
+ */
+export async function addGroupMembers(
+  db: Database,
+  conversationId: string,
+  userIds: string[],
+): Promise<string[]> {
+  return db.transaction(async (tx) => {
+    const existing = await tx
+      .select({ userId: memberships.userId })
+      .from(memberships)
+      .where(
+        and(
+          eq(memberships.conversationId, conversationId),
+          inArray(memberships.userId, userIds),
+          isNull(memberships.leftAt),
+        ),
+      );
+    const alreadyActive = new Set(existing.map((e) => e.userId));
+    const toAdd = userIds.filter((id) => !alreadyActive.has(id));
+    if (toAdd.length === 0) return [];
+
+    await tx
+      .insert(memberships)
+      .values(toAdd.map((userId) => ({ conversationId, userId, role: 'member' as const })))
+      .onConflictDoUpdate({
+        target: [memberships.conversationId, memberships.userId],
+        set: { leftAt: null, role: 'member', joinedAt: sql`now()` },
+      });
+    return toAdd;
+  });
+}
+
+/** Sets `leftAt` for one member (an admin removing someone, not the member removing themself --
+ *  see {@link leaveConversation} for that, which also handles last-admin promotion). Returns
+ *  false if they weren't an active member to begin with, so the caller can 404. */
+export async function removeGroupMember(
+  db: DbExecutor,
+  conversationId: string,
+  userId: string,
+): Promise<boolean> {
+  const [row] = await db
+    .update(memberships)
+    .set({ leftAt: sql`now()` })
+    .where(
+      and(
+        eq(memberships.conversationId, conversationId),
+        eq(memberships.userId, userId),
+        isNull(memberships.leftAt),
+      ),
+    )
+    .returning({ userId: memberships.userId });
+  return row !== undefined;
+}
+
+export interface LeaveResult {
+  /** Whether `userId` was actually an active member (false means "already left"/never a member,
+   *  for the caller to turn into a 404). */
+  left: boolean;
+  /** The member promoted to admin as a result of this leave, or null if none was needed --
+   *  either the leaver wasn't the last admin, or the group is now empty. */
+  promotedUserId: string | null;
+}
+
+/**
+ * CHAT-018: removes `userId` from the conversation and, if they were the *only* remaining admin,
+ * promotes the oldest remaining member (by `joinedAt`) to admin -- all inside one transaction, so
+ * a concurrent leave/remove can never observe (or produce) a group with active members but no
+ * admin at all. "Oldest by `joinedAt`" matches the AC ("the oldest member is promoted") literally;
+ * it says nothing about seniority otherwise (e.g. it's not "the next admin-eligible person" by any
+ * other measure), so this is the simplest rule that satisfies it.
+ */
+export async function leaveConversation(
+  db: Database,
+  conversationId: string,
+  userId: string,
+): Promise<LeaveResult> {
+  return db.transaction(async (tx) => {
+    const [left] = await tx
+      .update(memberships)
+      .set({ leftAt: sql`now()` })
+      .where(
+        and(
+          eq(memberships.conversationId, conversationId),
+          eq(memberships.userId, userId),
+          isNull(memberships.leftAt),
+        ),
+      )
+      .returning();
+    if (!left) return { left: false, promotedUserId: null };
+    if (left.role !== 'admin') return { left: true, promotedUserId: null };
+
+    const [remainingAdmin] = await tx
+      .select({ userId: memberships.userId })
+      .from(memberships)
+      .where(
+        and(
+          eq(memberships.conversationId, conversationId),
+          eq(memberships.role, 'admin'),
+          isNull(memberships.leftAt),
+        ),
+      )
+      .limit(1);
+    if (remainingAdmin) return { left: true, promotedUserId: null };
+
+    const [oldest] = await tx
+      .select({ userId: memberships.userId })
+      .from(memberships)
+      .where(and(eq(memberships.conversationId, conversationId), isNull(memberships.leftAt)))
+      .orderBy(asc(memberships.joinedAt))
+      .limit(1);
+    if (!oldest) return { left: true, promotedUserId: null }; // the group is now empty
+
+    await tx
+      .update(memberships)
+      .set({ role: 'admin' })
+      .where(
+        and(eq(memberships.conversationId, conversationId), eq(memberships.userId, oldest.userId)),
+      );
+    return { left: true, promotedUserId: oldest.userId };
+  });
+}
+
+export interface ActiveMemberRow {
+  user: typeof users.$inferSelect;
+  role: Membership['role'];
+  joinedAt: Membership['joinedAt'];
+}
+
+/** Every active member of a conversation, joined with their user row, oldest-joined first (which
+ *  conveniently also matches "who'd be promoted next" if the current admin(s) left) -- CHAT-018's
+ *  "members list shows roles" AC. */
+export async function listActiveMembers(
+  db: DbExecutor,
+  conversationId: string,
+): Promise<ActiveMemberRow[]> {
+  return db
+    .select({ user: users, role: memberships.role, joinedAt: memberships.joinedAt })
+    .from(memberships)
+    .innerJoin(users, eq(users.id, memberships.userId))
+    .where(and(eq(memberships.conversationId, conversationId), isNull(memberships.leftAt)))
+    .orderBy(asc(memberships.joinedAt));
 }
 
 async function loadDirectPeers(

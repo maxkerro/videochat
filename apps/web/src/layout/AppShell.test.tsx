@@ -102,6 +102,14 @@ function authedFetch(extra: Record<string, (url: URL, init?: RequestInit) => Res
 
 afterEach(() => vi.unstubAllGlobals());
 
+/** CHAT-018: the old direct "New chat" button became a menu trigger with "New chat" and "New
+ *  group" items, so every test that used to click straight through to the dialog now opens the
+ *  menu first. */
+async function openNewChatDialog() {
+  await userEvent.click(screen.getByRole('button', { name: 'Start a new conversation' }));
+  await userEvent.click(await screen.findByRole('menuitem', { name: 'New chat' }));
+}
+
 describe('App shell', () => {
   it('shows the conversation list and an empty chat pane', async () => {
     vi.stubGlobal('fetch', authedFetch());
@@ -139,7 +147,7 @@ describe('App shell', () => {
   it('opens the new chat dialog and closes it with Escape', async () => {
     vi.stubGlobal('fetch', authedFetch());
     renderApp('/');
-    await userEvent.click(screen.getByRole('button', { name: 'New chat' }));
+    await openNewChatDialog();
     expect(screen.getByRole('dialog', { name: 'New chat' })).toBeInTheDocument();
     await userEvent.keyboard('{Escape}');
     expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
@@ -148,7 +156,7 @@ describe('App shell', () => {
   it('closes the new chat dialog on Cancel, without starting a chat', async () => {
     vi.stubGlobal('fetch', authedFetch());
     renderApp('/');
-    await userEvent.click(screen.getByRole('button', { name: 'New chat' }));
+    await openNewChatDialog();
     await userEvent.click(screen.getByRole('button', { name: 'Cancel' }));
     expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
   });
@@ -197,7 +205,7 @@ describe('App shell', () => {
       }),
     );
     const { router } = renderApp('/');
-    await userEvent.click(screen.getByRole('button', { name: 'New chat' }));
+    await openNewChatDialog();
     await userEvent.type(screen.getByLabelText('Username or email'), 'dara');
 
     const result = await screen.findByRole('button', { name: /Dara Singh/ });
@@ -206,6 +214,80 @@ describe('App shell', () => {
     await waitFor(() => expect(router.state.location.pathname).toBe(`/c/${newConversationId}`));
     expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
     expect(await screen.findByRole('heading', { name: 'Dara Singh' })).toBeInTheDocument();
+  });
+
+  it('CHAT-018: creates a group with a name and picked members, then navigates to it', async () => {
+    const newGroupId = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
+    const dara = {
+      id: '99999999-9999-4999-8999-999999999999',
+      username: 'dara',
+      displayName: 'Dara Singh',
+      avatarUrl: null,
+    };
+    const groupSummary = {
+      id: newGroupId,
+      type: 'group' as const,
+      title: 'Weekend trip',
+      lastSeq: 1,
+      lastMessageAt: '2026-01-01T00:00:00.000Z',
+      role: 'admin' as const,
+      lastReadSeq: 1,
+      peer: null,
+    };
+    vi.stubGlobal(
+      'fetch',
+      authedFetch({
+        'GET /users/search': (url) =>
+          jsonResponse({
+            users: [ben, dara].filter((u) => u.username.includes(url.searchParams.get('q') ?? '')),
+          }),
+        'POST /conversations/group': (_url, init) => {
+          const body = JSON.parse(init!.body as string) as { title: string; memberIds: string[] };
+          expect(body.title).toBe('Weekend trip');
+          expect(body.memberIds).toEqual([ben.id, dara.id]);
+          return jsonResponse(groupSummary);
+        },
+        [`GET /conversations/${newGroupId}`]: () => jsonResponse(groupSummary),
+        [`GET /conversations/${newGroupId}/messages`]: () =>
+          jsonResponse({ messages: [], hasMore: false }),
+      }),
+    );
+    const { router } = renderApp('/');
+
+    await userEvent.click(screen.getByRole('button', { name: 'Start a new conversation' }));
+    await userEvent.click(await screen.findByRole('menuitem', { name: 'New group' }));
+
+    await userEvent.type(screen.getByLabelText('Group name'), 'Weekend trip');
+    await userEvent.type(screen.getByLabelText('Add people'), 'ben');
+    await userEvent.click(await screen.findByRole('button', { name: /Ben Okafor/ }));
+    await userEvent.clear(screen.getByLabelText('Add people'));
+    await userEvent.type(screen.getByLabelText('Add people'), 'dara');
+    await userEvent.click(await screen.findByRole('button', { name: /Dara Singh/ }));
+
+    await userEvent.click(screen.getByRole('button', { name: 'Create group' }));
+
+    await waitFor(() => expect(router.state.location.pathname).toBe(`/c/${newGroupId}`));
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+    expect(await screen.findByRole('heading', { name: 'Weekend trip' })).toBeInTheDocument();
+  });
+
+  it('CHAT-018: disables "Create group" until a name and at least one member are picked', async () => {
+    vi.stubGlobal(
+      'fetch',
+      authedFetch({ 'GET /users/search': () => jsonResponse({ users: [ben] }) }),
+    );
+    renderApp('/');
+
+    await userEvent.click(screen.getByRole('button', { name: 'Start a new conversation' }));
+    await userEvent.click(await screen.findByRole('menuitem', { name: 'New group' }));
+
+    expect(screen.getByRole('button', { name: 'Create group' })).toBeDisabled();
+    await userEvent.type(screen.getByLabelText('Group name'), 'Solo');
+    expect(screen.getByRole('button', { name: 'Create group' })).toBeDisabled();
+
+    await userEvent.type(screen.getByLabelText('Add people'), 'ben');
+    await userEvent.click(await screen.findByRole('button', { name: /Ben Okafor/ }));
+    expect(screen.getByRole('button', { name: 'Create group' })).not.toBeDisabled();
   });
 
   it('shows an empty state and hides non-matching conversations when a search matches nothing', async () => {

@@ -1,8 +1,21 @@
-import { and, asc, desc, eq, gt, lt, sql } from 'drizzle-orm';
+import { and, asc, desc, eq, gt, isNull, lt, sql } from 'drizzle-orm';
 import { ulid } from 'ulid';
 import type { MessageType } from '@videochat/shared';
 import type { Database, DbExecutor } from './client.js';
 import { conversations, memberships, messages, type MessageRow } from './schema.js';
+
+/** Thrown by {@link appendMessage} when `senderId` is no longer (or never was) an active member
+ *  of the conversation, checked *inside* the same transaction as the insert (see the comment on
+ *  that check for why). Callers map this to whatever "not found"/"forbidden" shape their layer
+ *  uses -- e.g. `MessagesService.send` turns it into a 404, matching the "member-only access"
+ *  pattern used everywhere else, and never leaking that the conversation exists to someone just
+ *  removed from it. */
+export class SenderNotAMemberError extends Error {
+  constructor(conversationId: string) {
+    super(`Sender is not an active member of conversation ${conversationId}`);
+    this.name = 'SenderNotAMemberError';
+  }
+}
 
 export interface AppendMessageInput {
   conversationId: string;
@@ -36,6 +49,29 @@ export async function appendMessage(db: Database, input: AppendMessageInput): Pr
       .where(eq(conversations.id, input.conversationId))
       .returning({ seq: conversations.lastSeq });
     if (!conv) throw new Error(`Conversation ${input.conversationId} not found`);
+
+    // CHAT-018: authoritative membership check, *inside* this transaction rather than left to the
+    // caller, and after confirming the conversation itself exists (so a bad conversationId still
+    // fails with the plain "not found" above, not this). A caller-side check (e.g.
+    // `MessagesService.send`'s own `requireMember`, still done first as a fast-path that avoids
+    // opening a transaction at all for the common non-member case) has a real race now that group
+    // leave/kick exist: someone removed between that check and this insert could otherwise still
+    // get one more message in. `senderId` is null for system messages ("Anna added Ben"), which
+    // aren't authored by a member and so skip this entirely.
+    if (input.senderId) {
+      const [membership] = await tx
+        .select({ userId: memberships.userId })
+        .from(memberships)
+        .where(
+          and(
+            eq(memberships.conversationId, input.conversationId),
+            eq(memberships.userId, input.senderId),
+            isNull(memberships.leftAt),
+          ),
+        )
+        .limit(1);
+      if (!membership) throw new SenderNotAMemberError(input.conversationId);
+    }
 
     const [row] = await tx
       .insert(messages)

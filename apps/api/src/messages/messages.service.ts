@@ -8,7 +8,12 @@ import {
 } from '@videochat/shared';
 import type { Database } from '../db/client.js';
 import { isConversationMember } from '../db/conversations.js';
-import { appendMessage, listMessagesAfter, listMessagesPage } from '../db/messages.js';
+import {
+  appendMessage,
+  listMessagesAfter,
+  listMessagesPage,
+  SenderNotAMemberError,
+} from '../db/messages.js';
 import { DB } from '../infra/tokens.js';
 import { RealtimeService } from '../realtime/realtime.service.js';
 import { toMessage } from './message-mapper.js';
@@ -27,19 +32,27 @@ export class MessagesService {
    * is waiting on to move its optimistic message from "sending" to "sent".
    */
   async send(conversationId: string, senderId: string, input: SendMessageInput): Promise<Message> {
-    // Checked here, outside appendMessage's own transaction: harmless today since there's no way
-    // to leave or be removed from a (direct-only) conversation yet, but once group leave/kick
-    // exists this has a real race -- someone removed between this check and the insert below
-    // could still get one more message in. Re-check membership (with `leftAt IS NULL`) inside
-    // appendMessage's transaction once that lands.
+    // Fast-path only: rejects the common case (a plain non-member) with a 404 before opening a
+    // transaction at all. This alone isn't race-proof -- CHAT-018 added group leave/kick, so
+    // someone could be removed between this check and the insert below. `appendMessage` re-checks
+    // membership (with `leftAt IS NULL`) *inside* its own transaction, which is the authoritative
+    // check; `SenderNotAMemberError` below is that race actually firing.
     await this.requireMember(conversationId, senderId);
 
-    const row = await appendMessage(this.db, {
-      conversationId,
-      senderId,
-      body: input.body,
-      clientMsgId: input.clientMsgId,
-    });
+    let row;
+    try {
+      row = await appendMessage(this.db, {
+        conversationId,
+        senderId,
+        body: input.body,
+        clientMsgId: input.clientMsgId,
+      });
+    } catch (err) {
+      if (err instanceof SenderNotAMemberError) {
+        throw new NotFoundException('Conversation not found');
+      }
+      throw err;
+    }
     // `appendMessage` dedupes on (senderId, clientMsgId) alone, with no conversation in the key.
     // If a client reuses a clientMsgId across two different conversations, the second call would
     // otherwise return -- and re-broadcast into this conversation -- a message that actually

@@ -110,6 +110,50 @@ export type UserSearchResults = z.infer<typeof userSearchResultsSchema>;
 export const startDirectConversationSchema = z.object({ userId: z.uuid() });
 export type StartDirectConversationInput = z.infer<typeof startDirectConversationSchema>;
 
+export const groupTitleSchema = z.string().trim().min(1).max(LIMITS.groupTitleMax);
+
+/** CHAT-018: create a group. `memberIds` is everyone *other* than the creator (who is implied
+ *  and always becomes admin), so the cap check below is against `LIMITS.groupMaxMembers - 1` --
+ *  the creator themself takes up one of the 100 seats. */
+export const createGroupConversationSchema = z.object({
+  title: groupTitleSchema,
+  memberIds: z
+    .array(z.uuid())
+    .min(1, 'A group needs at least one other member')
+    .max(LIMITS.groupMaxMembers - 1, `A group can have at most ${LIMITS.groupMaxMembers} members`)
+    .refine((ids) => new Set(ids).size === ids.length, 'Duplicate member'),
+});
+export type CreateGroupConversationInput = z.infer<typeof createGroupConversationSchema>;
+
+/** CHAT-018: admin-only rename. */
+export const renameConversationSchema = z.object({ title: groupTitleSchema });
+export type RenameConversationInput = z.infer<typeof renameConversationSchema>;
+
+/** CHAT-018: admin-only "add members" -- one or more at a time, capped the same way creation is
+ *  (enforced against the group's *current* member count server-side, since the schema alone can't
+ *  know how many seats are already taken). */
+export const addMembersSchema = z.object({
+  memberIds: z
+    .array(z.uuid())
+    .min(1)
+    .max(LIMITS.groupMaxMembers - 1)
+    .refine((ids) => new Set(ids).size === ids.length, 'Duplicate member'),
+});
+export type AddMembersInput = z.infer<typeof addMembersSchema>;
+
+/** CHAT-018: one row of a group's "members list shows roles" AC. */
+export const memberSummarySchema = z.object({
+  userId: z.uuid(),
+  username: usernameSchema,
+  displayName: displayNameSchema,
+  avatarUrl: z.url().nullable(),
+  role: z.enum(MEMBER_ROLES),
+  joinedAt: z.iso.datetime(),
+});
+export type MemberSummary = z.infer<typeof memberSummarySchema>;
+export const membersListSchema = z.array(memberSummarySchema);
+export type MembersList = z.infer<typeof membersListSchema>;
+
 export const messageSchema = z.object({
   id: ulidSchema,
   conversationId: z.uuid(),

@@ -1,10 +1,15 @@
 import { useQuery, useQueryClient } from '@tanstack/react-query';
+import { LIMITS, type PublicUser } from '@videochat/shared';
 import { useState } from 'react';
 import { Link, Outlet, useMatch, useNavigate } from 'react-router';
-import { Avatar, Button, Input, Modal, useToast } from '../components/ui';
+import { Avatar, Button, Input, Menu, Modal, useToast } from '../components/ui';
 import { AccountMenu } from '../features/auth/AccountMenu';
 import { useAuth, withAuthRetry } from '../features/auth/AuthContext';
-import { searchUsers, startDirectConversation } from '../features/conversations/conversationsApi';
+import {
+  createGroupConversation,
+  searchUsers,
+  startDirectConversation,
+} from '../features/conversations/conversationsApi';
 import { ConversationList } from '../features/conversations/ConversationList';
 import { ConnectionStatus } from '../features/system/ConnectionStatus';
 import { ThemeMenu } from '../features/system/ThemeMenu';
@@ -55,6 +60,87 @@ function NewChatDialogBody({ onStart }: { onStart: (userId: string) => void }) {
   );
 }
 
+/** CHAT-018: search + multi-select body inside the "New group" dialog. Mirrors
+ *  `NewChatDialogBody`'s search interaction (same 250ms debounce, same result-list look) but
+ *  accumulates a set of picks instead of acting on the first tap, since a group needs at least
+ *  one other member chosen before it can be created. */
+function NewGroupDialogBody({
+  title,
+  onTitleChange,
+  selected,
+  onToggle,
+}: {
+  title: string;
+  onTitleChange: (title: string) => void;
+  selected: PublicUser[];
+  onToggle: (user: PublicUser) => void;
+}) {
+  const auth = useAuth();
+  const [query, setQuery] = useState('');
+  const debounced = useDebouncedValue(query.trim(), 250);
+  const selectedIds = new Set(selected.map((u) => u.id));
+
+  const { data: results = { users: [] }, isFetching } = useQuery({
+    queryKey: ['user-search', debounced],
+    queryFn: () => withAuthRetry(auth, (token) => searchUsers(token, debounced)),
+    enabled: debounced.length > 0,
+  });
+
+  return (
+    <div className={styles.newChatBody}>
+      <Input
+        label="Group name"
+        placeholder="e.g. Weekend trip"
+        autoFocus
+        value={title}
+        maxLength={LIMITS.groupTitleMax}
+        onChange={(e) => onTitleChange(e.target.value)}
+      />
+      {selected.length > 0 && (
+        <ul className={styles.newChatResults}>
+          {selected.map((u) => (
+            <li key={u.id}>
+              <button type="button" className={styles.newChatResult} onClick={() => onToggle(u)}>
+                <Avatar name={u.displayName} src={u.avatarUrl} size="sm" />
+                <span>
+                  <span className={styles.newChatName}>{u.displayName}</span>
+                  <span className={styles.newChatUsername}>Added -- tap to remove</span>
+                </span>
+              </button>
+            </li>
+          ))}
+        </ul>
+      )}
+      <Input
+        label="Add people"
+        placeholder="Search by username or email"
+        value={query}
+        onChange={(e) => setQuery(e.target.value)}
+      />
+      {debounced && !isFetching && results.users.length === 0 && (
+        <p className={styles.newChatEmpty}>No one found.</p>
+      )}
+      {results.users.length > 0 && (
+        <ul className={styles.newChatResults}>
+          {results.users
+            .filter((u) => !selectedIds.has(u.id))
+            .map((u) => (
+              <li key={u.id}>
+                <button type="button" className={styles.newChatResult} onClick={() => onToggle(u)}>
+                  <Avatar name={u.displayName} src={u.avatarUrl} size="sm" />
+                  <span>
+                    <span className={styles.newChatName}>{u.displayName}</span>
+                    <span className={styles.newChatUsername}>@{u.username}</span>
+                  </span>
+                </button>
+              </li>
+            ))}
+        </ul>
+      )}
+    </div>
+  );
+}
+
 /**
  * Two-pane layout: conversation sidebar + chat pane.
  * Below 768px only one pane shows at a time: the list at "/", the chat at "/c/:id".
@@ -62,6 +148,10 @@ function NewChatDialogBody({ onStart }: { onStart: (userId: string) => void }) {
 export function AppShell() {
   const inConversation = useMatch('/c/:conversationId') !== null;
   const [newChatOpen, setNewChatOpen] = useState(false);
+  const [newGroupOpen, setNewGroupOpen] = useState(false);
+  const [groupTitle, setGroupTitle] = useState('');
+  const [groupMembers, setGroupMembers] = useState<PublicUser[]>([]);
+  const [creatingGroup, setCreatingGroup] = useState(false);
   const { toast } = useToast();
   const auth = useAuth();
   const queryClient = useQueryClient();
@@ -77,6 +167,43 @@ export function AppShell() {
       navigate(`/c/${conversation.id}`);
     } catch {
       toast({ title: "Couldn't start chat", description: 'Please try again.', tone: 'danger' });
+    }
+  }
+
+  function openNewGroup() {
+    setGroupTitle('');
+    setGroupMembers([]);
+    setNewGroupOpen(true);
+  }
+
+  function toggleGroupMember(user: PublicUser) {
+    setGroupMembers((prev) =>
+      prev.some((u) => u.id === user.id) ? prev.filter((u) => u.id !== user.id) : [...prev, user],
+    );
+  }
+
+  async function handleCreateGroup() {
+    const title = groupTitle.trim();
+    if (!title || groupMembers.length === 0) return;
+    setCreatingGroup(true);
+    try {
+      const conversation = await withAuthRetry(auth, (token) =>
+        createGroupConversation(token, {
+          title,
+          memberIds: groupMembers.map((u) => u.id),
+        }),
+      );
+      setNewGroupOpen(false);
+      await queryClient.invalidateQueries({ queryKey: ['conversations'] });
+      navigate(`/c/${conversation.id}`);
+    } catch {
+      toast({
+        title: "Couldn't create the group",
+        description: 'Please try again.',
+        tone: 'danger',
+      });
+    } finally {
+      setCreatingGroup(false);
     }
   }
 
@@ -96,21 +223,24 @@ export function AppShell() {
           </Link>
           <div className={styles.actions}>
             <ThemeMenu />
-            <Button
-              variant="ghost"
-              size="icon"
-              aria-label="New chat"
-              onClick={() => setNewChatOpen(true)}
-            >
-              <svg width="18" height="18" viewBox="0 0 24 24" aria-hidden="true">
-                <path
-                  d="M12 5v14M5 12h14"
-                  stroke="currentColor"
-                  strokeWidth="2"
-                  strokeLinecap="round"
-                />
-              </svg>
-            </Button>
+            <Menu
+              trigger={
+                <Button variant="ghost" size="icon" aria-label="Start a new conversation">
+                  <svg width="18" height="18" viewBox="0 0 24 24" aria-hidden="true">
+                    <path
+                      d="M12 5v14M5 12h14"
+                      stroke="currentColor"
+                      strokeWidth="2"
+                      strokeLinecap="round"
+                    />
+                  </svg>
+                </Button>
+              }
+              items={[
+                { label: 'New chat', onSelect: () => setNewChatOpen(true) },
+                { label: 'New group', onSelect: openNewGroup },
+              ]}
+            />
           </div>
         </header>
         <ConversationList />
@@ -139,6 +269,36 @@ export function AppShell() {
         }
       >
         {newChatOpen && <NewChatDialogBody onStart={handleStart} />}
+      </Modal>
+
+      <Modal
+        open={newGroupOpen}
+        onOpenChange={setNewGroupOpen}
+        title="New group"
+        description="Name the group and add at least one other person."
+        footer={
+          <>
+            <Button variant="secondary" onClick={() => setNewGroupOpen(false)}>
+              Cancel
+            </Button>
+            <Button
+              onClick={() => void handleCreateGroup()}
+              loading={creatingGroup}
+              disabled={!groupTitle.trim() || groupMembers.length === 0}
+            >
+              Create group
+            </Button>
+          </>
+        }
+      >
+        {newGroupOpen && (
+          <NewGroupDialogBody
+            title={groupTitle}
+            onTitleChange={setGroupTitle}
+            selected={groupMembers}
+            onToggle={toggleGroupMember}
+          />
+        )}
       </Modal>
     </div>
   );

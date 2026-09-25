@@ -1,6 +1,6 @@
 import { count, eq, sql } from 'drizzle-orm';
 import type { Database } from '../src/db/client.js';
-import { appendMessage, directKeyFor } from '../src/db/messages.js';
+import { appendMessage, directKeyFor, SenderNotAMemberError } from '../src/db/messages.js';
 import { conversations, memberships, messages, users } from '../src/db/schema.js';
 import { seedDemoData } from '../src/db/seed.js';
 import { freshDatabase, hasInfra } from './helpers.js';
@@ -105,6 +105,7 @@ describe.skipIf(!hasInfra)('database schema v1 (CHAT-004)', () => {
   it('is idempotent on (sender, client_msg_id)', async () => {
     const sender = await makeUser('hank');
     const conv = await makeGroup();
+    await db.insert(memberships).values({ conversationId: conv.id, userId: sender.id });
     const input = { conversationId: conv.id, senderId: sender.id, body: 'hi', clientMsgId: 'c-1' };
     const first = await appendMessage(db, input);
     const retry = await appendMessage(db, input);
@@ -125,6 +126,25 @@ describe.skipIf(!hasInfra)('database schema v1 (CHAT-004)', () => {
         body: 'hello?',
       }),
     ).rejects.toThrow(/not found/);
+  });
+
+  it('CHAT-018: refuses a sender who is not an active member of the conversation', async () => {
+    const outsider = await makeUser('jorge');
+    const conv = await makeGroup();
+    await expect(
+      appendMessage(db, { conversationId: conv.id, senderId: outsider.id, body: 'hi' }),
+    ).rejects.toThrow(SenderNotAMemberError);
+  });
+
+  it('CHAT-018: refuses a sender who has left the conversation', async () => {
+    const leaver = await makeUser('kara');
+    const conv = await makeGroup();
+    await db
+      .insert(memberships)
+      .values({ conversationId: conv.id, userId: leaver.id, leftAt: new Date() });
+    await expect(
+      appendMessage(db, { conversationId: conv.id, senderId: leaver.id, body: 'hi' }),
+    ).rejects.toThrow(SenderNotAMemberError);
   });
 
   it('rejects message bodies over 4,000 characters', async () => {

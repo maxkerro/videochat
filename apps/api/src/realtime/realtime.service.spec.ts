@@ -172,4 +172,40 @@ describe('RealtimeService', () => {
       expect(socket.send).not.toHaveBeenCalled();
     });
   });
+
+  describe('removeConversationForUser (CHAT-018)', () => {
+    it('stops an already-open socket from hearing about a conversation immediately', async () => {
+      const { redis, subscriber } = makeFakeRedis();
+      const service = new RealtimeService(redis);
+      await service.onModuleInit();
+
+      const socket = makeSocket();
+      service.register(socket, 'removed-user', ['conv-1']);
+
+      service.removeConversationForUser('removed-user', 'conv-1');
+      subscriber.emit('pmessage', 'conv:*', 'conv:conv-1', 'hi');
+
+      expect(socket.send).not.toHaveBeenCalled();
+    });
+
+    it('leaves the socket registered for its other conversations', async () => {
+      const { redis, subscriber } = makeFakeRedis();
+      const service = new RealtimeService(redis);
+      await service.onModuleInit();
+
+      const socket = makeSocket();
+      service.register(socket, 'removed-user', ['conv-1', 'conv-2']);
+
+      service.removeConversationForUser('removed-user', 'conv-1');
+      subscriber.emit('pmessage', 'conv:*', 'conv:conv-2', 'still here');
+
+      expect(socket.send).toHaveBeenCalledWith('still here');
+    });
+
+    it('does nothing for a user with no open sockets', () => {
+      const { redis } = makeFakeRedis();
+      const service = new RealtimeService(redis);
+      expect(() => service.removeConversationForUser('nobody-connected', 'conv-1')).not.toThrow();
+    });
+  });
 });

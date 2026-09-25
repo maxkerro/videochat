@@ -2,15 +2,20 @@ import { ConflictException, NotFoundException } from '@nestjs/common';
 import type { Database } from '../db/client.js';
 import * as conversationsDb from '../db/conversations.js';
 import * as messagesDb from '../db/messages.js';
+import { SenderNotAMemberError } from '../db/messages.js';
 import type { RealtimeService } from '../realtime/realtime.service.js';
 import { MessagesService } from './messages.service.js';
 
 vi.mock('../db/conversations.js', () => ({ isConversationMember: vi.fn() }));
-vi.mock('../db/messages.js', () => ({
-  appendMessage: vi.fn(),
-  listMessagesPage: vi.fn(),
-  listMessagesAfter: vi.fn(),
-}));
+vi.mock('../db/messages.js', async () => {
+  const actual = await vi.importActual<typeof import('../db/messages.js')>('../db/messages.js');
+  return {
+    appendMessage: vi.fn(),
+    listMessagesPage: vi.fn(),
+    listMessagesAfter: vi.fn(),
+    SenderNotAMemberError: actual.SenderNotAMemberError,
+  };
+});
 
 function makeMessageRow(overrides: Partial<Record<string, unknown>> = {}) {
   return {
@@ -82,6 +87,16 @@ describe('MessagesService', () => {
       await expect(
         service.send('conv-1', 'user-1', { clientMsgId: 'c-1', body: 'hi' }),
       ).rejects.toThrow(ConflictException);
+      expect(realtime.publishToConversation).not.toHaveBeenCalled();
+    });
+
+    it('CHAT-018: rejects with 404 (not the raw error) when appendMessage finds the sender was removed inside its own transaction', async () => {
+      vi.mocked(conversationsDb.isConversationMember).mockResolvedValue(true);
+      vi.mocked(messagesDb.appendMessage).mockRejectedValue(new SenderNotAMemberError('conv-1'));
+
+      await expect(
+        service.send('conv-1', 'user-1', { clientMsgId: 'c-1', body: 'hi' }),
+      ).rejects.toThrow(NotFoundException);
       expect(realtime.publishToConversation).not.toHaveBeenCalled();
     });
 

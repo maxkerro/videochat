@@ -1,6 +1,6 @@
 import { fireEvent, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import { makeEnvelope } from '@videochat/shared';
+import { makeEnvelope, type MessageType } from '@videochat/shared';
 import { ApiError } from '../../lib/api';
 import { jsonResponse } from '../../test/mockFetch';
 import { renderApp } from '../../test/renderApp';
@@ -73,11 +73,11 @@ function message(overrides: Partial<ReturnType<typeof baseMessage>> = {}) {
 function baseMessage() {
   return {
     id: '01ARZ3NDEKTSV4RRFFQ69G5FAV',
-    conversationId,
+    conversationId: conversationId as string,
     seq: 1,
-    senderId: peer.id,
+    senderId: peer.id as string | null,
     clientMsgId: null as string | null,
-    type: 'text' as const,
+    type: 'text' as MessageType,
     body: 'Hi there',
     replyToId: null,
     editedAt: null,
@@ -564,6 +564,105 @@ describe('ChatPane', () => {
     renderApp(`/c/${conversationId}`);
     await screen.findByText('Hi there');
     expect(screen.queryByLabelText('New messages')).not.toBeInTheDocument();
+  });
+
+  describe('CHAT-018 groups', () => {
+    const groupId = '77777777-7777-4777-8777-777777777777';
+
+    function groupConversation() {
+      return {
+        id: groupId,
+        type: 'group' as const,
+        title: 'Weekend trip',
+        lastSeq: 1,
+        lastMessageAt: '2026-01-01T10:00:00.000Z',
+        role: 'admin' as const,
+        lastReadSeq: 1,
+        peer: null,
+      };
+    }
+
+    it('renders a system message distinctly, with no bubble or own/other styling', async () => {
+      vi.stubGlobal(
+        'fetch',
+        routedFetch({
+          'POST /auth/refresh': () => jsonResponse(session()),
+          [`GET /conversations/${groupId}`]: () => jsonResponse(groupConversation()),
+          [`GET /conversations/${groupId}/messages`]: () =>
+            jsonResponse({
+              messages: [
+                message({
+                  id: 'S'.repeat(26),
+                  conversationId: groupId,
+                  senderId: null,
+                  type: 'system',
+                  body: 'Anna created the group',
+                }),
+              ],
+              hasMore: false,
+            }),
+        }),
+      );
+      renderApp(`/c/${groupId}`);
+
+      const system = await screen.findByText('Anna created the group');
+      // Not inside a `.message`-classed bubble row -- a system message has no sender bubble.
+      expect(system.closest('[class*="bubble"]')).not.toBeInTheDocument();
+    });
+
+    it('shows a "Members" button only for a group conversation, opening the members panel', async () => {
+      vi.stubGlobal(
+        'fetch',
+        routedFetch({
+          'POST /auth/refresh': () => jsonResponse(session()),
+          [`GET /conversations/${groupId}`]: () => jsonResponse(groupConversation()),
+          [`GET /conversations/${groupId}/messages`]: () =>
+            jsonResponse({ messages: [], hasMore: false }),
+          [`GET /conversations/${groupId}/members`]: () =>
+            jsonResponse([
+              {
+                userId: baseUser.id,
+                username: baseUser.username,
+                displayName: baseUser.displayName,
+                avatarUrl: null,
+                role: 'admin',
+                joinedAt: '2026-01-01T00:00:00.000Z',
+              },
+              {
+                userId: peer.id,
+                username: peer.username,
+                displayName: peer.displayName,
+                avatarUrl: null,
+                role: 'member',
+                joinedAt: '2026-01-02T00:00:00.000Z',
+              },
+            ]),
+        }),
+      );
+      renderApp(`/c/${groupId}`);
+      await screen.findByRole('heading', { name: 'Weekend trip' });
+
+      await userEvent.click(screen.getByRole('button', { name: 'Members' }));
+      expect(await screen.findByRole('dialog', { name: 'Group members' })).toBeInTheDocument();
+      expect(await screen.findByText('Ben Okafor')).toBeInTheDocument();
+      expect(screen.getByText('admin')).toBeInTheDocument();
+      expect(screen.getByText('member')).toBeInTheDocument();
+    });
+
+    it('does not show a "Members" button for a direct conversation', async () => {
+      vi.stubGlobal(
+        'fetch',
+        routedFetch({
+          'POST /auth/refresh': () => jsonResponse(session()),
+          [`GET /conversations/${conversationId}`]: () => jsonResponse(conversation()),
+          [`GET /conversations/${conversationId}/messages`]: () =>
+            jsonResponse({ messages: [], hasMore: false }),
+        }),
+      );
+      renderApp(`/c/${conversationId}`);
+      await screen.findByRole('heading', { name: 'Ben Okafor' });
+      expect(screen.queryByRole('button', { name: 'Members' })).not.toBeInTheDocument();
+    });
   });
 });
 

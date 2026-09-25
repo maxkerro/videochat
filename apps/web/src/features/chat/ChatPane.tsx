@@ -11,13 +11,14 @@ import {
   type FormEvent,
   type KeyboardEvent,
 } from 'react';
-import { Link, useParams } from 'react-router';
-import { Avatar, Button } from '../../components/ui';
+import { Link, useNavigate, useParams } from 'react-router';
+import { Avatar, Button, Modal } from '../../components/ui';
 import { ApiError } from '../../lib/api';
 import { cx } from '../../lib/cx';
 import { recordSeenSeq } from '../../lib/lastSeenSeq';
 import { enqueueOutboxMessage, removeOutboxMessage } from '../../lib/outbox';
 import { fetchConversation } from '../conversations/conversationsApi';
+import { GroupMembersPanel } from '../conversations/GroupMembersPanel';
 import { useAuth, withAuthRetry } from '../auth/AuthContext';
 import { linkify } from './linkify';
 import { appendToLatestPage, type MessagesData } from './messagesCache';
@@ -135,8 +136,10 @@ export function buildRows(
 export function ChatPane() {
   const { conversationId } = useParams();
   const auth = useAuth();
+  const navigate = useNavigate();
   const queryClient = useQueryClient();
   const [draft, setDraft] = useState('');
+  const [membersOpen, setMembersOpen] = useState(false);
   const [pending, setPending] = useState<PendingMessage[]>([]);
   const [newArrivals, setNewArrivals] = useState(0);
   const [atLatest, setAtLatest] = useState(true);
@@ -404,6 +407,12 @@ export function ChatPane() {
         <div className={styles.headerText}>
           <h1 className={styles.title}>{title}</h1>
         </div>
+        {/* CHAT-018: group-only -- a direct conversation has no roles or membership to manage. */}
+        {conversation?.type === 'group' && (
+          <Button variant="ghost" size="sm" onClick={() => setMembersOpen(true)}>
+            Members
+          </Button>
+        )}
       </header>
 
       {messagesQuery.isError ? (
@@ -457,7 +466,15 @@ export function ChatPane() {
                         <span>New messages</span>
                       </div>
                     )}
-                    {row.kind === 'message' && (
+                    {row.kind === 'message' && row.message.type === 'system' && (
+                      // CHAT-018: a membership change ("Anna added Ben") -- centered, no
+                      // avatar/bubble/own-vs-theirs styling, since it isn't from anyone in
+                      // particular (`senderId` is null). Reuses the plain message row rather than
+                      // a new `Row` kind: it needs no grouping, day-separator or unread-divider
+                      // interaction beyond what a normal message already gets from `buildRows`.
+                      <div className={styles.system}>{row.message.body}</div>
+                    )}
+                    {row.kind === 'message' && row.message.type !== 'system' && (
                       <div
                         className={cx(
                           styles.message,
@@ -532,6 +549,22 @@ export function ChatPane() {
           Send
         </Button>
       </form>
+
+      {conversation?.type === 'group' && (
+        <Modal open={membersOpen} onOpenChange={setMembersOpen} title="Group members" footer={null}>
+          {membersOpen && (
+            <GroupMembersPanel
+              conversation={conversation}
+              onClose={() => setMembersOpen(false)}
+              onLeft={() => {
+                setMembersOpen(false);
+                void queryClient.invalidateQueries({ queryKey: ['conversations'] });
+                navigate('/');
+              }}
+            />
+          )}
+        </Modal>
+      )}
     </section>
   );
 }

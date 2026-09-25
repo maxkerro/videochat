@@ -46,8 +46,13 @@ async function handleResponse<S extends z.ZodType>(
   if (!res.ok && !acceptStatuses?.includes(res.status)) {
     throw new ApiError(res.status, await errorMessage(res), requestId);
   }
-  if (res.status === 204) return schema.parse(undefined);
-  return schema.parse(await res.json());
+  // A 204, or any other successful response Nest sends with an empty body (e.g. CHAT-018's
+  // `Promise<void>` endpoints -- 200/201 with `Content-Length: 0`, not 204) -- `res.json()` on
+  // an empty body throws ("Unexpected end of JSON input"), so this checks for that directly
+  // rather than trying to guess every status code a void controller method might use.
+  const text = await res.text();
+  if (text.length === 0) return schema.parse(undefined);
+  return schema.parse(JSON.parse(text));
 }
 
 /**
@@ -102,6 +107,13 @@ export const apiPatch = <S extends z.ZodType>(
   body?: unknown,
   init?: RequestInit & { acceptStatuses?: number[] },
 ): Promise<z.infer<S>> => apiSend('PATCH', path, schema, body, init);
+
+/** DELETE, typically with no body (e.g. CHAT-018's "remove a group member"). */
+export const apiDelete = <S extends z.ZodType>(
+  path: string,
+  schema: S,
+  init?: RequestInit & { acceptStatuses?: number[] },
+): Promise<z.infer<S>> => apiSend('DELETE', path, schema, undefined, init);
 
 /** POST a `multipart/form-data` body (e.g. a file upload). Never set Content-Type yourself --
  *  the browser adds the multipart boundary when it isn't present. */

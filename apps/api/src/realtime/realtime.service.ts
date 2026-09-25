@@ -15,9 +15,12 @@ export interface RealtimeSocket extends WebSocket {
   isAlive?: boolean;
   userId?: string;
   /** Snapshot, taken at connect time, of the conversations this socket should hear about.
-   *  CHAT-013 doesn't push live updates into this set when membership changes mid-connection
-   *  (joining a new group won't stream to an already-open socket) -- acceptable for now, and a
-   *  natural fit for CHAT-018 (group membership changes) to close and let the client reconnect. */
+   *  CHAT-013 doesn't push live updates into this set when membership changes mid-connection, but
+   *  `RealtimeService.addConversationForUser`/`removeConversationForUser` (CHAT-012/CHAT-018) patch
+   *  it directly for the two cases that need to take effect immediately: gaining a brand-new
+   *  conversation, and losing one via group leave/removal. Anything else about a group changing
+   *  (a rename, a role change) doesn't need this at all -- it's carried in the ordinary
+   *  `message.new` system message and the next HTTP fetch, not a socket-membership update. */
   conversationIds?: Set<string>;
 }
 
@@ -99,6 +102,26 @@ export class RealtimeService implements OnModuleInit, OnModuleDestroy {
     for (const socket of sockets) {
       socket.conversationIds?.add(conversationId);
       addToSetMap(this.byConversation, conversationId, socket);
+    }
+  }
+
+  /**
+   * CHAT-018: the mirror of {@link addConversationForUser} -- stops a user's already-open sockets
+   * from hearing about one conversation right away, e.g. immediately after they're removed from a
+   * group (or leave it). Removing the socket from the local `byConversation` registry, rather than
+   * force-closing it so the client reconnects with a fresh snapshot, is enough on its own to
+   * satisfy "removed members stop receiving messages immediately": the very next
+   * `publishToConversation` for this id simply won't find this socket in the registry any more.
+   * It's also simpler and less disruptive than a forced close -- the socket stays open and still
+   * correctly registered for every *other* conversation it belongs to, so a group removal doesn't
+   * cost the person their connection to everything else they have open.
+   */
+  removeConversationForUser(userId: string, conversationId: string): void {
+    const sockets = this.byUser.get(userId);
+    if (!sockets) return;
+    for (const socket of sockets) {
+      socket.conversationIds?.delete(conversationId);
+      removeFromSetMap(this.byConversation, conversationId, socket);
     }
   }
 

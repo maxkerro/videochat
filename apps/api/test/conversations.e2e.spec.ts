@@ -203,4 +203,250 @@ describe.skipIf(!hasInfra)('conversations HTTP flow (CHAT-012)', () => {
       await request(server()).post('/conversations/direct').send({ userId: 'x' }).expect(401);
     });
   });
+
+  describe('CHAT-018 group chats', () => {
+    async function meId(session: AuthSession): Promise<string> {
+      const res = await request(server()).get('/me').set(auth(session.accessToken)).expect(200);
+      return res.body.id;
+    }
+
+    async function createGroup(
+      creator: AuthSession,
+      title: string,
+      memberIds: string[],
+    ): Promise<{ id: string; title: string; role: string }> {
+      const res = await request(server())
+        .post('/conversations/group')
+        .set(auth(creator.accessToken))
+        .send({ title, memberIds })
+        .expect(201);
+      return res.body;
+    }
+
+    it('creates a group with the creator as admin and everyone else a member, visible to all', async () => {
+      const anna = await signUpAndLogIn();
+      const ben = await signUpAndLogIn();
+      const carl = await signUpAndLogIn();
+
+      const group = await createGroup(anna.session, 'Weekend trip', [
+        await meId(ben.session),
+        await meId(carl.session),
+      ]);
+      expect(group.title).toBe('Weekend trip');
+      expect(group.role).toBe('admin');
+
+      const members = await request(server())
+        .get(`/conversations/${group.id}/members`)
+        .set(auth(anna.session.accessToken))
+        .expect(200);
+      const byUsername = (u: string) =>
+        members.body.find((m: { username: string }) => m.username === u);
+      expect(byUsername(anna.username).role).toBe('admin');
+      expect(byUsername(ben.username).role).toBe('member');
+      expect(byUsername(carl.username).role).toBe('member');
+
+      // The "X created the group" system message is visible in history to every member.
+      const history = await request(server())
+        .get(`/conversations/${group.id}/messages`)
+        .set(auth(ben.session.accessToken))
+        .expect(200);
+      expect(history.body.messages[0]).toMatchObject({
+        type: 'system',
+        senderId: null,
+        body: `${anna.session.user.displayName} created the group`,
+      });
+    });
+
+    it('rejects creating a group with fewer than 2 total members', async () => {
+      const anna = await signUpAndLogIn();
+      await request(server())
+        .post('/conversations/group')
+        .set(auth(anna.session.accessToken))
+        .send({ title: 'Solo', memberIds: [] })
+        .expect(400);
+    });
+
+    it('rejects a member id that does not exist', async () => {
+      const anna = await signUpAndLogIn();
+      await request(server())
+        .post('/conversations/group')
+        .set(auth(anna.session.accessToken))
+        .send({ title: 'g', memberIds: ['00000000-0000-0000-0000-000000000000'] })
+        .expect(404);
+    });
+
+    it('lets an admin rename the group, and blocks a plain member (403) or non-member (404)', async () => {
+      const anna = await signUpAndLogIn();
+      const ben = await signUpAndLogIn();
+      const outsider = await signUpAndLogIn();
+      const group = await createGroup(anna.session, 'Old name', [await meId(ben.session)]);
+
+      const renamed = await request(server())
+        .patch(`/conversations/${group.id}`)
+        .set(auth(anna.session.accessToken))
+        .send({ title: 'New name' })
+        .expect(200);
+      expect(renamed.body.title).toBe('New name');
+
+      await request(server())
+        .patch(`/conversations/${group.id}`)
+        .set(auth(ben.session.accessToken))
+        .send({ title: 'Nope' })
+        .expect(403);
+
+      await request(server())
+        .patch(`/conversations/${group.id}`)
+        .set(auth(outsider.session.accessToken))
+        .send({ title: 'Nope' })
+        .expect(404);
+    });
+
+    it('lets an admin add members, capped at 100 total', async () => {
+      const anna = await signUpAndLogIn();
+      const ben = await signUpAndLogIn();
+      const carl = await signUpAndLogIn();
+      const group = await createGroup(anna.session, 'g', [await meId(ben.session)]);
+      const carlId = await meId(carl.session);
+
+      await request(server())
+        .post(`/conversations/${group.id}/members`)
+        .set(auth(anna.session.accessToken))
+        .send({ memberIds: [carlId] })
+        .expect(201);
+
+      const members = await request(server())
+        .get(`/conversations/${group.id}/members`)
+        .set(auth(anna.session.accessToken))
+        .expect(200);
+      expect(members.body.map((m: { username: string }) => m.username)).toContain(carl.username);
+
+      await request(server())
+        .post(`/conversations/${group.id}/members`)
+        .set(auth(ben.session.accessToken))
+        .send({ memberIds: [carlId] })
+        .expect(403);
+    });
+
+    it('AC: an admin removes a member, who then 404s on that conversation immediately', async () => {
+      const anna = await signUpAndLogIn();
+      const ben = await signUpAndLogIn();
+      const group = await createGroup(anna.session, 'g', [await meId(ben.session)]);
+      const benId = await meId(ben.session);
+
+      await request(server())
+        .delete(`/conversations/${group.id}/members/${benId}`)
+        .set(auth(anna.session.accessToken))
+        .expect(200);
+
+      await request(server())
+        .get(`/conversations/${group.id}`)
+        .set(auth(ben.session.accessToken))
+        .expect(404);
+
+      // AC: "Anna removed Ben" system message.
+      const history = await request(server())
+        .get(`/conversations/${group.id}/messages`)
+        .set(auth(anna.session.accessToken))
+        .expect(200);
+      expect(history.body.messages.at(-1)).toMatchObject({
+        type: 'system',
+        senderId: null,
+        body: `${anna.session.user.displayName} removed ${ben.session.user.displayName}`,
+      });
+    });
+
+    it('rejects a plain member removing someone else', async () => {
+      const anna = await signUpAndLogIn();
+      const ben = await signUpAndLogIn();
+      const carl = await signUpAndLogIn();
+      const group = await createGroup(anna.session, 'g', [
+        await meId(ben.session),
+        await meId(carl.session),
+      ]);
+      const carlId = await meId(carl.session);
+
+      await request(server())
+        .delete(`/conversations/${group.id}/members/${carlId}`)
+        .set(auth(ben.session.accessToken))
+        .expect(403);
+    });
+
+    it('AC: any member can leave, and a departed non-admin does not trigger promotion', async () => {
+      const anna = await signUpAndLogIn();
+      const ben = await signUpAndLogIn();
+      const group = await createGroup(anna.session, 'g', [await meId(ben.session)]);
+
+      await request(server())
+        .post(`/conversations/${group.id}/leave`)
+        .set(auth(ben.session.accessToken))
+        .expect(201);
+
+      await request(server())
+        .get(`/conversations/${group.id}`)
+        .set(auth(ben.session.accessToken))
+        .expect(404);
+
+      const members = await request(server())
+        .get(`/conversations/${group.id}/members`)
+        .set(auth(anna.session.accessToken))
+        .expect(200);
+      expect(members.body).toHaveLength(1);
+      expect(members.body[0].role).toBe('admin');
+    });
+
+    it('AC: promotes the oldest remaining member to admin when the last admin leaves', async () => {
+      const anna = await signUpAndLogIn();
+      const ben = await signUpAndLogIn();
+      const carl = await signUpAndLogIn();
+      const group = await createGroup(anna.session, 'g', [
+        await meId(ben.session),
+        await meId(carl.session),
+      ]);
+
+      await request(server())
+        .post(`/conversations/${group.id}/leave`)
+        .set(auth(anna.session.accessToken))
+        .expect(201);
+
+      const members = await request(server())
+        .get(`/conversations/${group.id}/members`)
+        .set(auth(ben.session.accessToken))
+        .expect(200);
+      const byUsername = (u: string) =>
+        members.body.find((m: { username: string }) => m.username === u);
+      expect(byUsername(ben.username).role).toBe('admin'); // ben joined before carl
+      expect(byUsername(carl.username).role).toBe('member');
+
+      const history = await request(server())
+        .get(`/conversations/${group.id}/messages`)
+        .set(auth(ben.session.accessToken))
+        .expect(200);
+      const bodies = history.body.messages.map((m: { body: string }) => m.body);
+      expect(bodies).toContain(`${anna.session.user.displayName} left`);
+      expect(bodies).toContain(`${ben.session.user.displayName} is now an admin`);
+    });
+
+    it('requires authentication for every group endpoint', async () => {
+      await request(server()).post('/conversations/group').send({}).expect(401);
+      await request(server())
+        .patch('/conversations/00000000-0000-0000-0000-000000000000')
+        .send({})
+        .expect(401);
+      await request(server())
+        .get('/conversations/00000000-0000-0000-0000-000000000000/members')
+        .expect(401);
+      await request(server())
+        .post('/conversations/00000000-0000-0000-0000-000000000000/members')
+        .send({})
+        .expect(401);
+      await request(server())
+        .delete(
+          '/conversations/00000000-0000-0000-0000-000000000000/members/00000000-0000-0000-0000-000000000000',
+        )
+        .expect(401);
+      await request(server())
+        .post('/conversations/00000000-0000-0000-0000-000000000000/leave')
+        .expect(401);
+    });
+  });
 });
