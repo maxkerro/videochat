@@ -1,6 +1,14 @@
 import { useInfiniteQuery, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useVirtualizer } from '@tanstack/react-virtual';
-import { LIMITS, messageSchema, type Message, type WsEnvelope } from '@videochat/shared';
+import {
+  conversationReadEventSchema,
+  LIMITS,
+  messageSchema,
+  type ConversationSummary,
+  type MembersList,
+  type Message,
+  type WsEnvelope,
+} from '@videochat/shared';
 import {
   useCallback,
   useEffect,
@@ -16,13 +24,19 @@ import { Avatar, Button, Modal } from '../../components/ui';
 import { ApiError } from '../../lib/api';
 import { cx } from '../../lib/cx';
 import { recordSeenSeq } from '../../lib/lastSeenSeq';
+import { useDocumentVisible } from '../../lib/useDocumentVisible';
 import { enqueueOutboxMessage, removeOutboxMessage } from '../../lib/outbox';
-import { fetchConversation } from '../conversations/conversationsApi';
+import {
+  fetchConversation,
+  fetchMembers,
+  markConversationRead,
+} from '../conversations/conversationsApi';
 import { GroupMembersPanel } from '../conversations/GroupMembersPanel';
 import { useAuth, withAuthRetry } from '../auth/AuthContext';
 import { linkify } from './linkify';
 import { appendToLatestPage, type MessagesData } from './messagesCache';
 import { fetchMessages, sendMessage } from './messagesApi';
+import { ReadReceiptThrottle } from './readReceipts';
 import { useRealtimeEvent } from './RealtimeProvider';
 import styles from './ChatPane.module.css';
 
@@ -172,6 +186,15 @@ export function ChatPane() {
     retry: shouldRetryQuery,
   });
 
+  // CHAT-019: a group's "Seen by N" needs every member's own `lastReadSeq`; a direct
+  // conversation's simpler "Seen" already has the peer's via `conversationQuery`'s
+  // `peerLastReadSeq`, so this only ever needs to run for a group.
+  const membersQuery = useQuery({
+    queryKey: ['members', conversationId],
+    queryFn: () => withAuthRetry(auth, (token) => fetchMembers(token, conversationId!)),
+    enabled: enabled && conversationQuery.data?.type === 'group',
+  });
+
   const messagesQuery = useInfiniteQuery({
     queryKey: ['messages', conversationId],
     queryFn: ({ pageParam }) =>
@@ -221,6 +244,31 @@ export function ChatPane() {
     if (!isOwn && !atLatest) setNewArrivals((n) => n + 1);
   });
 
+  // CHAT-019: another device/tab of the same person catching up (clears this device's own
+  // "unread" state), or another member's read position advancing (updates "Seen"/"Seen by N")
+  // -- either way, applied straight to the cache rather than waiting on a refetch.
+  useRealtimeEvent((envelope: WsEnvelope) => {
+    if (envelope.type !== 'conversation.read') return;
+    const parsed = conversationReadEventSchema.safeParse(envelope.payload);
+    if (!parsed.success) return;
+    const event = parsed.data;
+    if (event.conversationId !== conversationId) return;
+
+    if (event.userId === auth.user?.id) {
+      queryClient.setQueryData<ConversationSummary>(
+        ['conversation', event.conversationId],
+        (old) => (old ? { ...old, lastReadSeq: event.lastReadSeq } : old),
+      );
+      return;
+    }
+    queryClient.setQueryData<ConversationSummary>(['conversation', event.conversationId], (old) =>
+      old && old.peer?.id === event.userId ? { ...old, peerLastReadSeq: event.lastReadSeq } : old,
+    );
+    queryClient.setQueryData<MembersList>(['members', event.conversationId], (old) =>
+      old?.map((m) => (m.userId === event.userId ? { ...m, lastReadSeq: event.lastReadSeq } : m)),
+    );
+  });
+
   const allMessages = useMemo(
     () => messagesQuery.data?.pages.flatMap((page) => page.messages) ?? [],
     [messagesQuery.data],
@@ -258,6 +306,71 @@ export function ChatPane() {
     overscan: 12,
   });
 
+  // CHAT-019: read receipts. `authRef` lets the throttle's `send` callback (built once, in the
+  // `useState` lazy initializer below, and never rebuilt) always read the *current* access token
+  // rather than closing over whatever it was when the throttle was created.
+  const authRef = useRef(auth);
+  authRef.current = auth;
+  const [readReceiptThrottle] = useState(
+    () =>
+      new ReadReceiptThrottle((targetConversationId, seq) => {
+        withAuthRetry(authRef.current, (token) =>
+          markConversationRead(token, targetConversationId, { seq }),
+        )
+          .then((summary) => {
+            queryClient.setQueryData(['conversation', targetConversationId], summary);
+            queryClient.setQueryData<ConversationSummary[]>(['conversations'], (list) =>
+              list?.map((c) =>
+                c.id === targetConversationId ? { ...c, lastReadSeq: summary.lastReadSeq } : c,
+              ),
+            );
+          })
+          // Best-effort: a failed read receipt (offline, a transient 5xx) isn't worth surfacing
+          // to the person -- the next visible message (or the next `catchUp` reconnect) will
+          // simply try again with a higher `seq` anyway.
+          .catch(() => undefined);
+      }),
+  );
+  const documentVisible = useDocumentVisible();
+
+  // AC: "receipts are not sent while the tab is hidden" -- drops (never sends) whatever was
+  // pending for this conversation the moment it goes hidden, rather than letting it fire the
+  // instant the tab becomes visible again (which would defeat the point: the person didn't
+  // actually look at anything while it was hidden).
+  useEffect(() => {
+    if (!documentVisible && conversationId) readReceiptThrottle.cancel(conversationId);
+  }, [documentVisible, conversationId, readReceiptThrottle]);
+
+  // Reports the highest-`seq` message currently in the virtualizer's visible range as read, via
+  // the throttle above -- called after scrolling and whenever the rendered rows change (new
+  // messages arriving, history loading in), so a message that becomes visible without a scroll
+  // event (e.g. it was already the first thing on screen) still gets picked up.
+  const reportVisibleRead = useCallback(() => {
+    if (!documentVisible || !conversationId || auth.status !== 'authenticated') return;
+    let maxSeq = 0;
+    for (const item of rowVirtualizer.getVirtualItems()) {
+      const row = reversedRows[item.index];
+      if (row?.kind === 'message' && row.message.type !== 'system' && row.message.seq > maxSeq) {
+        maxSeq = row.message.seq;
+      }
+    }
+    if (maxSeq > 0) readReceiptThrottle.request(conversationId, maxSeq);
+  }, [
+    documentVisible,
+    conversationId,
+    auth.status,
+    rowVirtualizer,
+    reversedRows,
+    readReceiptThrottle,
+  ]);
+
+  useEffect(() => {
+    reportVisibleRead();
+    // `rows.length` (rather than `rows` itself) is the trigger: a change in *count* means
+    // something entered or left the rendered range (a new message, another page of history), the
+    // only case that can change which messages are visible without a scroll event.
+  }, [reportVisibleRead, rows.length]);
+
   const scrollToLatest = useCallback((behavior: ScrollBehavior = 'smooth') => {
     const el = scrollRef.current;
     // jsdom (and some older embedded WebViews) don't implement `Element.scrollTo` -- fall back to
@@ -280,6 +393,7 @@ export function ChatPane() {
     if (nearOldest && messagesQuery.hasPreviousPage && !messagesQuery.isFetchingPreviousPage) {
       void messagesQuery.fetchPreviousPage();
     }
+    reportVisibleRead();
   }
 
   // Lands the initial view on the first unread message (or the latest message if everything is
@@ -358,6 +472,28 @@ export function ChatPane() {
     }
   }
 
+  // CHAT-019: "Seen" for a direct conversation once the peer's own `lastReadSeq` catches up to
+  // the latest message; "Seen by N" for a group, with the names available on hover (a native
+  // `title` tooltip -- simplest thing that satisfies the AC without a new popover primitive).
+  // Both are `null` (nothing rendered) for an empty conversation -- "seen" is meaningless with no
+  // messages to have seen. Computed above the early `isError` return below so this hook always
+  // runs in the same order regardless of query state (React's rules of hooks).
+  const seenInfo = useMemo(() => {
+    const conversation = conversationQuery.data;
+    if (!conversation || conversation.lastSeq === 0) return null;
+    if (conversation.type === 'direct') {
+      const seen =
+        conversation.peerLastReadSeq !== null &&
+        conversation.peerLastReadSeq >= conversation.lastSeq;
+      return seen ? { label: 'Seen', names: [] as string[] } : null;
+    }
+    const seenBy = (membersQuery.data ?? []).filter(
+      (m) => m.userId !== auth.user?.id && m.lastReadSeq >= conversation.lastSeq,
+    );
+    if (seenBy.length === 0) return null;
+    return { label: `Seen by ${seenBy.length}`, names: seenBy.map((m) => m.displayName) };
+  }, [conversationQuery.data, membersQuery.data, auth.user?.id]);
+
   if (conversationQuery.isError) {
     // A 404 means the conversation genuinely doesn't exist (or isn't this person's) -- that's
     // the only case "not found" is an accurate message for. Anything else (a network failure, a
@@ -406,6 +542,14 @@ export function ChatPane() {
         <Avatar name={title} src={conversation?.peer?.avatarUrl} />
         <div className={styles.headerText}>
           <h1 className={styles.title}>{title}</h1>
+          {seenInfo && (
+            <span
+              className={styles.seen}
+              title={seenInfo.names.length > 0 ? seenInfo.names.join(', ') : undefined}
+            >
+              {seenInfo.label}
+            </span>
+          )}
         </div>
         {/* CHAT-018: group-only -- a direct conversation has no roles or membership to manage. */}
         {conversation?.type === 'group' && (

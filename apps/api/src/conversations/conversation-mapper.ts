@@ -8,6 +8,14 @@ export function toConversationSummary(
   peerAvatarUrl: string | null,
 ): ConversationSummary {
   const peer = 'peer' in row && row.peer ? toPublicUser(row.peer, peerAvatarUrl) : null;
+  // CHAT-019: only ever meaningful for a direct conversation with a known peer -- `undefined`
+  // (peer loaded, but its `lastReadSeq` wasn't, e.g. `findOrCreateDirectConversation`'s freshly
+  // created/found row) falls back to 0 rather than null, since a brand-new peer genuinely hasn't
+  // read anything yet. A group (no `peer` at all) always reports `null`: "Seen by N" for a group
+  // comes from the members endpoint instead, not this single value.
+  const peerLastReadSeq = peer
+    ? (('peerLastReadSeq' in row ? row.peerLastReadSeq : undefined) ?? 0)
+    : null;
   return {
     id: row.id,
     type: row.type,
@@ -17,5 +25,6 @@ export function toConversationSummary(
     role: row.role,
     lastReadSeq: row.lastReadSeq,
     peer,
+    peerLastReadSeq,
   };
 }

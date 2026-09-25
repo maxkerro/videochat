@@ -3,6 +3,7 @@ import {
   conversationSummarySchema,
   conversationsListSchema,
   createGroupConversationSchema,
+  markConversationReadSchema,
   membersListSchema,
   renameConversationSchema,
   startDirectConversationSchema,
@@ -11,6 +12,7 @@ import {
   type ConversationSummary,
   type ConversationsList,
   type CreateGroupConversationInput,
+  type MarkConversationReadInput,
   type MembersList,
   type RenameConversationInput,
   type StartDirectConversationInput,
@@ -109,6 +111,29 @@ export function removeMember(
 /** CHAT-018: any member can leave, no admin check. */
 export function leaveConversation(accessToken: string, conversationId: string): Promise<void> {
   return apiPost(`/conversations/${conversationId}/leave`, z.undefined(), undefined, {
+    headers: authHeader(accessToken),
+  });
+}
+
+/** CHAT-019: advances the caller's own read position -- called by `ChatPane`'s read-tracking
+ *  (throttled to at most once/sec per conversation) as messages become visible in the viewport. */
+export function markConversationRead(
+  accessToken: string,
+  conversationId: string,
+  input: MarkConversationReadInput,
+): Promise<ConversationSummary> {
+  markConversationReadSchema.parse(input);
+  return apiPost(`/conversations/${conversationId}/read`, conversationSummarySchema, input, {
+    headers: authHeader(accessToken),
+  });
+}
+
+/** CHAT-019: "Mark as unread" from the conversation menu. */
+export function markConversationUnread(
+  accessToken: string,
+  conversationId: string,
+): Promise<ConversationSummary> {
+  return apiPost(`/conversations/${conversationId}/unread`, conversationSummarySchema, undefined, {
     headers: authHeader(accessToken),
   });
 }

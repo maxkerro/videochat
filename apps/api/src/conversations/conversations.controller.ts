@@ -2,6 +2,7 @@ import { Body, Controller, Delete, Get, Param, Patch, Post, UseGuards } from '@n
 import {
   addMembersSchema,
   createGroupConversationSchema,
+  markConversationReadSchema,
   renameConversationSchema,
   startDirectConversationSchema,
   type ConversationSummary,
@@ -98,5 +99,26 @@ export class ConversationsController {
     @CurrentUserId() userId: string,
   ): Promise<void> {
     return this.conversations.leave(conversationId, userId);
+  }
+
+  /** CHAT-019: advances the caller's own read position -- called by the client (throttled to at
+   *  most once/sec per conversation) as messages become visible in the viewport. */
+  @Post(':conversationId/read')
+  markRead(
+    @Param('conversationId', UuidParamPipe) conversationId: string,
+    @CurrentUserId() userId: string,
+    @Body(new ZodValidationPipe(markConversationReadSchema))
+    body: z.infer<typeof markConversationReadSchema>,
+  ): Promise<ConversationSummary> {
+    return this.conversations.markRead(conversationId, userId, body.seq);
+  }
+
+  /** CHAT-019: "Mark as unread" from the conversation menu. */
+  @Post(':conversationId/unread')
+  markUnread(
+    @Param('conversationId', UuidParamPipe) conversationId: string,
+    @CurrentUserId() userId: string,
+  ): Promise<ConversationSummary> {
+    return this.conversations.markUnread(conversationId, userId);
   }
 }

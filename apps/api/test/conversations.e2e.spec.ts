@@ -449,4 +449,163 @@ describe.skipIf(!hasInfra)('conversations HTTP flow (CHAT-012)', () => {
         .expect(401);
     });
   });
+
+  describe('CHAT-019 read receipts and unread state', () => {
+    async function sendMessage(sender: AuthSession, conversationId: string, clientMsgId: string) {
+      const res = await request(server())
+        .post(`/conversations/${conversationId}/messages`)
+        .set(auth(sender.accessToken))
+        .send({ clientMsgId, body: 'hi' })
+        .expect(201);
+      return res.body.seq as number;
+    }
+
+    it('advances the caller lastReadSeq, clamped to lastSeq, and rejects a non-member', async () => {
+      const anna = await signUpAndLogIn();
+      const ben = await signUpAndLogIn();
+      const bMe = await request(server()).get('/me').set(auth(ben.session.accessToken)).expect(200);
+      const started = await request(server())
+        .post('/conversations/direct')
+        .set(auth(anna.session.accessToken))
+        .send({ userId: bMe.body.id })
+        .expect(201);
+      const conversationId = started.body.id as string;
+      await sendMessage(anna.session, conversationId, 'm-1');
+      await sendMessage(anna.session, conversationId, 'm-2');
+
+      // Ben reads past what actually exists (seq 999) -- clamped to the real lastSeq (2).
+      const read = await request(server())
+        .post(`/conversations/${conversationId}/read`)
+        .set(auth(ben.session.accessToken))
+        .send({ seq: 999 })
+        .expect(201);
+      expect(read.body.lastReadSeq).toBe(2);
+
+      const outsider = await signUpAndLogIn();
+      await request(server())
+        .post(`/conversations/${conversationId}/read`)
+        .set(auth(outsider.session.accessToken))
+        .send({ seq: 1 })
+        .expect(404);
+    });
+
+    it('never moves lastReadSeq backward via the read endpoint', async () => {
+      const anna = await signUpAndLogIn();
+      const ben = await signUpAndLogIn();
+      const bMe = await request(server()).get('/me').set(auth(ben.session.accessToken)).expect(200);
+      const started = await request(server())
+        .post('/conversations/direct')
+        .set(auth(anna.session.accessToken))
+        .send({ userId: bMe.body.id })
+        .expect(201);
+      const conversationId = started.body.id as string;
+      await sendMessage(anna.session, conversationId, 'm-1');
+      await sendMessage(anna.session, conversationId, 'm-2');
+
+      await request(server())
+        .post(`/conversations/${conversationId}/read`)
+        .set(auth(ben.session.accessToken))
+        .send({ seq: 2 })
+        .expect(201);
+      const stale = await request(server())
+        .post(`/conversations/${conversationId}/read`)
+        .set(auth(ben.session.accessToken))
+        .send({ seq: 1 })
+        .expect(201);
+      expect(stale.body.lastReadSeq).toBe(2);
+    });
+
+    it('AC: marks a fully-read conversation as unread again, without going below existing unread', async () => {
+      const anna = await signUpAndLogIn();
+      const ben = await signUpAndLogIn();
+      const bMe = await request(server()).get('/me').set(auth(ben.session.accessToken)).expect(200);
+      const started = await request(server())
+        .post('/conversations/direct')
+        .set(auth(anna.session.accessToken))
+        .send({ userId: bMe.body.id })
+        .expect(201);
+      const conversationId = started.body.id as string;
+      await sendMessage(anna.session, conversationId, 'm-1');
+      await sendMessage(anna.session, conversationId, 'm-2');
+      await sendMessage(anna.session, conversationId, 'm-3');
+      // Ben reads everything.
+      await request(server())
+        .post(`/conversations/${conversationId}/read`)
+        .set(auth(ben.session.accessToken))
+        .send({ seq: 3 })
+        .expect(201);
+
+      const unread = await request(server())
+        .post(`/conversations/${conversationId}/unread`)
+        .set(auth(ben.session.accessToken))
+        .expect(201);
+      expect(unread.body.lastReadSeq).toBe(2); // one less than lastSeq -- the latest message is unread again
+
+      // Marking unread again must not further reduce the unread count.
+      const again = await request(server())
+        .post(`/conversations/${conversationId}/unread`)
+        .set(auth(ben.session.accessToken))
+        .expect(201);
+      expect(again.body.lastReadSeq).toBe(2);
+
+      // 404 for a non-member.
+      const outsider = await signUpAndLogIn();
+      await request(server())
+        .post(`/conversations/${conversationId}/unread`)
+        .set(auth(outsider.session.accessToken))
+        .expect(404);
+    });
+
+    it('rejects marking an empty conversation unread', async () => {
+      const anna = await signUpAndLogIn();
+      const ben = await signUpAndLogIn();
+      const bMe = await request(server()).get('/me').set(auth(ben.session.accessToken)).expect(200);
+      const started = await request(server())
+        .post('/conversations/direct')
+        .set(auth(anna.session.accessToken))
+        .send({ userId: bMe.body.id })
+        .expect(201);
+
+      await request(server())
+        .post(`/conversations/${started.body.id}/unread`)
+        .set(auth(anna.session.accessToken))
+        .expect(400);
+    });
+
+    it('exposes each group member’s lastReadSeq for "Seen by N"', async () => {
+      const anna = await signUpAndLogIn();
+      const ben = await signUpAndLogIn();
+      const bMe = await request(server()).get('/me').set(auth(ben.session.accessToken)).expect(200);
+      const group = await request(server())
+        .post('/conversations/group')
+        .set(auth(anna.session.accessToken))
+        .send({ title: 'g', memberIds: [bMe.body.id] })
+        .expect(201);
+      const conversationId = group.body.id as string;
+      // The "created the group" system message is seq 1.
+      await request(server())
+        .post(`/conversations/${conversationId}/read`)
+        .set(auth(ben.session.accessToken))
+        .send({ seq: 1 })
+        .expect(201);
+
+      const members = await request(server())
+        .get(`/conversations/${conversationId}/members`)
+        .set(auth(anna.session.accessToken))
+        .expect(200);
+      const byUsername = (u: string) =>
+        members.body.find((m: { username: string }) => m.username === u);
+      expect(byUsername(ben.username).lastReadSeq).toBe(1);
+    });
+
+    it('requires authentication for the read/unread endpoints', async () => {
+      await request(server())
+        .post('/conversations/00000000-0000-0000-0000-000000000000/read')
+        .send({ seq: 1 })
+        .expect(401);
+      await request(server())
+        .post('/conversations/00000000-0000-0000-0000-000000000000/unread')
+        .expect(401);
+    });
+  });
 });

@@ -17,6 +17,8 @@ vi.mock('../db/conversations.js', () => ({
   leaveConversation: vi.fn(),
   listActiveMembers: vi.fn(),
   listConversationsForUser: vi.fn(),
+  markConversationRead: vi.fn(),
+  markConversationUnread: vi.fn(),
   removeGroupMember: vi.fn(),
   renameConversation: vi.fn(),
 }));
@@ -427,25 +429,139 @@ describe('ConversationsService (CHAT-018)', () => {
           user: makeUser({ id: 'user-1', displayName: 'Anna' }),
           role: 'admin',
           joinedAt: new Date('2026-01-01T00:00:00Z'),
+          lastReadSeq: 5,
         },
         {
           user: makeUser({ id: 'ben', displayName: 'Ben' }),
           role: 'member',
           joinedAt: new Date('2026-01-02T00:00:00Z'),
+          lastReadSeq: 3,
         },
       ]);
 
       const result = await service.listMembers('conv-1', 'user-1');
 
       expect(result).toEqual([
-        expect.objectContaining({ userId: 'user-1', displayName: 'Anna', role: 'admin' }),
-        expect.objectContaining({ userId: 'ben', displayName: 'Ben', role: 'member' }),
+        expect.objectContaining({
+          userId: 'user-1',
+          displayName: 'Anna',
+          role: 'admin',
+          lastReadSeq: 5,
+        }),
+        expect.objectContaining({
+          userId: 'ben',
+          displayName: 'Ben',
+          role: 'member',
+          lastReadSeq: 3,
+        }),
       ]);
     });
 
     it('404s for a non-member', async () => {
       vi.mocked(conversationsDb.getMembership).mockResolvedValue(undefined);
       await expect(service.listMembers('conv-1', 'user-1')).rejects.toThrow(NotFoundException);
+    });
+  });
+
+  describe('markRead (CHAT-019)', () => {
+    it('advances lastReadSeq, clamps to lastSeq, and broadcasts to the whole conversation', async () => {
+      vi.mocked(conversationsDb.findConversationForUser).mockResolvedValue(
+        makeGroupRow({ type: 'direct', lastSeq: 5, lastReadSeq: 2 }),
+      );
+      vi.mocked(conversationsDb.markConversationRead).mockResolvedValue({
+        conversationId: 'conv-1',
+        userId: 'user-1',
+        role: 'member',
+        lastReadSeq: 5,
+        mutedUntil: null,
+        joinedAt: new Date('2026-01-01T00:00:00Z'),
+        leftAt: null,
+      });
+
+      const result = await service.markRead('conv-1', 'user-1', 999); // way past lastSeq
+
+      expect(conversationsDb.markConversationRead).toHaveBeenCalledWith({}, 'conv-1', 'user-1', 5);
+      expect(result.lastReadSeq).toBe(5);
+      expect(realtime.publishToConversation).toHaveBeenCalledWith(
+        'conv-1',
+        expect.objectContaining({
+          type: 'conversation.read',
+          payload: { conversationId: 'conv-1', userId: 'user-1', lastReadSeq: 5 },
+        }),
+      );
+    });
+
+    it('does not broadcast when the seq does not actually advance anything', async () => {
+      vi.mocked(conversationsDb.findConversationForUser).mockResolvedValue(
+        makeGroupRow({ type: 'direct', lastSeq: 5, lastReadSeq: 5 }),
+      );
+      vi.mocked(conversationsDb.markConversationRead).mockResolvedValue({
+        conversationId: 'conv-1',
+        userId: 'user-1',
+        role: 'member',
+        lastReadSeq: 5,
+        mutedUntil: null,
+        joinedAt: new Date('2026-01-01T00:00:00Z'),
+        leftAt: null,
+      });
+
+      await service.markRead('conv-1', 'user-1', 3);
+
+      expect(realtime.publishToConversation).not.toHaveBeenCalled();
+    });
+
+    it('404s for a non-member', async () => {
+      vi.mocked(conversationsDb.findConversationForUser).mockResolvedValue(undefined);
+      await expect(service.markRead('conv-1', 'user-1', 1)).rejects.toThrow(NotFoundException);
+      expect(conversationsDb.markConversationRead).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('markUnread (CHAT-019)', () => {
+    it('resets lastReadSeq to one less than lastSeq and broadcasts it', async () => {
+      vi.mocked(conversationsDb.findConversationForUser).mockResolvedValue(
+        makeGroupRow({ type: 'direct', lastSeq: 5, lastReadSeq: 5 }),
+      );
+      vi.mocked(conversationsDb.markConversationUnread).mockResolvedValue({
+        conversationId: 'conv-1',
+        userId: 'user-1',
+        role: 'member',
+        lastReadSeq: 4,
+        mutedUntil: null,
+        joinedAt: new Date('2026-01-01T00:00:00Z'),
+        leftAt: null,
+      });
+
+      const result = await service.markUnread('conv-1', 'user-1');
+
+      expect(conversationsDb.markConversationUnread).toHaveBeenCalledWith(
+        {},
+        'conv-1',
+        'user-1',
+        4,
+      );
+      expect(result.lastReadSeq).toBe(4);
+      expect(realtime.publishToConversation).toHaveBeenCalledWith(
+        'conv-1',
+        expect.objectContaining({
+          type: 'conversation.read',
+          payload: { conversationId: 'conv-1', userId: 'user-1', lastReadSeq: 4 },
+        }),
+      );
+    });
+
+    it('rejects a conversation with no messages yet', async () => {
+      vi.mocked(conversationsDb.findConversationForUser).mockResolvedValue(
+        makeGroupRow({ type: 'direct', lastSeq: 0, lastReadSeq: 0 }),
+      );
+
+      await expect(service.markUnread('conv-1', 'user-1')).rejects.toThrow(BadRequestException);
+      expect(conversationsDb.markConversationUnread).not.toHaveBeenCalled();
+    });
+
+    it('404s for a non-member', async () => {
+      vi.mocked(conversationsDb.findConversationForUser).mockResolvedValue(undefined);
+      await expect(service.markUnread('conv-1', 'user-1')).rejects.toThrow(NotFoundException);
     });
   });
 });

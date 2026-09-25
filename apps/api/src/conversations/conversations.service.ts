@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto';
 import {
   BadRequestException,
   ForbiddenException,
@@ -8,6 +9,7 @@ import {
 import {
   LIMITS,
   makeEnvelope,
+  type ConversationReadEvent,
   type ConversationSummary,
   type MemberSummary,
 } from '@videochat/shared';
@@ -23,6 +25,8 @@ import {
   leaveConversation,
   listActiveMembers,
   listConversationsForUser,
+  markConversationRead,
+  markConversationUnread,
   renameConversation,
   type ConversationListRow,
 } from '../db/conversations.js';
@@ -242,8 +246,76 @@ export class ConversationsService {
         avatarUrl: await this.s3.getAvatarUrl(row.user.avatarKey),
         role: row.role,
         joinedAt: row.joinedAt.toISOString(),
+        lastReadSeq: row.lastReadSeq,
       })),
     );
+  }
+
+  /**
+   * CHAT-019: advances the caller's own read position for this conversation, clamped to the
+   * conversation's own `lastSeq` so a stale or misbehaving client can't push `lastReadSeq` past
+   * messages that actually exist. On an actual advance, broadcasts the new value to the whole
+   * conversation via `publishToConversation` -- which reaches the reader's *own* other open
+   * devices/tabs (satisfying "reading on one device clears unread on the user's other devices":
+   * see `RealtimeService`'s class comment on why a per-conversation channel already includes a
+   * user's own sockets) as well as every other member, for a group's live "Seen by N".
+   */
+  async markRead(
+    conversationId: string,
+    userId: string,
+    seq: number,
+  ): Promise<ConversationSummary> {
+    const row = await findConversationForUser(this.db, conversationId, userId);
+    if (!row) throw new NotFoundException('Conversation not found');
+
+    const clamped = Math.min(Math.max(seq, 0), row.lastSeq);
+    const updated = await markConversationRead(this.db, conversationId, userId, clamped);
+    if (!updated) throw new NotFoundException('Conversation not found');
+
+    if (updated.lastReadSeq !== row.lastReadSeq) {
+      await this.realtime.publishToConversation(
+        conversationId,
+        makeEnvelope<ConversationReadEvent>(
+          'conversation.read',
+          { conversationId, userId, lastReadSeq: updated.lastReadSeq },
+          randomUUID(),
+        ),
+      );
+    }
+
+    const avatarUrl = row.peer ? await this.s3.getAvatarUrl(row.peer.avatarKey) : null;
+    return toConversationSummary({ ...row, lastReadSeq: updated.lastReadSeq }, avatarUrl);
+  }
+
+  /**
+   * CHAT-019: "Mark as unread" from the conversation menu. Semantics (a judgment call -- see
+   * `markConversationUnread`'s own comment on the DB side): resets `lastReadSeq` to one less than
+   * the conversation's current `lastSeq`, flagging the most recent message as unread again so the
+   * conversation reappears in the inbox as needing a look, regardless of how much of it was
+   * already read. Rejects a conversation with no messages yet -- there's nothing to flag.
+   */
+  async markUnread(conversationId: string, userId: string): Promise<ConversationSummary> {
+    const row = await findConversationForUser(this.db, conversationId, userId);
+    if (!row) throw new NotFoundException('Conversation not found');
+    if (row.lastSeq === 0) throw new BadRequestException('Nothing to mark unread yet');
+
+    const target = row.lastSeq - 1;
+    const updated = await markConversationUnread(this.db, conversationId, userId, target);
+    if (!updated) throw new NotFoundException('Conversation not found');
+
+    if (updated.lastReadSeq !== row.lastReadSeq) {
+      await this.realtime.publishToConversation(
+        conversationId,
+        makeEnvelope<ConversationReadEvent>(
+          'conversation.read',
+          { conversationId, userId, lastReadSeq: updated.lastReadSeq },
+          randomUUID(),
+        ),
+      );
+    }
+
+    const avatarUrl = row.peer ? await this.s3.getAvatarUrl(row.peer.avatarKey) : null;
+    return toConversationSummary({ ...row, lastReadSeq: updated.lastReadSeq }, avatarUrl);
   }
 
   private async announcePromotionIfAny(

@@ -94,6 +94,12 @@ export const conversationSummarySchema = z.object({
    *  A direct conversation has no title of its own, so the client needs this to show who it's
    *  with. */
   peer: publicUserSchema.nullable(),
+  /** CHAT-019: the peer's own `lastReadSeq`, for a direct conversation's "Seen" indicator (once
+   *  it's >= `lastSeq`, the peer has read everything). Always `null` for a group -- "Seen by N"
+   *  there needs every member's position, not just one, so it comes from the members endpoint
+   *  instead (see `memberSummarySchema.lastReadSeq`). Defaults to `null` so older cached/mocked
+   *  responses without this field still parse. */
+  peerLastReadSeq: z.number().int().nonnegative().nullable().default(null),
 });
 export type ConversationSummary = z.infer<typeof conversationSummarySchema>;
 export const conversationsListSchema = z.array(conversationSummarySchema);
@@ -149,6 +155,10 @@ export const memberSummarySchema = z.object({
   avatarUrl: z.url().nullable(),
   role: z.enum(MEMBER_ROLES),
   joinedAt: z.iso.datetime(),
+  /** CHAT-019: this member's own `lastReadSeq` -- the "Seen by N" list is everyone here whose
+   *  `lastReadSeq` is at least the conversation's `lastSeq`. Defaults to 0 so older cached/mocked
+   *  responses without this field still parse. */
+  lastReadSeq: z.number().int().nonnegative().default(0),
 });
 export type MemberSummary = z.infer<typeof memberSummarySchema>;
 export const membersListSchema = z.array(memberSummarySchema);
@@ -206,6 +216,31 @@ export const sendMessageSchema = z.object({
   body: z.string().trim().min(1).max(LIMITS.messageMaxLength),
 });
 export type SendMessageInput = z.infer<typeof sendMessageSchema>;
+
+/**
+ * CHAT-019: "mark read up to `seq`" -- the highest message `seq` currently visible (in the
+ * viewport) and read on this device. The server only ever advances `lastReadSeq` forward from
+ * this (see `markConversationRead`'s GREATEST guard), so sending a `seq` lower than what's already
+ * recorded is harmless, just a no-op.
+ */
+export const markConversationReadSchema = z.object({
+  seq: z.number().int().nonnegative(),
+});
+export type MarkConversationReadInput = z.infer<typeof markConversationReadSchema>;
+
+/**
+ * CHAT-019: the realtime payload broadcast (as a `conversation.read` `WsEnvelope`) whenever a
+ * member's `lastReadSeq` changes -- forward from reading, or backward from "mark as unread". Sent
+ * via `RealtimeService.publishToConversation`, so it reaches both the reader's own other open
+ * devices/tabs (clearing their unread badge for the same conversation without a refetch) and every
+ * other member (updating a group's live "Seen by N").
+ */
+export const conversationReadEventSchema = z.object({
+  conversationId: z.uuid(),
+  userId: z.uuid(),
+  lastReadSeq: z.number().int().nonnegative(),
+});
+export type ConversationReadEvent = z.infer<typeof conversationReadEventSchema>;
 
 /** Health endpoint contract, consumed by the web shell's status indicator. */
 export const dependencyStatusSchema = z.enum(['up', 'down']);

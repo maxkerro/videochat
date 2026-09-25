@@ -36,6 +36,14 @@
   font-size: var(--text-xs);
   color: var(--color-text-muted);
 }
+/* CHAT-019: "Seen"/"Seen by N", shown under the conversation title. A group's name list is a
+ * native `title` tooltip on this element (see ChatPane's `seenInfo`) -- a plain hover reveal
+ * rather than a new popover primitive. */
+.seen {
+  display: block;
+  font-size: var(--text-xs);
+  color: var(--color-text-muted);
+}
 .scrollWrap {
   position: relative;
   flex: 1;

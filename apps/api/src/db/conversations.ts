@@ -106,6 +106,9 @@ async function findDirectConversationByKey(
 export interface ConversationListRow extends ConversationWithMembership {
   /** The other member's user row, for a direct conversation (undefined for a group). */
   peer?: typeof users.$inferSelect;
+  /** CHAT-019: the peer's own `lastReadSeq`, for a direct conversation (undefined for a group,
+   *  same as `peer` -- see {@link loadDirectPeers}). */
+  peerLastReadSeq?: number;
 }
 
 /** One conversation, as `userId` (a current member) sees it -- used by ChatPane (CHAT-014) to
@@ -134,11 +137,17 @@ export async function findConversationForUser(
     .limit(1);
   if (!row) return undefined;
 
-  const peer =
+  const peerEntry =
     row.conversation.type === 'direct'
       ? (await loadDirectPeers(db, [conversationId], userId)).get(conversationId)
       : undefined;
-  return { ...row.conversation, role: row.role, lastReadSeq: row.lastReadSeq, peer };
+  return {
+    ...row.conversation,
+    role: row.role,
+    lastReadSeq: row.lastReadSeq,
+    peer: peerEntry?.user,
+    peerLastReadSeq: peerEntry?.lastReadSeq,
+  };
 }
 
 /** Every conversation `userId` currently belongs to, newest activity first. For a direct
@@ -166,12 +175,16 @@ export async function listConversationsForUser(
     userId,
   );
 
-  return rows.map((r) => ({
-    ...r.conversation,
-    role: r.role,
-    lastReadSeq: r.lastReadSeq,
-    peer: peersByConversationId.get(r.conversation.id),
-  }));
+  return rows.map((r) => {
+    const peerEntry = peersByConversationId.get(r.conversation.id);
+    return {
+      ...r.conversation,
+      role: r.role,
+      lastReadSeq: r.lastReadSeq,
+      peer: peerEntry?.user,
+      peerLastReadSeq: peerEntry?.lastReadSeq,
+    };
+  });
 }
 
 /**
@@ -383,35 +396,120 @@ export interface ActiveMemberRow {
   user: typeof users.$inferSelect;
   role: Membership['role'];
   joinedAt: Membership['joinedAt'];
+  /** CHAT-019: this member's own `lastReadSeq` -- "Seen by N" is everyone here whose
+   *  `lastReadSeq` is at least the conversation's `lastSeq`. */
+  lastReadSeq: Membership['lastReadSeq'];
 }
 
 /** Every active member of a conversation, joined with their user row, oldest-joined first (which
  *  conveniently also matches "who'd be promoted next" if the current admin(s) left) -- CHAT-018's
- *  "members list shows roles" AC. */
+ *  "members list shows roles" AC, extended by CHAT-019 with each member's `lastReadSeq` for
+ *  "Seen by N". */
 export async function listActiveMembers(
   db: DbExecutor,
   conversationId: string,
 ): Promise<ActiveMemberRow[]> {
   return db
-    .select({ user: users, role: memberships.role, joinedAt: memberships.joinedAt })
+    .select({
+      user: users,
+      role: memberships.role,
+      joinedAt: memberships.joinedAt,
+      lastReadSeq: memberships.lastReadSeq,
+    })
     .from(memberships)
     .innerJoin(users, eq(users.id, memberships.userId))
     .where(and(eq(memberships.conversationId, conversationId), isNull(memberships.leftAt)))
     .orderBy(asc(memberships.joinedAt));
 }
 
+/**
+ * CHAT-019: advances the caller's own `lastReadSeq` for a conversation, never backward --
+ * `GREATEST` mirrors the same guard `appendMessage` already uses for the sender's own bookkeeping
+ * (see its comment for the race this protects against now that both paths can touch the same
+ * row). Scoped to an *active* membership via the `WHERE` clause, so calling this after being
+ * removed from the conversation returns `undefined` (the caller maps that to a 404) rather than
+ * reviving a stale membership row.
+ *
+ * A single `UPDATE ... WHERE` is cheap enough that this needs no coalescing of its own on the
+ * write side -- the "at most once per second per conversation" AC is enforced client-side (a
+ * throttle keyed by conversation, see the web `ReadReceiptThrottle`), not something this function
+ * needs to protect against a chatty caller for.
+ */
+export async function markConversationRead(
+  db: DbExecutor,
+  conversationId: string,
+  userId: string,
+  seq: number,
+): Promise<Membership | undefined> {
+  const [row] = await db
+    .update(memberships)
+    .set({ lastReadSeq: sql`GREATEST(${memberships.lastReadSeq}, ${seq})` })
+    .where(
+      and(
+        eq(memberships.conversationId, conversationId),
+        eq(memberships.userId, userId),
+        isNull(memberships.leftAt),
+      ),
+    )
+    .returning();
+  return row;
+}
+
+/**
+ * CHAT-019: "mark as unread" from the conversation menu. `target` is resolved by the caller
+ * (`ConversationsService.markUnread`, as `lastSeq - 1`) rather than computed here, so this stays a
+ * plain, easily-tested `UPDATE` -- see that method's own comment for why "one less than the
+ * latest message" is the chosen semantics.
+ *
+ * `LEAST` guards the one direction that matters here: this must never *reduce* how much is
+ * already unread. If the person hasn't opened the conversation in days, `lastReadSeq` may already
+ * be well below `target`, and "mark as unread" re-flagging just the latest message would otherwise
+ * silently forgive everything older than that.
+ */
+export async function markConversationUnread(
+  db: DbExecutor,
+  conversationId: string,
+  userId: string,
+  target: number,
+): Promise<Membership | undefined> {
+  const [row] = await db
+    .update(memberships)
+    .set({ lastReadSeq: sql`LEAST(${memberships.lastReadSeq}, ${target})` })
+    .where(
+      and(
+        eq(memberships.conversationId, conversationId),
+        eq(memberships.userId, userId),
+        isNull(memberships.leftAt),
+      ),
+    )
+    .returning();
+  return row;
+}
+
+interface DirectPeerEntry {
+  user: typeof users.$inferSelect;
+  /** CHAT-019: the peer's own `lastReadSeq` -- carried alongside their user row (rather than a
+   *  separate query) since this join already sits on their membership row anyway. Powers a direct
+   *  conversation's "Seen" indicator (`peerLastReadSeq >= lastSeq`). */
+  lastReadSeq: number;
+}
+
 async function loadDirectPeers(
   db: DbExecutor,
   conversationIds: string[],
   excludeUserId: string,
-): Promise<Map<string, typeof users.$inferSelect>> {
-  const map = new Map<string, typeof users.$inferSelect>();
+): Promise<Map<string, DirectPeerEntry>> {
+  const map = new Map<string, DirectPeerEntry>();
   if (conversationIds.length === 0) return map;
 
   // Direct conversations have exactly two members, so "the other member" is every membership
   // row on these conversations that isn't the viewer's own.
   const rows = await db
-    .select({ conversationId: memberships.conversationId, user: users })
+    .select({
+      conversationId: memberships.conversationId,
+      user: users,
+      lastReadSeq: memberships.lastReadSeq,
+    })
     .from(memberships)
     .innerJoin(users, eq(users.id, memberships.userId))
     .where(
@@ -421,7 +519,7 @@ async function loadDirectPeers(
       ),
     );
   for (const row of rows) {
-    map.set(row.conversationId, row.user);
+    map.set(row.conversationId, { user: row.user, lastReadSeq: row.lastReadSeq });
   }
   return map;
 }
