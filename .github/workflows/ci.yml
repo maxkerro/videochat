@@ -55,7 +55,17 @@ jobs:
       - run: pnpm format:check
       - run: pnpm lint
       - run: pnpm typecheck
-      - run: pnpm test
+      # --concurrency=1: ubuntu-latest is a 2-vCPU runner, and `turbo run test` has no dependency
+      # between @videochat/api:test and @videochat/web:test, so by default it runs them at the same
+      # time -- api's e2e suite (Nest bootstraps, Argon2 hashing, Postgres/Redis round trips)
+      # competing with web's vitest/jsdom run for those same 2 cores. That contention was
+      # reproduced locally (also on a 2-vCPU box) as the direct cause of
+      # test/messages.e2e.spec.ts's "does not deliver a message to a socket connected as someone
+      # outside the conversation" intermittently timing out even at its already-widened 8s wait:
+      # the test is 100% reliable run alone, and only flakes as part of the full concurrent suite.
+      # Serializing the two packages' test runs removes that self-inflicted contention (see also
+      # apps/api/src/auth/password.ts's test-only Argon2 cost, the other half of this fix).
+      - run: pnpm exec turbo run test --concurrency=1
       - run: pnpm build
       - name: Migrations apply cleanly from an empty database
         run: pnpm db:reset -- --empty && pnpm db:migrate
