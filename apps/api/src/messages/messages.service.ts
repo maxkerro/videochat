@@ -1,8 +1,14 @@
 import { ConflictException, Inject, Injectable, NotFoundException } from '@nestjs/common';
-import { LIMITS, makeEnvelope, type Message, type SendMessageInput } from '@videochat/shared';
+import {
+  LIMITS,
+  makeEnvelope,
+  type Message,
+  type MessagePage,
+  type SendMessageInput,
+} from '@videochat/shared';
 import type { Database } from '../db/client.js';
 import { isConversationMember } from '../db/conversations.js';
-import { appendMessage, listRecentMessages } from '../db/messages.js';
+import { appendMessage, listMessagesPage } from '../db/messages.js';
 import { DB } from '../infra/tokens.js';
 import { RealtimeService } from '../realtime/realtime.service.js';
 import { toMessage } from './message-mapper.js';
@@ -52,12 +58,15 @@ export class MessagesService {
     return message;
   }
 
-  /** CHAT-014's minimal history load: the most recent page, oldest first. CHAT-016 replaces
-   *  this with real cursor-based paging. */
-  async listRecent(conversationId: string, userId: string): Promise<Message[]> {
+  /** CHAT-016: a cursor-paged page of history, oldest first. `beforeSeq` omitted loads the most
+   *  recent page; otherwise the page immediately before that `seq`. */
+  async listPage(conversationId: string, userId: string, beforeSeq?: number): Promise<MessagePage> {
     await this.requireMember(conversationId, userId);
-    const rows = await listRecentMessages(this.db, conversationId, LIMITS.messageHistoryPageSize);
-    return rows.map(toMessage);
+    const { rows, hasMore } = await listMessagesPage(this.db, conversationId, {
+      beforeSeq,
+      limit: LIMITS.messageHistoryPageSize,
+    });
+    return { messages: rows.map(toMessage), hasMore };
   }
 
   /** CHAT-022's "member-only access": a 404, not a 403, so a non-member can't tell a

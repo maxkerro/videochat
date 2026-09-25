@@ -36,15 +36,89 @@
   font-size: var(--text-xs);
   color: var(--color-text-muted);
 }
-.messages {
+.scrollWrap {
+  position: relative;
   flex: 1;
+  min-height: 0;
+}
+/* CHAT-016: flipped so the newest message sits at `scrollTop: 0` -- see ChatPane.tsx's
+ * `rows`/`reversedRows` comment. Each row un-flips itself (see `.virtualRow`) so content still
+ * reads top-to-bottom, left-to-right; only the scroll direction and paging-in point are flipped. */
+.scroll {
+  position: absolute;
+  inset: 0;
   overflow-y: auto;
-  list-style: none;
-  margin: 0;
-  padding: var(--space-4);
+  transform: scaleY(-1);
+}
+.virtualRow {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+  padding: var(--space-1) var(--space-4);
+  box-sizing: border-box;
+}
+.historyLoading {
+  position: absolute;
+  top: var(--space-2);
+  left: 50%;
+  transform: translateX(-50%);
+  font-size: var(--text-xs);
+  color: var(--color-text-muted);
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-full);
+  padding: var(--space-1) var(--space-3);
+}
+.jumpLatest {
+  position: absolute;
+  bottom: var(--space-3);
+  left: 50%;
+  transform: translateX(-50%);
+  font: inherit;
+  font-size: var(--text-xs);
+  font-weight: 600;
+  color: var(--color-text);
+  background: var(--color-surface);
+  border: 1px solid var(--color-border-strong);
+  border-radius: var(--radius-full);
+  padding: var(--space-1) var(--space-3);
+  box-shadow: var(--shadow-md, 0 2px 8px rgba(0, 0, 0, 0.12));
+  cursor: pointer;
+}
+.daySeparator {
   display: flex;
-  flex-direction: column;
+  justify-content: center;
+  padding: var(--space-2) 0;
+}
+.daySeparator span {
+  font-size: var(--text-xs);
+  font-weight: 600;
+  color: var(--color-text-muted);
+  background: var(--color-surface-sunken);
+  padding: var(--space-1) var(--space-3);
+  border-radius: var(--radius-full);
+}
+.unreadDivider {
+  display: flex;
+  align-items: center;
   gap: var(--space-2);
+  padding: var(--space-2) 0;
+}
+.unreadDivider::before,
+.unreadDivider::after {
+  content: '';
+  flex: 1;
+  height: 1px;
+  background: var(--color-danger);
+  opacity: 0.4;
+}
+.unreadDivider span {
+  font-size: var(--text-xs);
+  font-weight: 700;
+  color: var(--color-danger);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
 }
 .message {
   display: flex;
@@ -52,6 +126,9 @@
   align-items: flex-start;
   max-width: min(560px, 80%);
   gap: 2px;
+}
+.grouped {
+  margin-top: -2px;
 }
 .own {
   align-self: flex-end;

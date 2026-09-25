@@ -1,4 +1,4 @@
-import { and, desc, eq, sql } from 'drizzle-orm';
+import { and, desc, eq, lt, sql } from 'drizzle-orm';
 import { ulid } from 'ulid';
 import type { MessageType } from '@videochat/shared';
 import type { Database, DbExecutor } from './client.js';
@@ -86,10 +86,21 @@ async function findByClientMsgId(
   return row;
 }
 
+export interface MessagesPage {
+  /** Oldest first, ready to render top-to-bottom. */
+  rows: MessageRow[];
+  /** Whether requesting a page `before` the oldest row above would return anything. */
+  hasMore: boolean;
+}
+
 /**
- * The most recent `limit` messages in a conversation, oldest first (ready to render top-to-
- * bottom). A minimal stand-in for CHAT-016's cursor-paged, virtualized history -- just enough
- * to show a working conversation for CHAT-014's send/receive.
+ * CHAT-016: a cursor-paged slice of a conversation's history, oldest first (ready to render
+ * top-to-bottom). With `beforeSeq` omitted, returns the most recent `limit` messages; otherwise
+ * the `limit` messages immediately before (lower `seq` than) `beforeSeq`.
+ *
+ * `hasMore` is computed by fetching one extra row past `limit` rather than comparing the page
+ * length to `limit` -- the latter is wrong whenever the remaining history is an exact multiple
+ * of the page size (it would report no more, when there's exactly one more page left).
  *
  * Deliberately no floor at the caller's `memberships.joinedAt`: a member currently sees the
  * conversation's *entire* history, including messages from before they joined. Harmless for
@@ -97,18 +108,23 @@ async function findByClientMsgId(
  * decision -- not a silent carry-over -- once group conversations exist and someone can join one
  * partway through its history.
  */
-export async function listRecentMessages(
+export async function listMessagesPage(
   db: DbExecutor,
   conversationId: string,
-  limit: number,
-): Promise<MessageRow[]> {
+  options: { beforeSeq?: number; limit: number },
+): Promise<MessagesPage> {
+  const conditions = [eq(messages.conversationId, conversationId)];
+  if (options.beforeSeq !== undefined) conditions.push(lt(messages.seq, options.beforeSeq));
+
   const rows = await db
     .select()
     .from(messages)
-    .where(eq(messages.conversationId, conversationId))
+    .where(and(...conditions))
     .orderBy(desc(messages.seq))
-    .limit(limit);
-  return rows.reverse();
+    .limit(options.limit + 1);
+
+  const hasMore = rows.length > options.limit;
+  return { rows: rows.slice(0, options.limit).reverse(), hasMore };
 }
 
 /** Stable key for a direct conversation between two users, order-independent. */

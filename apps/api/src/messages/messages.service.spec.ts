@@ -6,7 +6,7 @@ import type { RealtimeService } from '../realtime/realtime.service.js';
 import { MessagesService } from './messages.service.js';
 
 vi.mock('../db/conversations.js', () => ({ isConversationMember: vi.fn() }));
-vi.mock('../db/messages.js', () => ({ appendMessage: vi.fn(), listRecentMessages: vi.fn() }));
+vi.mock('../db/messages.js', () => ({ appendMessage: vi.fn(), listMessagesPage: vi.fn() }));
 
 function makeMessageRow(overrides: Partial<Record<string, unknown>> = {}) {
   return {
@@ -94,23 +94,45 @@ describe('MessagesService', () => {
     });
   });
 
-  describe('listRecent', () => {
+  describe('listPage', () => {
     it('rejects a non-member with 404', async () => {
       vi.mocked(conversationsDb.isConversationMember).mockResolvedValue(false);
-      await expect(service.listRecent('conv-1', 'user-1')).rejects.toThrow(NotFoundException);
+      await expect(service.listPage('conv-1', 'user-1')).rejects.toThrow(NotFoundException);
     });
 
-    it('returns messages oldest first, mapped to the API shape', async () => {
+    it('returns messages oldest first, mapped to the API shape, with hasMore passed through', async () => {
       vi.mocked(conversationsDb.isConversationMember).mockResolvedValue(true);
-      vi.mocked(messagesDb.listRecentMessages).mockResolvedValue([
-        makeMessageRow({ seq: 1, id: 'a'.repeat(26) }),
-        makeMessageRow({ seq: 2, id: 'b'.repeat(26) }),
-      ]);
+      vi.mocked(messagesDb.listMessagesPage).mockResolvedValue({
+        rows: [
+          makeMessageRow({ seq: 1, id: 'a'.repeat(26) }),
+          makeMessageRow({ seq: 2, id: 'b'.repeat(26) }),
+        ],
+        hasMore: true,
+      });
 
-      const result = await service.listRecent('conv-1', 'user-1');
+      const result = await service.listPage('conv-1', 'user-1');
 
-      expect(result.map((m) => m.seq)).toEqual([1, 2]);
-      expect(result[0]!.createdAt).toBe('2026-01-01T00:00:00.000Z');
+      expect(result.messages.map((m) => m.seq)).toEqual([1, 2]);
+      expect(result.messages[0]!.createdAt).toBe('2026-01-01T00:00:00.000Z');
+      expect(result.hasMore).toBe(true);
+      expect(messagesDb.listMessagesPage).toHaveBeenCalledWith(
+        {},
+        'conv-1',
+        expect.objectContaining({ beforeSeq: undefined }),
+      );
+    });
+
+    it('forwards a `beforeSeq` cursor to the DB layer', async () => {
+      vi.mocked(conversationsDb.isConversationMember).mockResolvedValue(true);
+      vi.mocked(messagesDb.listMessagesPage).mockResolvedValue({ rows: [], hasMore: false });
+
+      await service.listPage('conv-1', 'user-1', 42);
+
+      expect(messagesDb.listMessagesPage).toHaveBeenCalledWith(
+        {},
+        'conv-1',
+        expect.objectContaining({ beforeSeq: 42 }),
+      );
     });
   });
 });

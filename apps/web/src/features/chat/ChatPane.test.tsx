@@ -4,7 +4,7 @@ import { makeEnvelope } from '@videochat/shared';
 import { ApiError } from '../../lib/api';
 import { jsonResponse } from '../../test/mockFetch';
 import { renderApp } from '../../test/renderApp';
-import { shouldRetryQuery } from './ChatPane';
+import { buildRows, shouldRetryQuery } from './ChatPane';
 
 const baseUser = {
   id: '11111111-1111-4111-8111-111111111111',
@@ -39,7 +39,7 @@ function session() {
   };
 }
 
-function conversation() {
+function conversation(overrides: Partial<{ lastSeq: number; lastReadSeq: number }> = {}) {
   return {
     id: conversationId,
     type: 'direct' as const,
@@ -49,6 +49,7 @@ function conversation() {
     role: 'member' as const,
     lastReadSeq: 1,
     peer,
+    ...overrides,
   };
 }
 
@@ -185,7 +186,8 @@ describe('ChatPane', () => {
             ? jsonResponse({ message: 'Server error' }, 500)
             : jsonResponse(conversation());
         },
-        [`GET /conversations/${conversationId}/messages`]: () => jsonResponse([]),
+        [`GET /conversations/${conversationId}/messages`]: () =>
+          jsonResponse({ messages: [], hasMore: false }),
       }),
     );
     renderApp(`/c/${conversationId}`);
@@ -230,7 +232,8 @@ describe('ChatPane', () => {
       routedFetch({
         'POST /auth/refresh': () => jsonResponse(session()),
         [`GET /conversations/${conversationId}`]: () => jsonResponse(conversation()),
-        [`GET /conversations/${conversationId}/messages`]: () => jsonResponse([message()]),
+        [`GET /conversations/${conversationId}/messages`]: () =>
+          jsonResponse({ messages: [message()], hasMore: false }),
         [`POST /conversations/${conversationId}/messages`]: () => sendPromise,
       }),
     );
@@ -264,7 +267,8 @@ describe('ChatPane', () => {
       routedFetch({
         'POST /auth/refresh': () => jsonResponse(session()),
         [`GET /conversations/${conversationId}`]: () => jsonResponse(conversation()),
-        [`GET /conversations/${conversationId}/messages`]: () => jsonResponse([]),
+        [`GET /conversations/${conversationId}/messages`]: () =>
+          jsonResponse({ messages: [], hasMore: false }),
         [`POST /conversations/${conversationId}/messages`]: () => {
           attempts += 1;
           if (attempts === 1) return jsonResponse({ message: 'Server error' }, 500);
@@ -302,11 +306,13 @@ describe('ChatPane', () => {
       routedFetch({
         'POST /auth/refresh': () => jsonResponse(session()),
         [`GET /conversations/${conversationId}`]: () => jsonResponse(conversation()),
-        [`GET /conversations/${conversationId}/messages`]: () => jsonResponse([]),
+        [`GET /conversations/${conversationId}/messages`]: () =>
+          jsonResponse({ messages: [], hasMore: false }),
         [`POST /conversations/${conversationId}/messages`]: () =>
           jsonResponse({ message: 'Server error' }, 500),
         [`GET /conversations/${otherConversationId}`]: () => jsonResponse(otherConversation()),
-        [`GET /conversations/${otherConversationId}/messages`]: () => jsonResponse([]),
+        [`GET /conversations/${otherConversationId}/messages`]: () =>
+          jsonResponse({ messages: [], hasMore: false }),
       }),
     );
     const { router } = renderApp(`/c/${conversationId}`);
@@ -334,7 +340,10 @@ describe('ChatPane', () => {
         'POST /auth/refresh': () => jsonResponse(session()),
         [`GET /conversations/${conversationId}`]: () => jsonResponse(conversation()),
         [`GET /conversations/${conversationId}/messages`]: () =>
-          jsonResponse([message({ body: 'see https://example.com/docs for details' })]),
+          jsonResponse({
+            messages: [message({ body: 'see https://example.com/docs for details' })],
+            hasMore: false,
+          }),
       }),
     );
     renderApp(`/c/${conversationId}`);
@@ -352,7 +361,8 @@ describe('ChatPane', () => {
       routedFetch({
         'POST /auth/refresh': () => jsonResponse(session()),
         [`GET /conversations/${conversationId}`]: () => jsonResponse(conversation()),
-        [`GET /conversations/${conversationId}/messages`]: () => jsonResponse([]),
+        [`GET /conversations/${conversationId}/messages`]: () =>
+          jsonResponse({ messages: [], hasMore: false }),
       }),
     );
     renderApp(`/c/${conversationId}`);
@@ -371,7 +381,8 @@ describe('ChatPane', () => {
       routedFetch({
         'POST /auth/refresh': () => jsonResponse(session()),
         [`GET /conversations/${conversationId}`]: () => jsonResponse(conversation()),
-        [`GET /conversations/${conversationId}/messages`]: () => jsonResponse([]),
+        [`GET /conversations/${conversationId}/messages`]: () =>
+          jsonResponse({ messages: [], hasMore: false }),
       }),
     );
     renderApp(`/c/${conversationId}`);
@@ -406,7 +417,8 @@ describe('ChatPane', () => {
         routedFetch({
           'POST /auth/refresh': () => jsonResponse(session()),
           [`GET /conversations/${conversationId}`]: () => jsonResponse(conversation()),
-          [`GET /conversations/${conversationId}/messages`]: () => jsonResponse([]),
+          [`GET /conversations/${conversationId}/messages`]: () =>
+            jsonResponse({ messages: [], hasMore: false }),
           [`POST /conversations/${conversationId}/messages`]: () => neverResolves,
         }),
       );
@@ -437,5 +449,202 @@ describe('ChatPane', () => {
       // spy would otherwise leak into later tests (there's no global `restoreMocks` configured).
       randomUUID.mockRestore();
     }
+  });
+
+  it('loads an older page of history once scrolled near the oldest loaded message', async () => {
+    let sawBefore: string | null = null;
+    vi.stubGlobal(
+      'fetch',
+      routedFetch({
+        'POST /auth/refresh': () => jsonResponse(session()),
+        [`GET /conversations/${conversationId}`]: () => jsonResponse(conversation()),
+        [`GET /conversations/${conversationId}/messages`]: (url) => {
+          const before = url.searchParams.get('before');
+          sawBefore = before;
+          if (!before) {
+            return jsonResponse({
+              messages: [
+                message({ id: 'C'.repeat(26), seq: 3, body: 'msg three' }),
+                message({ id: 'D'.repeat(26), seq: 4, body: 'msg four' }),
+              ],
+              hasMore: true,
+            });
+          }
+          return jsonResponse({
+            messages: [message({ id: 'A'.repeat(26), seq: 1, body: 'msg one' })],
+            hasMore: false,
+          });
+        },
+      }),
+    );
+    renderApp(`/c/${conversationId}`);
+    await screen.findByText('msg three');
+    expect(sawBefore).toBeNull();
+
+    const list = screen.getByRole('list', { name: 'Messages' });
+    // jsdom does no real layout -- scrollHeight/clientHeight/scrollTop are 0 by default, so a
+    // scroll near the oldest (DOM-bottom, since the list is flipped -- see ChatPane.tsx) end has
+    // to be faked directly on this element rather than by actually scrolling it.
+    Object.defineProperty(list, 'scrollHeight', { value: 1000, configurable: true });
+    Object.defineProperty(list, 'clientHeight', { value: 500, configurable: true });
+    Object.defineProperty(list, 'scrollTop', { value: 550, configurable: true, writable: true });
+    fireEvent.scroll(list);
+
+    await waitFor(() => expect(sawBefore).toBe('3'));
+    expect(await screen.findByText('msg one')).toBeInTheDocument();
+  });
+
+  it('shows a growing "new messages" count instead of auto-jumping while scrolled away from the latest message', async () => {
+    vi.stubGlobal(
+      'fetch',
+      routedFetch({
+        'POST /auth/refresh': () => jsonResponse(session()),
+        [`GET /conversations/${conversationId}`]: () => jsonResponse(conversation()),
+        [`GET /conversations/${conversationId}/messages`]: () =>
+          jsonResponse({ messages: [], hasMore: false }),
+      }),
+    );
+    renderApp(`/c/${conversationId}`);
+    await screen.findByLabelText('Message');
+    await waitFor(() => expect(FakeWebSocket.instances).toHaveLength(1));
+    const socket = FakeWebSocket.instances[0]!;
+    socket.emit('open');
+
+    const list = screen.getByRole('list', { name: 'Messages' });
+    Object.defineProperty(list, 'scrollTop', { value: 300, configurable: true, writable: true });
+    fireEvent.scroll(list);
+
+    const first = message({ id: 'E'.repeat(26), senderId: peer.id, body: 'while scrolled away' });
+    socket.emit('message', { data: JSON.stringify(makeEnvelope('message.new', first, first.id)) });
+    expect(await screen.findByRole('button', { name: '1 new message ↓' })).toBeInTheDocument();
+
+    const second = message({ id: 'F'.repeat(26), senderId: peer.id, body: 'another one' });
+    socket.emit('message', {
+      data: JSON.stringify(makeEnvelope('message.new', second, second.id)),
+    });
+    expect(await screen.findByRole('button', { name: '2 new messages ↓' })).toBeInTheDocument();
+
+    await userEvent.click(screen.getByRole('button', { name: '2 new messages ↓' }));
+    expect(screen.queryByRole('button', { name: /new message/ })).not.toBeInTheDocument();
+  });
+
+  it('shows a "New messages" divider before the first unread message when opening a conversation with unread history', async () => {
+    vi.stubGlobal(
+      'fetch',
+      routedFetch({
+        'POST /auth/refresh': () => jsonResponse(session()),
+        [`GET /conversations/${conversationId}`]: () =>
+          jsonResponse(conversation({ lastReadSeq: 1 })),
+        [`GET /conversations/${conversationId}/messages`]: () =>
+          jsonResponse({
+            messages: [
+              message({ id: 'A'.repeat(26), seq: 1, body: 'already read' }),
+              message({ id: 'B'.repeat(26), seq: 2, body: 'first unread' }),
+            ],
+            hasMore: false,
+          }),
+      }),
+    );
+    renderApp(`/c/${conversationId}`);
+    expect(await screen.findByText('first unread')).toBeInTheDocument();
+    expect(screen.getByLabelText('New messages')).toBeInTheDocument();
+  });
+
+  it('shows no "New messages" divider when the conversation is already fully read', async () => {
+    vi.stubGlobal(
+      'fetch',
+      routedFetch({
+        'POST /auth/refresh': () => jsonResponse(session()),
+        [`GET /conversations/${conversationId}`]: () =>
+          jsonResponse(conversation({ lastReadSeq: 1 })),
+        [`GET /conversations/${conversationId}/messages`]: () =>
+          jsonResponse({ messages: [message({ seq: 1 })], hasMore: false }),
+      }),
+    );
+    renderApp(`/c/${conversationId}`);
+    await screen.findByText('Hi there');
+    expect(screen.queryByLabelText('New messages')).not.toBeInTheDocument();
+  });
+});
+
+describe('buildRows', () => {
+  it('inserts a day separator before the first message of each new calendar day', () => {
+    const rows = buildRows(
+      [
+        message({ id: 'A'.repeat(26), seq: 1, createdAt: '2026-01-01T10:00:00.000Z' }),
+        message({ id: 'B'.repeat(26), seq: 2, createdAt: '2026-01-02T09:00:00.000Z' }),
+      ],
+      [],
+      null,
+    );
+    expect(rows.map((r) => r.kind)).toEqual(['day', 'message', 'day', 'message']);
+  });
+
+  it('groups consecutive messages from the same sender within a minute, breaking on a sender change or a gap', () => {
+    const rows = buildRows(
+      [
+        message({
+          id: 'A'.repeat(26),
+          seq: 1,
+          senderId: peer.id,
+          createdAt: '2026-01-01T10:00:00.000Z',
+        }),
+        message({
+          id: 'B'.repeat(26),
+          seq: 2,
+          senderId: peer.id,
+          createdAt: '2026-01-01T10:00:30.000Z',
+        }),
+        message({
+          id: 'C'.repeat(26),
+          seq: 3,
+          senderId: baseUser.id,
+          createdAt: '2026-01-01T10:00:40.000Z',
+        }),
+        message({
+          id: 'D'.repeat(26),
+          seq: 4,
+          senderId: peer.id,
+          createdAt: '2026-01-01T10:05:00.000Z',
+        }),
+      ],
+      [],
+      null,
+    );
+    const grouped = rows
+      .filter((r): r is Extract<(typeof rows)[number], { kind: 'message' }> => r.kind === 'message')
+      .map((r) => r.grouped);
+    expect(grouped).toEqual([false, true, false, false]);
+  });
+
+  it('places the "New messages" divider right before the first message past the captured unread cursor', () => {
+    const rows = buildRows(
+      [
+        message({ id: 'A'.repeat(26), seq: 1 }),
+        message({ id: 'B'.repeat(26), seq: 2 }),
+        message({ id: 'C'.repeat(26), seq: 3 }),
+      ],
+      [],
+      1,
+    );
+    expect(rows.map((r) => r.kind)).toEqual(['day', 'message', 'unread', 'message', 'message']);
+  });
+
+  it('adds no unread divider when there is nothing unread', () => {
+    const messages = [
+      message({ id: 'A'.repeat(26), seq: 1 }),
+      message({ id: 'B'.repeat(26), seq: 2 }),
+    ];
+    expect(buildRows(messages, [], null).some((r) => r.kind === 'unread')).toBe(false);
+    expect(buildRows(messages, [], 2).some((r) => r.kind === 'unread')).toBe(false);
+  });
+
+  it('appends pending (optimistic) sends after every real message', () => {
+    const rows = buildRows(
+      [message({ id: 'A'.repeat(26), seq: 1 })],
+      [{ clientMsgId: 'c-1', conversationId: 'conv-1', body: 'hi', status: 'sending' }],
+      null,
+    );
+    expect(rows.map((r) => r.kind)).toEqual(['day', 'message', 'pending']);
   });
 });

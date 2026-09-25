@@ -1,9 +1,9 @@
 import {
-  messageListSchema,
+  messagePageSchema,
   messageSchema,
   sendMessageSchema,
   type Message,
-  type MessageList,
+  type MessagePage,
   type SendMessageInput,
 } from '@videochat/shared';
 import { apiGet, apiPost } from '../../lib/api';
@@ -12,8 +12,15 @@ function authHeader(accessToken: string) {
   return { Authorization: `Bearer ${accessToken}` };
 }
 
-export function fetchMessages(accessToken: string, conversationId: string): Promise<MessageList> {
-  return apiGet(`/conversations/${conversationId}/messages`, messageListSchema, {
+/** CHAT-016: `before` pages further back in history -- the `seq` of the oldest message already
+ *  loaded. Omitted for the first (most recent) page. */
+export function fetchMessages(
+  accessToken: string,
+  conversationId: string,
+  before?: number,
+): Promise<MessagePage> {
+  const query = before !== undefined ? `?before=${before}` : '';
+  return apiGet(`/conversations/${conversationId}/messages${query}`, messagePageSchema, {
     headers: authHeader(accessToken),
   });
 }

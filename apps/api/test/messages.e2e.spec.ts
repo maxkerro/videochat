@@ -144,7 +144,63 @@ describe.skipIf(!hasInfra)('messages HTTP flow (CHAT-014)', () => {
       .get(`/conversations/${conversationId}/messages`)
       .set(auth(b.accessToken))
       .expect(200);
-    expect(history.body).toEqual([sent.body]);
+    expect(history.body).toEqual({ messages: [sent.body], hasMore: false });
+  });
+
+  it('pages history with `before`, oldest first, reporting hasMore correctly at the boundary', async () => {
+    const a = await signUpAndLogIn();
+    const b = await signUpAndLogIn();
+    const conversationId = await startDirectConversation(a, b);
+
+    // 5 messages, seq 1..5. Page in batches of 2 via a query override isn't available (the page
+    // size is fixed at 50), so instead this exercises `before` directly against the real seqs to
+    // confirm ordering and the hasMore boundary without needing 50+ messages.
+    for (let i = 1; i <= 5; i += 1) {
+      await request(server())
+        .post(`/conversations/${conversationId}/messages`)
+        .set(auth(a.accessToken))
+        .send({ clientMsgId: `c-page-${i}`, body: `msg ${i}` })
+        .expect(201);
+    }
+
+    const firstPage = await request(server())
+      .get(`/conversations/${conversationId}/messages`)
+      .set(auth(a.accessToken))
+      .expect(200);
+    expect(firstPage.body.messages.map((m: { seq: number }) => m.seq)).toEqual([1, 2, 3, 4, 5]);
+    expect(firstPage.body.hasMore).toBe(false);
+
+    const olderThan3 = await request(server())
+      .get(`/conversations/${conversationId}/messages`)
+      .query({ before: 3 })
+      .set(auth(a.accessToken))
+      .expect(200);
+    expect(olderThan3.body.messages.map((m: { seq: number }) => m.seq)).toEqual([1, 2]);
+    expect(olderThan3.body.hasMore).toBe(false);
+
+    const olderThan1 = await request(server())
+      .get(`/conversations/${conversationId}/messages`)
+      .query({ before: 1 })
+      .set(auth(a.accessToken))
+      .expect(200);
+    expect(olderThan1.body).toEqual({ messages: [], hasMore: false });
+  });
+
+  it('rejects a non-numeric or non-positive `before` with 400', async () => {
+    const a = await signUpAndLogIn();
+    const b = await signUpAndLogIn();
+    const conversationId = await startDirectConversation(a, b);
+
+    await request(server())
+      .get(`/conversations/${conversationId}/messages`)
+      .query({ before: 'not-a-number' })
+      .set(auth(a.accessToken))
+      .expect(400);
+    await request(server())
+      .get(`/conversations/${conversationId}/messages`)
+      .query({ before: -1 })
+      .set(auth(a.accessToken))
+      .expect(400);
   });
 
   it('does not deliver a message to a socket connected as someone outside the conversation', async () => {
@@ -200,7 +256,7 @@ describe.skipIf(!hasInfra)('messages HTTP flow (CHAT-014)', () => {
       .get(`/conversations/${conversationAC}/messages`)
       .set(auth(a.accessToken))
       .expect(200);
-    expect(historyAC.body).toEqual([]);
+    expect(historyAC.body).toEqual({ messages: [], hasMore: false });
 
     // The dedupe lookup in appendMessage runs before it bumps the conversation's seq counter, so
     // a rejected cross-conversation reuse must not have consumed a seq for AC either -- confirm
@@ -235,7 +291,7 @@ describe.skipIf(!hasInfra)('messages HTTP flow (CHAT-014)', () => {
       .get(`/conversations/${conversationId}/messages`)
       .set(auth(a.accessToken))
       .expect(200);
-    expect(history.body).toHaveLength(1);
+    expect(history.body.messages).toHaveLength(1);
   });
 
   it("advances the sender's own lastReadSeq, so their own sent message never shows as unread", async () => {
