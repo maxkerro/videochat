@@ -1,13 +1,22 @@
 import { vi, type Mock } from 'vitest';
-import { NotFoundException } from '@nestjs/common';
+import { BadRequestException, NotFoundException } from '@nestjs/common';
 
+vi.mock('../db/blocks.js', () => ({
+  blockUser: vi.fn(),
+  listBlockedUsers: vi.fn(),
+  listBlockRelationshipUserIds: vi.fn(),
+  unblockUser: vi.fn(),
+}));
 vi.mock('../db/users.js', () => ({
+  findUserByEmail: vi.fn(),
   findUserById: vi.fn(),
   isUsernameTaken: vi.fn(),
+  searchUsersByUsernamePrefix: vi.fn(),
   setAvatarKey: vi.fn(),
   updateProfile: vi.fn(),
 }));
 
+import * as blocksDb from '../db/blocks.js';
 import * as usersDb from '../db/users.js';
 import { UsersService } from './users.service.js';
 import type { User } from '../db/schema.js';
@@ -37,7 +46,10 @@ function makeService() {
   return { service, s3, avatars };
 }
 
-beforeEach(() => vi.clearAllMocks());
+beforeEach(() => {
+  vi.clearAllMocks();
+  vi.mocked(blocksDb.listBlockRelationshipUserIds).mockResolvedValue(new Set());
+});
 
 describe('UsersService', () => {
   describe('getMe', () => {
@@ -132,6 +144,88 @@ describe('UsersService', () => {
         'avatars/user-1',
       );
       expect(me.id).toBe('user-1');
+    });
+  });
+
+  describe('searchUsers (CHAT-021)', () => {
+    it('excludes anyone in a block relationship with the searcher from a username-prefix search', async () => {
+      vi.mocked(blocksDb.listBlockRelationshipUserIds).mockResolvedValue(new Set(['blocked-1']));
+      (usersDb.searchUsersByUsernamePrefix as Mock).mockResolvedValue([makeUser({ id: 'ben' })]);
+      const { service } = makeService();
+
+      await service.searchUsers('ben', 'user-1');
+
+      expect(usersDb.searchUsersByUsernamePrefix).toHaveBeenCalledWith(
+        expect.anything(),
+        'ben',
+        'user-1',
+        expect.any(Number),
+        ['blocked-1'],
+      );
+    });
+
+    it('returns nothing for an exact-email match against someone in a block relationship', async () => {
+      vi.mocked(blocksDb.listBlockRelationshipUserIds).mockResolvedValue(new Set(['blocked-1']));
+      (usersDb.findUserByEmail as Mock).mockResolvedValue(makeUser({ id: 'blocked-1' }));
+      const { service } = makeService();
+
+      const results = await service.searchUsers('blocked@test.dev', 'user-1');
+
+      expect(results).toEqual([]);
+    });
+
+    it('returns the exact-email match when there is no block relationship', async () => {
+      vi.mocked(blocksDb.listBlockRelationshipUserIds).mockResolvedValue(new Set());
+      (usersDb.findUserByEmail as Mock).mockResolvedValue(makeUser({ id: 'ben' }));
+      const { service } = makeService();
+
+      const results = await service.searchUsers('ben@test.dev', 'user-1');
+
+      expect(results).toHaveLength(1);
+    });
+  });
+
+  describe('blockUser (CHAT-021)', () => {
+    it('rejects blocking yourself', async () => {
+      const { service } = makeService();
+      await expect(service.blockUser('user-1', 'user-1')).rejects.toBeInstanceOf(
+        BadRequestException,
+      );
+      expect(blocksDb.blockUser).not.toHaveBeenCalled();
+    });
+
+    it('404s for a target that does not exist', async () => {
+      (usersDb.findUserById as Mock).mockResolvedValue(undefined);
+      const { service } = makeService();
+      await expect(service.blockUser('user-1', 'ghost')).rejects.toBeInstanceOf(NotFoundException);
+    });
+
+    it('records the block', async () => {
+      (usersDb.findUserById as Mock).mockResolvedValue(makeUser({ id: 'ben' }));
+      const { service } = makeService();
+      await service.blockUser('user-1', 'ben');
+      expect(blocksDb.blockUser).toHaveBeenCalledWith(expect.anything(), 'user-1', 'ben');
+    });
+  });
+
+  describe('unblockUser (CHAT-021)', () => {
+    it('removes the block without requiring one to have existed', async () => {
+      const { service } = makeService();
+      await service.unblockUser('user-1', 'ben');
+      expect(blocksDb.unblockUser).toHaveBeenCalledWith(expect.anything(), 'user-1', 'ben');
+    });
+  });
+
+  describe('listBlockedUsers (CHAT-021)', () => {
+    it('maps each blocked user to the public shape', async () => {
+      vi.mocked(blocksDb.listBlockedUsers).mockResolvedValue([
+        { user: makeUser({ id: 'ben' }), createdAt: new Date() },
+      ]);
+      const { service } = makeService();
+
+      const result = await service.listBlockedUsers('user-1');
+
+      expect(result).toEqual([expect.objectContaining({ id: 'ben' })]);
     });
   });
 });

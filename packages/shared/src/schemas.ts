@@ -262,6 +262,12 @@ export const typingEventSchema = z.object({
 });
 export type TypingEvent = z.infer<typeof typingEventSchema>;
 
+/** CHAT-021: the "who I've blocked" list -- reuses `publicUserSchema` since a blocked user is
+ *  shown exactly like anyone else (avatar, display name, username), just with an "Unblock"
+ *  action instead of whatever a normal result row offers. */
+export const blockedUsersListSchema = z.object({ users: z.array(publicUserSchema) });
+export type BlockedUsersList = z.infer<typeof blockedUsersListSchema>;
+
 /** Health endpoint contract, consumed by the web shell's status indicator. */
 export const dependencyStatusSchema = z.enum(['up', 'down']);
 export const healthResponseSchema = z.object({

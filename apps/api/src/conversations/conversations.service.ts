@@ -15,6 +15,7 @@ import {
 } from '@videochat/shared';
 import type { Database } from '../db/client.js';
 import { DB } from '../infra/tokens.js';
+import { hasBlockEitherDirection, isBlocked } from '../db/blocks.js';
 import {
   addGroupMembers,
   countActiveMembers,
@@ -59,6 +60,15 @@ export class ConversationsService {
     }
     const other = await findUserById(this.db, otherUserId);
     if (!other) throw new NotFoundException('User not found');
+
+    // CHAT-021: "blocked users cannot DM you" reads either way -- neither side of a block should
+    // be able to start (or reopen) the DM, including the blocker themselves; if they want to talk
+    // again they'd unblock first. 404, not 403: matching this file's existing "member-only access
+    // is a 404" reasoning (see `requireGroup`'s own comment) rather than confirming to either
+    // party that a block exists between them -- a 403 here would do exactly that.
+    if (await hasBlockEitherDirection(this.db, userId, otherUserId)) {
+      throw new NotFoundException('User not found');
+    }
 
     const conv = await findOrCreateDirectConversation(this.db, userId, otherUserId);
     // Whether this just created the conversation or found an existing one, make sure both
@@ -168,6 +178,22 @@ export class ConversationsService {
       throw new BadRequestException(`A group can have at most ${LIMITS.groupMaxMembers} members`);
     }
     const users = await this.requireUsersExist(uniqueMemberIds);
+
+    // CHAT-021: "blocked users cannot ... add you to groups" -- read literally, if A has blocked
+    // B, B can't add A. Checked per member being added (each is an independent `isBlocked` lookup
+    // against the actor) rather than skipping them silently like an already-active member is:
+    // this is the actor's own action being refused, not a harmless duplicate, so it gets an
+    // explicit error rather than quietly leaving that one person out.
+    const blockedByAdds = await Promise.all(
+      uniqueMemberIds.map(async (memberId) => ({
+        memberId,
+        blocked: await isBlocked(this.db, memberId, userId),
+      })),
+    );
+    const blockingMember = blockedByAdds.find((b) => b.blocked);
+    if (blockingMember) {
+      throw new ForbiddenException("Can't add someone who has blocked you");
+    }
 
     const added = await addGroupMembers(this.db, conversationId, uniqueMemberIds);
     for (const memberId of added) this.realtime.addConversationForUser(memberId, conversationId);

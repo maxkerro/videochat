@@ -425,4 +425,25 @@ describe.skipIf(!hasInfra)('messages HTTP flow (CHAT-014)', () => {
       .send({ clientMsgId: 'c-1', body: 'hi' })
       .expect(404);
   });
+
+  it('CHAT-021: rejects a message into a DM whose recipient has blocked the sender, with a 403', async () => {
+    const a = await signUpAndLogIn();
+    const b = await signUpAndLogIn();
+    const conversationId = await startDirectConversation(a, b);
+
+    await request(server()).post(`/users/${a.user.id}/block`).set(auth(b.accessToken)).expect(200);
+
+    await request(server())
+      .post(`/conversations/${conversationId}/messages`)
+      .set(auth(a.accessToken))
+      .send({ clientMsgId: 'c-blocked', body: 'are you there?' })
+      .expect(403);
+
+    // Never delivered or persisted -- the recipient's history stays exactly as it was.
+    const history = await request(server())
+      .get(`/conversations/${conversationId}/messages`)
+      .set(auth(b.accessToken))
+      .expect(200);
+    expect(history.body.messages).toEqual([]);
+  });
 });

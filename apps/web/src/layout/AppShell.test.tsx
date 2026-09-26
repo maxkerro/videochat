@@ -216,6 +216,29 @@ describe('App shell', () => {
     expect(await screen.findByRole('heading', { name: 'Dara Singh' })).toBeInTheDocument();
   });
 
+  it('CHAT-021: shows a "could not be found" toast for a 404 starting a chat (covers both "no such user" and a block, indistinguishably by design)', async () => {
+    const dara = {
+      id: '99999999-9999-4999-8999-999999999999',
+      username: 'dara',
+      displayName: 'Dara Singh',
+      avatarUrl: null,
+    };
+    vi.stubGlobal(
+      'fetch',
+      authedFetch({
+        'GET /users/search': () => jsonResponse({ users: [dara] }),
+        'POST /conversations/direct': () => jsonResponse({ message: 'User not found' }, 404),
+      }),
+    );
+    renderApp('/');
+    await openNewChatDialog();
+    await userEvent.type(screen.getByLabelText('Username or email'), 'dara');
+    const result = await screen.findByRole('button', { name: /Dara Singh/ });
+    await userEvent.click(result);
+
+    expect(await screen.findByText("That person couldn't be found.")).toBeInTheDocument();
+  });
+
   it('CHAT-018: creates a group with a name and picked members, then navigates to it', async () => {
     const newGroupId = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
     const dara = {

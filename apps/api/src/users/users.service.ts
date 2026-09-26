@@ -1,7 +1,19 @@
-import { ConflictException, Inject, Injectable, NotFoundException } from '@nestjs/common';
+import {
+  BadRequestException,
+  ConflictException,
+  Inject,
+  Injectable,
+  NotFoundException,
+} from '@nestjs/common';
 import { LIMITS, type Me, type PublicUser, type UpdateProfileInput } from '@videochat/shared';
 import type { Database } from '../db/client.js';
 import { DB } from '../infra/tokens.js';
+import {
+  blockUser,
+  listBlockedUsers,
+  listBlockRelationshipUserIds,
+  unblockUser,
+} from '../db/blocks.js';
 import {
   findUserByEmail,
   findUserById,
@@ -57,11 +69,18 @@ export class UsersService {
    * CHAT-012 "find people": a query containing "@" is treated as an exact email lookup (never
    * partial -- partial email matching would let one user enumerate others' addresses), anything
    * else as a username prefix search.
+   *
+   * CHAT-021: "blocked users do not appear in search" -- applied from the searcher's own point of
+   * view, excluding anyone in a block relationship with them either direction. Showing someone
+   * who blocked the searcher (or whom the searcher blocked) defeats the point of either side of
+   * that relationship, so this isn't just "people I've blocked".
    */
   async searchUsers(query: string, excludeUserId: string): Promise<PublicUser[]> {
+    const blockRelationshipIds = await listBlockRelationshipUserIds(this.db, excludeUserId);
+
     if (query.includes('@')) {
       const user = await findUserByEmail(this.db, query);
-      if (!user || user.id === excludeUserId) return [];
+      if (!user || user.id === excludeUserId || blockRelationshipIds.has(user.id)) return [];
       const avatarUrl = await this.s3.getAvatarUrl(user.avatarKey);
       return [toPublicUser(user, avatarUrl)];
     }
@@ -71,9 +90,39 @@ export class UsersService {
       query,
       excludeUserId,
       LIMITS.userSearchMaxResults,
+      Array.from(blockRelationshipIds),
     );
     return Promise.all(
       matches.map(async (user) => toPublicUser(user, await this.s3.getAvatarUrl(user.avatarKey))),
+    );
+  }
+
+  /** CHAT-021: block someone -- from either a profile or a DM. Idempotent: blocking someone
+   *  already blocked just confirms the state rather than erroring. "Blocking is silent to the
+   *  blocked person" (AC) is enforced entirely by omission here -- this never notifies the target,
+   *  posts a system message, or changes anything on their side of the conversation; see this
+   *  story's write-up for the full list of what "silent" was decided to mean. */
+  async blockUser(userId: string, targetId: string): Promise<void> {
+    if (userId === targetId) throw new BadRequestException("Can't block yourself");
+    const target = await findUserById(this.db, targetId);
+    if (!target) throw new NotFoundException('User not found');
+    await blockUser(this.db, userId, targetId);
+  }
+
+  /** CHAT-021: unblock. Also idempotent -- unblocking someone not currently blocked is a no-op,
+   *  not a 404, matching `blockUser`'s own "this call ensures a state" framing. */
+  async unblockUser(userId: string, targetId: string): Promise<void> {
+    await unblockUser(this.db, userId, targetId);
+  }
+
+  /** CHAT-021: the caller's own blocklist ("view/manage a blocklist" from the story brief), most
+   *  recently blocked first. */
+  async listBlockedUsers(userId: string): Promise<PublicUser[]> {
+    const rows = await listBlockedUsers(this.db, userId);
+    return Promise.all(
+      rows.map(async (row) =>
+        toPublicUser(row.user, await this.s3.getAvatarUrl(row.user.avatarKey)),
+      ),
     );
   }
 

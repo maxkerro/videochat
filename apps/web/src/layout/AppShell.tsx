@@ -5,6 +5,7 @@ import { Link, Outlet, useMatch, useNavigate } from 'react-router';
 import { Avatar, Button, Input, Menu, Modal, useToast } from '../components/ui';
 import { AccountMenu } from '../features/auth/AccountMenu';
 import { useAuth, withAuthRetry } from '../features/auth/AuthContext';
+import { ApiError } from '../lib/api';
 import {
   createGroupConversation,
   searchUsers,
@@ -165,8 +166,20 @@ export function AppShell() {
       setNewChatOpen(false);
       await queryClient.invalidateQueries({ queryKey: ['conversations'] });
       navigate(`/c/${conversation.id}`);
-    } catch {
-      toast({ title: "Couldn't start chat", description: 'Please try again.', tone: 'danger' });
+    } catch (error) {
+      // CHAT-021: a 404 here covers both "no such user" and "blocked, either direction" -- the
+      // server deliberately makes those indistinguishable (see `ConversationsService.startDirect`)
+      // rather than confirming a block exists, so this can't say anything more specific than the
+      // existing "no such user" message either, without leaking exactly the thing that 404
+      // was chosen to hide.
+      const notFound = error instanceof ApiError && error.status === 404;
+      toast({
+        title: "Couldn't start that chat",
+        description: notFound
+          ? "That person couldn't be found."
+          : 'Something went wrong. Please try again.',
+        tone: 'danger',
+      });
     }
   }
 

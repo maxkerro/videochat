@@ -1,4 +1,4 @@
-import { useInfiniteQuery, useQuery, useQueryClient } from '@tanstack/react-query';
+import { useInfiniteQuery, useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useVirtualizer } from '@tanstack/react-virtual';
 import {
   conversationReadEventSchema,
@@ -21,12 +21,13 @@ import {
   type KeyboardEvent,
 } from 'react';
 import { Link, useNavigate, useParams } from 'react-router';
-import { Avatar, Button, Modal } from '../../components/ui';
+import { Avatar, Button, Menu, Modal, useToast } from '../../components/ui';
 import { ApiError } from '../../lib/api';
 import { cx } from '../../lib/cx';
 import { recordSeenSeq } from '../../lib/lastSeenSeq';
 import { useDocumentVisible } from '../../lib/useDocumentVisible';
 import { enqueueOutboxMessage, removeOutboxMessage } from '../../lib/outbox';
+import { blockUser, fetchBlockedUsers, unblockUser } from '../conversations/blocksApi';
 import {
   fetchConversation,
   fetchMembers,
@@ -53,11 +54,46 @@ import styles from './ChatPane.module.css';
  *  cheap enough to not matter running in the background of every open conversation. */
 const TYPING_PRUNE_INTERVAL_MS = 1000;
 
+/** CHAT-021: why a `'failed'` pending message failed, so the composer can show something more
+ *  specific than a bare "Failed -- tap to retry" when the reason is known. `'rate-limited'` is
+ *  the AC's own case (more than 20 messages in 10s -- see `MessageThrottlerGuard`); `'blocked'`
+ *  is "a blocked user's messages to you are rejected" from the recipient's side. Both still offer
+ *  retry, same as a plain failure -- this only changes the label, not the recovery path (a rate
+ *  limit clears itself shortly; a block might have been lifted by the time of a retry too). */
+type SendFailureReason = 'rate-limited' | 'blocked' | 'other';
+
 interface PendingMessage {
   clientMsgId: string;
   conversationId: string;
   body: string;
   status: 'sending' | 'failed';
+  failureReason?: SendFailureReason;
+}
+
+/** CHAT-021: classifies a failed send's `ApiError` status into the reasons the composer can show
+ *  distinctly. `429` is `MessageThrottlerGuard`'s "slow down" response; `403` is
+ *  `MessagesService.send`'s "recipient has blocked you" rejection. Anything else (validation,
+ *  a 404 from being removed mid-conversation, a 500) falls back to the existing generic message. */
+export function classifySendFailure(error: unknown): SendFailureReason {
+  if (error instanceof ApiError) {
+    if (error.status === 429) return 'rate-limited';
+    if (error.status === 403) return 'blocked';
+  }
+  return 'other';
+}
+
+/** CHAT-021: what the composer shows for a failed pending message, given why it failed. Still
+ *  ends in "tap to retry" for every case -- see `SendFailureReason`'s own comment on why retry
+ *  stays available even for these two more specific reasons. */
+export function failureLabelFor(reason: SendFailureReason | undefined): string {
+  switch (reason) {
+    case 'rate-limited':
+      return "You're sending messages too fast -- wait a moment and tap to retry";
+    case 'blocked':
+      return "Couldn't be delivered -- tap to retry";
+    default:
+      return 'Failed -- tap to retry';
+  }
 }
 
 /** Character counter only shows up once the person is getting close to the limit. */
@@ -208,6 +244,31 @@ export function ChatPane() {
     queryKey: ['members', conversationId],
     queryFn: () => withAuthRetry(auth, (token) => fetchMembers(token, conversationId!)),
     enabled: enabled && conversationQuery.data?.type === 'group',
+  });
+
+  // CHAT-021: whether the peer of *this* direct conversation is currently blocked, so the header
+  // menu can offer "Block"/"Unblock" as the right toggle. Shares the `['blocked-users']` query key
+  // with `ProfilePage`'s blocklist view, so blocking/unblocking from either place invalidates and
+  // refreshes both without a page reload.
+  const { toast } = useToast();
+  const peer = conversationQuery.data?.peer;
+  const blockedUsersQuery = useQuery({
+    queryKey: ['blocked-users'],
+    queryFn: () => withAuthRetry(auth, fetchBlockedUsers),
+    enabled: enabled && conversationQuery.data?.type === 'direct',
+  });
+  const peerIsBlocked = Boolean(
+    peer && blockedUsersQuery.data?.users.some((u) => u.id === peer.id),
+  );
+  const blockMutation = useMutation({
+    mutationFn: (userId: string) => withAuthRetry(auth, (token) => blockUser(token, userId)),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['blocked-users'] }),
+    onError: () => toast({ title: "Couldn't block that person", tone: 'danger' }),
+  });
+  const unblockMutation = useMutation({
+    mutationFn: (userId: string) => withAuthRetry(auth, (token) => unblockUser(token, userId)),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['blocked-users'] }),
+    onError: () => toast({ title: "Couldn't unblock that person", tone: 'danger' }),
   });
 
   const messagesQuery = useInfiniteQuery({
@@ -494,8 +555,11 @@ export function ChatPane() {
           queuedAt: Date.now(),
         });
       }
+      const failureReason = classifySendFailure(error);
       setPending((prev) =>
-        prev.map((p) => (p.clientMsgId === target.clientMsgId ? { ...p, status: 'failed' } : p)),
+        prev.map((p) =>
+          p.clientMsgId === target.clientMsgId ? { ...p, status: 'failed', failureReason } : p,
+        ),
       );
     }
   }
@@ -610,6 +674,29 @@ export function ChatPane() {
             Members
           </Button>
         )}
+        {/* CHAT-021: block/unblock, direct-conversation-only -- a group has no single "the other
+         *  person" to act on (see `MessagesService.send`'s own comment on why block enforcement
+         *  itself is scoped to DMs). */}
+        {conversation?.type === 'direct' && peer && (
+          <Menu
+            trigger={
+              <Button variant="ghost" size="icon" aria-label={`More options for ${title}`}>
+                ⋮
+              </Button>
+            }
+            items={[
+              peerIsBlocked
+                ? {
+                    label: `Unblock ${peer.displayName}`,
+                    onSelect: () => unblockMutation.mutate(peer.id),
+                  }
+                : {
+                    label: `Block ${peer.displayName}`,
+                    onSelect: () => blockMutation.mutate(peer.id),
+                  },
+            ]}
+          />
+        )}
       </header>
 
       {messagesQuery.isError ? (
@@ -698,7 +785,7 @@ export function ChatPane() {
                             className={styles.retry}
                             onClick={() => handleRetry(row.pending)}
                           >
-                            Failed -- tap to retry
+                            {failureLabelFor(row.pending.failureReason)}
                           </button>
                         )}
                       </div>

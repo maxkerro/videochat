@@ -1,4 +1,4 @@
-import { sql, eq, and, ne } from 'drizzle-orm';
+import { sql, eq, and, ne, notInArray } from 'drizzle-orm';
 import { LIMITS } from '@videochat/shared';
 import type { DbExecutor } from './client.js';
 import { users, type NewUser, type User } from './schema.js';
@@ -36,20 +36,30 @@ export async function findUserById(db: DbExecutor, id: string): Promise<User | u
  * CHAT-012 "find people": prefix-matches usernames case-insensitively, excluding the searching
  * user. Ordered alphabetically and capped so a broad query (e.g. a single common letter) can't
  * be used to enumerate the whole user table.
+ *
+ * CHAT-021: `excludeAlsoIds` additionally drops anyone in a block relationship with the searcher
+ * (either direction -- see `listBlockRelationshipUserIds`), so "blocked users do not appear in
+ * search" is enforced in the query itself rather than by filtering the page afterwards, which
+ * would silently return fewer than `limit` results instead of backfilling from the next rows.
  */
 export async function searchUsersByUsernamePrefix(
   db: DbExecutor,
   prefix: string,
   excludeUserId: string,
   limit: number,
+  excludeAlsoIds: string[] = [],
 ): Promise<User[]> {
   // Escape ILIKE's own wildcard characters so a search term containing "%" or "_" is matched
   // literally, not as a pattern -- otherwise a query like "a%" would match far more than intended.
   const escaped = prefix.replace(/[\\%_]/g, (c) => `\\${c}`);
+  const conditions = [sql`${users.username} ILIKE ${escaped + '%'}`, ne(users.id, excludeUserId)];
+  // `notInArray` with an empty array would build `NOT IN ()`, invalid SQL -- only add the
+  // condition when there's actually something to exclude.
+  if (excludeAlsoIds.length > 0) conditions.push(notInArray(users.id, excludeAlsoIds));
   return db
     .select()
     .from(users)
-    .where(and(sql`${users.username} ILIKE ${escaped + '%'}`, ne(users.id, excludeUserId)))
+    .where(and(...conditions))
     .orderBy(users.username)
     .limit(limit);
 }

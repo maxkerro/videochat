@@ -62,6 +62,25 @@ const envSchema = z.object({
   /** MinIO needs path-style URLs (http://host:9000/bucket/key); a real S3/R2 bucket usually doesn't.
    *  z.stringbool(), not z.coerce.boolean(): coerce would make the literal string "false" truthy. */
   S3_FORCE_PATH_STYLE: z.stringbool().default(true),
+
+  // --- Rate limiting (CHAT-021) ---
+  // AC: "configurable without a deploy" -- these are read at boot (see RateLimitModule), so
+  // changing one and restarting the process is enough; no code change or rebuild needed. Each
+  // pair is a request cap and the rolling window (seconds) it applies over.
+  /** Login attempts, tracked per client IP (there's no authenticated user yet at this endpoint).
+   *  Distinct from CHAT-010's per-account lockout after 5 *failed* attempts -- this limits the
+   *  *rate* of attempts against the endpoint itself, successful or not, and by IP rather than by
+   *  account, so it also covers someone trying many different accounts' emails. Both run; neither
+   *  replaces the other. */
+  RATE_LIMIT_LOGIN_MAX: z.coerce.number().int().positive().default(10),
+  RATE_LIMIT_LOGIN_WINDOW_SEC: z.coerce.number().int().positive().default(60),
+  /** "Find people" search, tracked per authenticated user. */
+  RATE_LIMIT_SEARCH_MAX: z.coerce.number().int().positive().default(30),
+  RATE_LIMIT_SEARCH_WINDOW_SEC: z.coerce.number().int().positive().default(10),
+  /** Message sending, tracked per authenticated user. Defaults match the AC's own example
+   *  ("more than 20 messages in 10 seconds"). */
+  RATE_LIMIT_MESSAGES_MAX: z.coerce.number().int().positive().default(20),
+  RATE_LIMIT_MESSAGES_WINDOW_SEC: z.coerce.number().int().positive().default(10),
 });
 
 const envSchemaWithProductionChecks = envSchema.superRefine((data, ctx) => {

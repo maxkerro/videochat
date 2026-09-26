@@ -1,11 +1,13 @@
-import { ConflictException, NotFoundException } from '@nestjs/common';
+import { ConflictException, ForbiddenException, NotFoundException } from '@nestjs/common';
 import type { Database } from '../db/client.js';
+import * as blocksDb from '../db/blocks.js';
 import * as conversationsDb from '../db/conversations.js';
 import * as messagesDb from '../db/messages.js';
 import { SenderNotAMemberError } from '../db/messages.js';
 import type { RealtimeService } from '../realtime/realtime.service.js';
 import { MessagesService } from './messages.service.js';
 
+vi.mock('../db/blocks.js', () => ({ isSenderBlockedInDirectConversation: vi.fn() }));
 vi.mock('../db/conversations.js', () => ({ isConversationMember: vi.fn() }));
 vi.mock('../db/messages.js', async () => {
   const actual = await vi.importActual<typeof import('../db/messages.js')>('../db/messages.js');
@@ -41,6 +43,7 @@ describe('MessagesService', () => {
   beforeEach(() => {
     vi.resetAllMocks();
     realtime = { publishToConversation: vi.fn().mockResolvedValue(undefined) };
+    vi.mocked(blocksDb.isSenderBlockedInDirectConversation).mockResolvedValue(false);
     service = new MessagesService({} as Database, realtime as unknown as RealtimeService);
   });
 
@@ -97,6 +100,17 @@ describe('MessagesService', () => {
       await expect(
         service.send('conv-1', 'user-1', { clientMsgId: 'c-1', body: 'hi' }),
       ).rejects.toThrow(NotFoundException);
+      expect(realtime.publishToConversation).not.toHaveBeenCalled();
+    });
+
+    it('CHAT-021: rejects with 403 when the DM recipient has blocked the sender, without persisting or broadcasting', async () => {
+      vi.mocked(conversationsDb.isConversationMember).mockResolvedValue(true);
+      vi.mocked(blocksDb.isSenderBlockedInDirectConversation).mockResolvedValue(true);
+
+      await expect(
+        service.send('conv-1', 'user-1', { clientMsgId: 'c-1', body: 'hi' }),
+      ).rejects.toThrow(ForbiddenException);
+      expect(messagesDb.appendMessage).not.toHaveBeenCalled();
       expect(realtime.publishToConversation).not.toHaveBeenCalled();
     });
 

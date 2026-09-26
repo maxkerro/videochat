@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   addMembersSchema,
+  blockedUsersListSchema,
   createGroupConversationSchema,
   LIMITS,
   makeEnvelope,
@@ -172,5 +173,20 @@ describe('typingSignalSchema and typingEventSchema (CHAT-020)', () => {
     const parsed = wsEnvelopeSchema.parse(env);
     expect(parsed).toMatchObject({ v: 1, type: 'conversation.typing' });
     expect(typingEventSchema.parse(parsed.payload)).toEqual(payload);
+  });
+});
+
+describe('blockedUsersListSchema', () => {
+  const uuid = '00000000-0000-4000-8000-000000000001';
+
+  it('accepts a list of public users', () => {
+    const result = blockedUsersListSchema.safeParse({
+      users: [{ id: uuid, username: 'anna_k', displayName: 'Anna', avatarUrl: null }],
+    });
+    expect(result.success).toBe(true);
+  });
+
+  it('rejects a row missing required PublicUser fields', () => {
+    expect(blockedUsersListSchema.safeParse({ users: [{ id: uuid }] }).success).toBe(false);
   });
 });

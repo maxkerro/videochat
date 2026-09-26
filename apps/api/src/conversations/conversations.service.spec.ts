@@ -1,5 +1,6 @@
 import { BadRequestException, ForbiddenException, NotFoundException } from '@nestjs/common';
 import type { Database } from '../db/client.js';
+import * as blocksDb from '../db/blocks.js';
 import * as conversationsDb from '../db/conversations.js';
 import * as messagesDb from '../db/messages.js';
 import * as usersDb from '../db/users.js';
@@ -7,6 +8,10 @@ import type { RealtimeService } from '../realtime/realtime.service.js';
 import type { S3Service } from '../storage/s3.service.js';
 import { ConversationsService } from './conversations.service.js';
 
+vi.mock('../db/blocks.js', () => ({
+  hasBlockEitherDirection: vi.fn(),
+  isBlocked: vi.fn(),
+}));
 vi.mock('../db/conversations.js', () => ({
   addGroupMembers: vi.fn(),
   countActiveMembers: vi.fn(),
@@ -95,11 +100,34 @@ describe('ConversationsService (CHAT-018)', () => {
     };
     s3 = { getAvatarUrl: vi.fn().mockResolvedValue(null) };
     vi.mocked(messagesDb.appendMessage).mockResolvedValue(makeMessageRow());
+    vi.mocked(blocksDb.hasBlockEitherDirection).mockResolvedValue(false);
+    vi.mocked(blocksDb.isBlocked).mockResolvedValue(false);
     service = new ConversationsService(
       {} as Database,
       s3 as unknown as S3Service,
       realtime as unknown as RealtimeService,
     );
+  });
+
+  describe('startDirect (CHAT-021 blocking)', () => {
+    it('starts the conversation when there is no block either way', async () => {
+      vi.mocked(usersDb.findUserById).mockResolvedValue(makeUser({ id: 'user-2' }));
+      vi.mocked(conversationsDb.findOrCreateDirectConversation).mockResolvedValue(
+        makeGroupRow({ type: 'direct', directKey: 'user-1:user-2' }),
+      );
+
+      await service.startDirect('user-1', 'user-2');
+
+      expect(conversationsDb.findOrCreateDirectConversation).toHaveBeenCalled();
+    });
+
+    it('404s (never a 403) when either side has blocked the other', async () => {
+      vi.mocked(usersDb.findUserById).mockResolvedValue(makeUser({ id: 'user-2' }));
+      vi.mocked(blocksDb.hasBlockEitherDirection).mockResolvedValue(true);
+
+      await expect(service.startDirect('user-1', 'user-2')).rejects.toThrow(NotFoundException);
+      expect(conversationsDb.findOrCreateDirectConversation).not.toHaveBeenCalled();
+    });
   });
 
   describe('createGroup', () => {
@@ -265,6 +293,24 @@ describe('ConversationsService (CHAT-018)', () => {
       await service.addMembers('conv-1', 'user-1', ['ben']);
 
       expect(messagesDb.appendMessage).not.toHaveBeenCalled();
+    });
+
+    it('CHAT-021: rejects adding someone who has blocked the actor', async () => {
+      vi.mocked(conversationsDb.findConversationForUser).mockResolvedValue(
+        makeGroupRow({ role: 'admin' }),
+      );
+      vi.mocked(conversationsDb.countActiveMembers).mockResolvedValue(2);
+      vi.mocked(usersDb.findUserById).mockImplementation((_db, id) =>
+        Promise.resolve(makeUser({ id })),
+      );
+      vi.mocked(blocksDb.isBlocked).mockImplementation((_db, blockerId) =>
+        Promise.resolve(blockerId === 'ben'),
+      );
+
+      await expect(service.addMembers('conv-1', 'user-1', ['ben', 'carl'])).rejects.toThrow(
+        ForbiddenException,
+      );
+      expect(conversationsDb.addGroupMembers).not.toHaveBeenCalled();
     });
   });
 

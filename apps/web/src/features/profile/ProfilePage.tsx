@@ -1,9 +1,10 @@
-import { useQuery } from '@tanstack/react-query';
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { LIMITS, displayNameSchema, usernameSchema } from '@videochat/shared';
 import { useRef, useState, type ChangeEvent, type FormEvent } from 'react';
 import { Link } from 'react-router';
 import { Avatar, Button, Input, useToast } from '../../components/ui';
 import { useDebouncedValue } from '../../lib/useDebouncedValue';
+import { fetchBlockedUsers, unblockUser } from '../conversations/blocksApi';
 import { useAuth, withAuthRetry } from '../auth/AuthContext';
 import styles from './ProfilePage.module.css';
 import { checkUsernameAvailable, updateProfile, uploadAvatar } from './profileApi';
@@ -16,7 +17,22 @@ export function ProfilePage() {
   const auth = useAuth();
   const { user, setUser } = auth;
   const { toast } = useToast();
+  const queryClient = useQueryClient();
   const fileInput = useRef<HTMLInputElement>(null);
+
+  // CHAT-021: "view/manage a blocklist". Shares the `['blocked-users']` query key with
+  // `ChatPane`'s header menu, so blocking/unblocking from either place stays in sync without a
+  // page reload.
+  const blockedUsersQuery = useQuery({
+    queryKey: ['blocked-users'],
+    queryFn: () => withAuthRetry(auth, fetchBlockedUsers),
+    enabled: auth.status === 'authenticated',
+  });
+  const unblockMutation = useMutation({
+    mutationFn: (userId: string) => withAuthRetry(auth, (token) => unblockUser(token, userId)),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['blocked-users'] }),
+    onError: () => toast({ title: "Couldn't unblock that person", tone: 'danger' }),
+  });
 
   const [displayName, setDisplayName] = useState(user?.displayName ?? '');
   const [username, setUsername] = useState(user?.username ?? '');
@@ -182,6 +198,35 @@ export function ProfilePage() {
           </Button>
         </div>
       </form>
+
+      <div className={styles.section}>
+        <h3 className={styles.heading}>Blocked</h3>
+        {blockedUsersQuery.isPending ? (
+          <p className={styles.muted}>Loading…</p>
+        ) : blockedUsersQuery.data && blockedUsersQuery.data.users.length === 0 ? (
+          <p className={styles.muted}>You haven&rsquo;t blocked anyone.</p>
+        ) : (
+          <ul className={styles.blockedList}>
+            {blockedUsersQuery.data?.users.map((u) => (
+              <li key={u.id} className={styles.blockedRow}>
+                <Avatar name={u.displayName} src={u.avatarUrl} size="sm" />
+                <span className={styles.blockedText}>
+                  <span className={styles.blockedName}>{u.displayName}</span>
+                  <span className={styles.blockedUsername}>@{u.username}</span>
+                </span>
+                <Button
+                  size="sm"
+                  variant="ghost"
+                  onClick={() => unblockMutation.mutate(u.id)}
+                  loading={unblockMutation.isPending && unblockMutation.variables === u.id}
+                >
+                  Unblock
+                </Button>
+              </li>
+            ))}
+          </ul>
+        )}
+      </div>
     </div>
   );
 }

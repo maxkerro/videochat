@@ -608,4 +608,117 @@ describe.skipIf(!hasInfra)('conversations HTTP flow (CHAT-012)', () => {
         .expect(401);
     });
   });
+
+  describe('CHAT-021 blocking', () => {
+    async function meId(session: AuthSession): Promise<string> {
+      const res = await request(server()).get('/me').set(auth(session.accessToken)).expect(200);
+      return res.body.id;
+    }
+
+    it("blocking is idempotent, appears in the caller's own blocklist, and unblocking removes it", async () => {
+      const a = await signUpAndLogIn();
+      const b = await signUpAndLogIn();
+      const bId = await meId(b.session);
+
+      await request(server())
+        .post(`/users/${bId}/block`)
+        .set(auth(a.session.accessToken))
+        .expect(200);
+      // Blocking someone already blocked is a no-op, not a 409.
+      await request(server())
+        .post(`/users/${bId}/block`)
+        .set(auth(a.session.accessToken))
+        .expect(200);
+
+      const blocklist = await request(server())
+        .get('/users/blocked')
+        .set(auth(a.session.accessToken))
+        .expect(200);
+      expect(blocklist.body.users.map((u: { id: string }) => u.id)).toEqual([bId]);
+
+      await request(server())
+        .delete(`/users/${bId}/block`)
+        .set(auth(a.session.accessToken))
+        .expect(200);
+      const afterUnblock = await request(server())
+        .get('/users/blocked')
+        .set(auth(a.session.accessToken))
+        .expect(200);
+      expect(afterUnblock.body.users).toEqual([]);
+    });
+
+    it('excludes a blocked-either-direction user from search, for both the blocker and the blocked', async () => {
+      const a = await signUpAndLogIn();
+      const b = await signUpAndLogIn();
+      const bId = await meId(b.session);
+
+      await request(server())
+        .post(`/users/${bId}/block`)
+        .set(auth(a.session.accessToken))
+        .expect(200);
+
+      const searchByA = await request(server())
+        .get(`/users/search?q=${b.username}`)
+        .set(auth(a.session.accessToken))
+        .expect(200);
+      expect(searchByA.body.users).toEqual([]);
+
+      const searchByB = await request(server())
+        .get(`/users/search?q=${a.username}`)
+        .set(auth(b.session.accessToken))
+        .expect(200);
+      expect(searchByB.body.users).toEqual([]);
+    });
+
+    it('rejects starting (or reopening) a DM in either direction of a block, with a 404', async () => {
+      const a = await signUpAndLogIn();
+      const b = await signUpAndLogIn();
+      const bId = await meId(b.session);
+      const aId = await meId(a.session);
+
+      await request(server())
+        .post(`/users/${bId}/block`)
+        .set(auth(a.session.accessToken))
+        .expect(200);
+
+      await request(server())
+        .post('/conversations/direct')
+        .set(auth(a.session.accessToken))
+        .send({ userId: bId })
+        .expect(404);
+      // The reverse direction is blocked too -- B can't start it either.
+      await request(server())
+        .post('/conversations/direct')
+        .set(auth(b.session.accessToken))
+        .send({ userId: aId })
+        .expect(404);
+    });
+
+    it('rejects adding someone to a group who has blocked the actor', async () => {
+      const admin = await signUpAndLogIn();
+      const other = await signUpAndLogIn();
+      const blocker = await signUpAndLogIn();
+      const adminId = await meId(admin.session);
+      const otherId = await meId(other.session);
+      const blockerId = await meId(blocker.session);
+
+      // `blocker` blocks the group's admin *before* the admin tries to add them.
+      await request(server())
+        .post(`/users/${adminId}/block`)
+        .set(auth(blocker.session.accessToken))
+        .expect(200);
+
+      const group = await request(server())
+        .post('/conversations/group')
+        .set(auth(admin.session.accessToken))
+        .send({ title: 'Trip', memberIds: [otherId] })
+        .expect(201);
+
+      await request(server())
+        .post(`/conversations/${group.body.id}/members`)
+        .set(auth(admin.session.accessToken))
+        .send({ memberIds: [blockerId] })
+        .expect(403);
+    });
+  });
 });

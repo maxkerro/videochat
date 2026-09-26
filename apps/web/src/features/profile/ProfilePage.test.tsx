@@ -116,4 +116,47 @@ describe('ProfilePage', () => {
     await userEvent.upload(fileInput, big);
     expect(await screen.findByText('Image too large')).toBeInTheDocument();
   });
+
+  describe('CHAT-021 blocklist', () => {
+    const blocked = {
+      id: '11111111-1111-4111-8111-111111111111',
+      username: 'ben',
+      displayName: 'Ben Okafor',
+      avatarUrl: null,
+    };
+
+    it('shows a message when nobody is blocked', async () => {
+      vi.stubGlobal(
+        'fetch',
+        routedFetch({
+          'POST /auth/refresh': () => jsonResponse(session()),
+          'GET /users/blocked': () => jsonResponse({ users: [] }),
+        }),
+      );
+      renderApp('/profile');
+      expect(await screen.findByText(/haven.t blocked anyone/i)).toBeInTheDocument();
+    });
+
+    it('lists blocked users with an Unblock action that removes them from the list', async () => {
+      let unblocked = false;
+      vi.stubGlobal(
+        'fetch',
+        routedFetch({
+          'POST /auth/refresh': () => jsonResponse(session()),
+          'GET /users/blocked': () => jsonResponse({ users: unblocked ? [] : [blocked] }),
+          [`DELETE /users/${blocked.id}/block`]: () => {
+            unblocked = true;
+            return jsonResponse({ message: 'Unblocked.' });
+          },
+        }),
+      );
+      renderApp('/profile');
+      expect(await screen.findByText('Ben Okafor')).toBeInTheDocument();
+
+      await userEvent.click(screen.getByRole('button', { name: 'Unblock' }));
+
+      await waitFor(() => expect(screen.queryByText('Ben Okafor')).not.toBeInTheDocument());
+      expect(await screen.findByText(/haven.t blocked anyone/i)).toBeInTheDocument();
+    });
+  });
 });

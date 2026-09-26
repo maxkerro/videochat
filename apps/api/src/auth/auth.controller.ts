@@ -1,4 +1,4 @@
-import { Body, Controller, HttpCode, Inject, Post, Req, Res } from '@nestjs/common';
+import { Body, Controller, HttpCode, Inject, Post, Req, Res, UseGuards } from '@nestjs/common';
 import {
   loginSchema,
   requestPasswordResetSchema,
@@ -12,6 +12,7 @@ import type { Request, Response } from 'express';
 import { ZodValidationPipe } from '../common/zod-validation.pipe.js';
 import type { Env } from '../config/env.js';
 import { ENV } from '../infra/tokens.js';
+import { LoginThrottlerGuard } from '../rate-limit/rate-limit.guards.js';
 import { AuthService } from './auth.service.js';
 import { REFRESH_COOKIE_NAME, clearRefreshCookie, setRefreshCookie } from './refresh-cookie.js';
 
@@ -49,8 +50,11 @@ export class AuthController {
     return { message: 'Email verified.' };
   }
 
+  /** CHAT-021: rate-limited per client IP -- see `LoginThrottlerGuard`'s own comment for why this
+   *  is IP-based rather than per-account (CHAT-010's `lockedUntil` already covers per-account). */
   @Post('login')
   @HttpCode(200)
+  @UseGuards(LoginThrottlerGuard)
   async login(
     @Body(new ZodValidationPipe(loginSchema)) body: z.infer<typeof loginSchema>,
     @Res({ passthrough: true }) res: Response,

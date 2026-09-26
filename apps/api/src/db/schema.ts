@@ -228,6 +228,33 @@ export const messages = pgTable(
   ],
 );
 
+/**
+ * CHAT-021: a directional block -- `blockerId` blocked `blockedId`, which says nothing about the
+ * reverse (A blocking B never implies B has blocked A). The primary key on
+ * `(blockerId, blockedId)` gives an index-only "is X blocked by Y" lookup keyed exactly that way
+ * (the composite index's leading column is `blockerId`), which is the check enforcement runs on
+ * every DM-start, group-add and message-send. `blocks_blocked_idx` mirrors that in the other
+ * column order so "who has blocked me" (the blocklist UI, and the reverse-direction half of a
+ * "do either of us block the other" check) is equally an index lookup rather than a scan.
+ */
+export const blocks = pgTable(
+  'blocks',
+  {
+    blockerId: uuid('blocker_id')
+      .notNull()
+      .references(() => users.id, { onDelete: 'cascade' }),
+    blockedId: uuid('blocked_id')
+      .notNull()
+      .references(() => users.id, { onDelete: 'cascade' }),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [
+    primaryKey({ columns: [t.blockerId, t.blockedId] }),
+    index('blocks_blocked_idx').on(t.blockedId, t.blockerId),
+    check('blocks_not_self_ck', sql`${t.blockerId} <> ${t.blockedId}`),
+  ],
+);
+
 export type User = typeof users.$inferSelect;
 export type NewUser = typeof users.$inferInsert;
 export type RefreshTokenRow = typeof refreshTokens.$inferSelect;
@@ -236,3 +263,4 @@ export type Conversation = typeof conversations.$inferSelect;
 export type Membership = typeof memberships.$inferSelect;
 export type MessageRow = typeof messages.$inferSelect;
 export type NewMessageRow = typeof messages.$inferInsert;
+export type BlockRow = typeof blocks.$inferSelect;

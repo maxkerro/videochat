@@ -15,6 +15,13 @@
       "when": 1790182318183,
       "tag": "0001_swift_paper_doll",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1790401887807,
+      "tag": "0002_friendly_bishop",
+      "breakpoints": true
     }
   ]
 }

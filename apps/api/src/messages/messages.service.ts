@@ -1,4 +1,10 @@
-import { ConflictException, Inject, Injectable, NotFoundException } from '@nestjs/common';
+import {
+  ConflictException,
+  ForbiddenException,
+  Inject,
+  Injectable,
+  NotFoundException,
+} from '@nestjs/common';
 import {
   LIMITS,
   makeEnvelope,
@@ -7,6 +13,7 @@ import {
   type SendMessageInput,
 } from '@videochat/shared';
 import type { Database } from '../db/client.js';
+import { isSenderBlockedInDirectConversation } from '../db/blocks.js';
 import { isConversationMember } from '../db/conversations.js';
 import {
   appendMessage,
@@ -38,6 +45,21 @@ export class MessagesService {
     // membership (with `leftAt IS NULL`) *inside* its own transaction, which is the authoritative
     // check; `SenderNotAMemberError` below is that race actually firing.
     await this.requireMember(conversationId, senderId);
+
+    // CHAT-021: "a blocked user's messages to you are rejected". Checked only for a *direct*
+    // conversation -- see `isSenderBlockedInDirectConversation`'s own comment for why block
+    // enforcement is scoped to DMs for this story: a group already has consenting multi-party
+    // membership, and "who can be in this group with whom" is a separate concern (handled at
+    // `addMembers`, not here) from "can this specific sender's message be delivered". This is
+    // deliberately a visible failure to the *sender* -- a 403, not a silently-dropped message --
+    // since the AC calls it "rejected", and a client needs some response to show the send as
+    // failed rather than stuck "sending" forever. That's a different kind of silence than
+    // "blocking is silent to the blocked person" (the *act* of blocking, covered by
+    // `UsersService.blockUser`): this is about what happens on an already-blocked person's next
+    // send, not about notifying them a block just happened.
+    if (await isSenderBlockedInDirectConversation(this.db, conversationId, senderId)) {
+      throw new ForbiddenException('This message could not be delivered');
+    }
 
     let row;
     try {

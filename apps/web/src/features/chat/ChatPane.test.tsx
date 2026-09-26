@@ -4,7 +4,7 @@ import { makeEnvelope, type MessageType } from '@videochat/shared';
 import { ApiError } from '../../lib/api';
 import { jsonResponse } from '../../test/mockFetch';
 import { renderApp } from '../../test/renderApp';
-import { buildRows, shouldRetryQuery } from './ChatPane';
+import { buildRows, classifySendFailure, failureLabelFor, shouldRetryQuery } from './ChatPane';
 
 const baseUser = {
   id: '11111111-1111-4111-8111-111111111111',
@@ -164,6 +164,31 @@ describe('shouldRetryQuery', () => {
   });
 });
 
+describe('classifySendFailure (CHAT-021)', () => {
+  it('classifies a 429 as rate-limited', () => {
+    expect(classifySendFailure(new ApiError(429, 'slow down'))).toBe('rate-limited');
+  });
+
+  it('classifies a 403 as blocked', () => {
+    expect(classifySendFailure(new ApiError(403, 'forbidden'))).toBe('blocked');
+  });
+
+  it('classifies anything else (a 404, a 500, a network error) as other', () => {
+    expect(classifySendFailure(new ApiError(404, 'not found'))).toBe('other');
+    expect(classifySendFailure(new ApiError(500, 'server error'))).toBe('other');
+    expect(classifySendFailure(new TypeError('Failed to fetch'))).toBe('other');
+  });
+});
+
+describe('failureLabelFor (CHAT-021)', () => {
+  it('gives a distinguishable message per reason, always ending in "tap to retry"', () => {
+    expect(failureLabelFor('rate-limited')).toMatch(/too fast/);
+    expect(failureLabelFor('rate-limited')).toMatch(/tap to retry$/);
+    expect(failureLabelFor('blocked')).toMatch(/tap to retry$/);
+    expect(failureLabelFor(undefined)).toBe('Failed -- tap to retry');
+  });
+});
+
 describe('ChatPane', () => {
   it('shows a "not found" message for a conversation that does not exist or is not a member', async () => {
     vi.stubGlobal(
@@ -308,6 +333,50 @@ describe('ChatPane', () => {
     );
     expect(screen.getAllByText('retry me')).toHaveLength(1);
     expect(attempts).toBe(2);
+  });
+
+  it('CHAT-021: shows a distinct "sending too fast" message for a 429 from the send endpoint', async () => {
+    vi.stubGlobal(
+      'fetch',
+      routedFetch({
+        'POST /auth/refresh': () => jsonResponse(session()),
+        [`GET /conversations/${conversationId}`]: () => jsonResponse(conversation()),
+        [`GET /conversations/${conversationId}/messages`]: () =>
+          jsonResponse({ messages: [], hasMore: false }),
+        [`GET /users/blocked`]: () => jsonResponse({ users: [] }),
+        [`POST /conversations/${conversationId}/messages`]: () =>
+          jsonResponse({ message: 'slow down' }, 429),
+      }),
+    );
+    renderApp(`/c/${conversationId}`);
+    await screen.findByLabelText('Message');
+
+    await userEvent.type(screen.getByLabelText('Message'), 'too many messages');
+    await userEvent.click(screen.getByRole('button', { name: 'Send message' }));
+
+    await screen.findByText(/sending messages too fast/i);
+  });
+
+  it('CHAT-021: shows a distinct "couldn\'t be delivered" message for a 403 from the send endpoint', async () => {
+    vi.stubGlobal(
+      'fetch',
+      routedFetch({
+        'POST /auth/refresh': () => jsonResponse(session()),
+        [`GET /conversations/${conversationId}`]: () => jsonResponse(conversation()),
+        [`GET /conversations/${conversationId}/messages`]: () =>
+          jsonResponse({ messages: [], hasMore: false }),
+        [`GET /users/blocked`]: () => jsonResponse({ users: [] }),
+        [`POST /conversations/${conversationId}/messages`]: () =>
+          jsonResponse({ message: 'blocked' }, 403),
+      }),
+    );
+    renderApp(`/c/${conversationId}`);
+    await screen.findByLabelText('Message');
+
+    await userEvent.type(screen.getByLabelText('Message'), 'are you there');
+    await userEvent.click(screen.getByRole('button', { name: 'Send message' }));
+
+    await screen.findByText(/couldn't be delivered/i);
   });
 
   it('does not leak a failed send into a conversation switched to afterwards', async () => {
@@ -672,6 +741,75 @@ describe('ChatPane', () => {
       renderApp(`/c/${conversationId}`);
       await screen.findByRole('heading', { name: 'Ben Okafor' });
       expect(screen.queryByRole('button', { name: 'Members' })).not.toBeInTheDocument();
+    });
+  });
+
+  describe('CHAT-021 blocking', () => {
+    const groupId = '88888888-8888-4888-8888-888888888888';
+
+    function groupConversation() {
+      return {
+        id: groupId,
+        type: 'group' as const,
+        title: 'Weekend trip',
+        lastSeq: 0,
+        lastMessageAt: null,
+        role: 'admin' as const,
+        lastReadSeq: 0,
+        peer: null,
+      };
+    }
+
+    it('offers "Block" for a direct conversation whose peer is not yet blocked', async () => {
+      vi.stubGlobal(
+        'fetch',
+        routedFetch({
+          'POST /auth/refresh': () => jsonResponse(session()),
+          [`GET /conversations/${conversationId}`]: () => jsonResponse(conversation()),
+          [`GET /conversations/${conversationId}/messages`]: () =>
+            jsonResponse({ messages: [], hasMore: false }),
+          [`GET /users/blocked`]: () => jsonResponse({ users: [] }),
+        }),
+      );
+      renderApp(`/c/${conversationId}`);
+      await screen.findByRole('heading', { name: 'Ben Okafor' });
+
+      await userEvent.click(screen.getByRole('button', { name: `More options for Ben Okafor` }));
+      expect(await screen.findByText('Block Ben Okafor')).toBeInTheDocument();
+    });
+
+    it('offers "Unblock" instead when the peer is already in the blocklist', async () => {
+      vi.stubGlobal(
+        'fetch',
+        routedFetch({
+          'POST /auth/refresh': () => jsonResponse(session()),
+          [`GET /conversations/${conversationId}`]: () => jsonResponse(conversation()),
+          [`GET /conversations/${conversationId}/messages`]: () =>
+            jsonResponse({ messages: [], hasMore: false }),
+          [`GET /users/blocked`]: () => jsonResponse({ users: [peer] }),
+        }),
+      );
+      renderApp(`/c/${conversationId}`);
+      await screen.findByRole('heading', { name: 'Ben Okafor' });
+
+      await userEvent.click(screen.getByRole('button', { name: `More options for Ben Okafor` }));
+      expect(await screen.findByText('Unblock Ben Okafor')).toBeInTheDocument();
+    });
+
+    it('does not offer a block/unblock menu for a group conversation', async () => {
+      vi.stubGlobal(
+        'fetch',
+        routedFetch({
+          'POST /auth/refresh': () => jsonResponse(session()),
+          [`GET /conversations/${groupId}`]: () => jsonResponse(groupConversation()),
+          [`GET /conversations/${groupId}/messages`]: () =>
+            jsonResponse({ messages: [], hasMore: false }),
+          [`GET /conversations/${groupId}/members`]: () => jsonResponse([]),
+        }),
+      );
+      renderApp(`/c/${groupId}`);
+      await screen.findByRole('heading', { name: 'Weekend trip' });
+      expect(screen.queryByRole('button', { name: /More options for/ })).not.toBeInTheDocument();
     });
   });
 
