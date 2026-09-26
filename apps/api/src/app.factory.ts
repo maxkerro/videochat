@@ -13,7 +13,35 @@ import { ENV } from './infra/tokens.js';
 export function configureApp(app: INestApplication): Env {
   const env = app.get<Env>(ENV);
   app.useLogger(app.get(Logger));
-  app.use(helmet());
+  // CHAT-022: security headers, explicit rather than relying on helmet's defaults staying the
+  // same across a future major bump. The only directive that matters for the AC ("CSP blocks
+  // inline script injection") is `scriptSrc`: no 'unsafe-inline' and no 'unsafe-eval', so an
+  // injected `<script>` or `onclick="..."` never executes. This API serves only JSON (no HTML
+  // templates of its own), so the rest of the policy is deliberately locked down to 'none'/'self'
+  // rather than tuned for a page that would ever render here.
+  app.use(
+    helmet({
+      contentSecurityPolicy: {
+        directives: {
+          defaultSrc: ["'self'"],
+          scriptSrc: ["'self'"],
+          scriptSrcAttr: ["'none'"],
+          styleSrc: ["'self'"],
+          imgSrc: ["'self'", 'data:'],
+          objectSrc: ["'none'"],
+          baseUri: ["'self'"],
+          frameAncestors: ["'none'"],
+          formAction: ["'self'"],
+        },
+      },
+      // This API is never framed and sets no cookies readable cross-site; COEP/CORP defaults are
+      // for browser-rendered pages loading cross-origin subresources, which doesn't apply here and
+      // has in the past broken avatar `<img>` loads from the S3/R2 origin in other stacks -- so
+      // those two are left at helmet's permissive opt-out rather than their strict defaults.
+      crossOriginEmbedderPolicy: false,
+      crossOriginResourcePolicy: { policy: 'cross-origin' },
+    }),
+  );
   // Reads the httpOnly refresh-token cookie (see auth/refresh-cookie.ts); it is never readable
   // from client JS, only parsed here on the way in.
   app.use(cookieParser());

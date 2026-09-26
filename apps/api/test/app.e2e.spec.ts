@@ -48,6 +48,29 @@ describe.skipIf(!hasInfra)('HTTP app (e2e)', () => {
     expect(denied.headers['access-control-allow-origin']).toBeUndefined();
   });
 
+  /** CHAT-022 AC: "CSP blocks inline script injection". The literal test is on `script-src`: no
+   *  `'unsafe-inline'` (and no `'unsafe-eval'`) means a `<script>` tag or inline event handler
+   *  smuggled into a response a browser somehow rendered as HTML would never execute -- the
+   *  browser refuses it before running a single instruction, regardless of how it got there. */
+  it('sends a Content-Security-Policy header whose script-src excludes unsafe-inline', async () => {
+    const res = await request(app.getHttpServer()).get('/health').expect(200);
+    const csp = res.headers['content-security-policy'];
+    expect(csp).toBeDefined();
+    if (!csp) throw new Error('unreachable: asserted above');
+
+    const scriptSrc = csp
+      .split(';')
+      .map((d: string) => d.trim())
+      .find((d: string) => d.startsWith('script-src '));
+    expect(scriptSrc).toBeDefined();
+    expect(scriptSrc).not.toContain("'unsafe-inline'");
+    expect(scriptSrc).not.toContain("'unsafe-eval'");
+    expect(scriptSrc).toContain("'self'");
+
+    // object-src 'none' closes the classic Flash/plugin injection vector CSP also covers.
+    expect(csp).toContain("object-src 'none'");
+  });
+
   it('exposes Prometheus metrics with route labels', async () => {
     await request(app.getHttpServer()).get('/does-not-exist').expect(404);
     const res = await request(app.getHttpServer()).get('/metrics').expect(200);
