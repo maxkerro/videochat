@@ -71,9 +71,17 @@ services:
       npx --yes pnpm@10.28.0 install --frozen-lockfile --filter @videochat/web... &&
       npx --yes pnpm@10.28.0 --filter @videochat/web... build
     staticPublishPath: ./apps/web/dist
+    # apps/api/** is included here (not just apps/web/**) so an API-only commit still redeploys
+    # the web static site -- the web client's zod schemas (packages/shared) assume a specific API
+    # response shape, but a controller/service change can alter that shape without packages/shared
+    # itself changing (see the CHAT-016-vs-pre-CHAT-016 messages-endpoint drift that left this
+    # service serving a stale build whose client expected the old bare-array response). Since web
+    # is a static site, redeploying it on every API change costs a few build minutes, not downtime
+    # risk -- far cheaper than another silent contract-mismatch like that one.
     buildFilter:
       paths:
         - apps/web/**
+        - apps/api/**
         - packages/shared/**
         - pnpm-lock.yaml
     routes:
