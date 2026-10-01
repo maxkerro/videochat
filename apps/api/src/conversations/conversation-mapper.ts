@@ -1,5 +1,6 @@
 import type { ConversationSummary } from '@videochat/shared';
 import type { ConversationListRow, ConversationWithMembership } from '../db/conversations.js';
+import type { MessageRow } from '../db/schema.js';
 import { toPublicUser } from '../users/user-mapper.js';
 
 /** Shapes a DB conversation row (plus optional direct-conversation peer) into the API contract. */
@@ -26,5 +27,17 @@ export function toConversationSummary(
     lastReadSeq: row.lastReadSeq,
     peer,
     peerLastReadSeq,
+    lastMessage: toLastMessagePreview('lastMessage' in row ? row.lastMessage : undefined),
+  };
+}
+
+/** CHAT-044: just what the inbox preview line needs, not the whole message. */
+function toLastMessagePreview(row: MessageRow | undefined): ConversationSummary['lastMessage'] {
+  if (!row) return null;
+  return {
+    type: row.type,
+    senderId: row.senderId,
+    body: row.deletedAt ? null : row.body,
+    ...(row.type === 'call' && row.meta?.call ? { call: row.meta.call } : {}),
   };
 }

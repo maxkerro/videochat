@@ -17,5 +17,7 @@ export function toMessage(row: MessageRow): Message {
     editedAt: row.editedAt ? row.editedAt.toISOString() : null,
     deletedAt: row.deletedAt ? row.deletedAt.toISOString() : null,
     createdAt: row.createdAt.toISOString(),
+    // CHAT-044: only call messages carry this, so every other message keeps its exact shape.
+    ...(row.type === 'call' && row.meta?.call ? { call: row.meta.call } : {}),
   };
 }

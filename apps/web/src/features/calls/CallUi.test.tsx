@@ -5,6 +5,7 @@ import { createMemoryRouter } from 'react-router';
 import { RouterProvider } from 'react-router/dom';
 import { ToastProvider } from '../../components/ui';
 import { CallButtons } from './CallButtons';
+import { CallHistoryEntry } from './CallHistoryEntry';
 import type { CallSnapshot } from './CallEngine';
 import { CallOverlay } from './CallOverlay';
 import { CallContext, endMessage, formatDuration, type CallController } from './CallProvider';
@@ -302,6 +303,68 @@ describe('call UI (CHAT-042)', () => {
     it('formats durations', () => {
       expect(formatDuration(5_000)).toBe('0:05');
       expect(formatDuration(3_725_000)).toBe('1:02:05');
+    });
+  });
+
+  describe('call history entries (CHAT-044)', () => {
+    const message = {
+      id: '01J9ZQ3X4K7M8N9P0QRSTVWXYZ',
+      conversationId: 'conv-1',
+      seq: 5,
+      senderId: 'peer-1',
+      clientMsgId: null,
+      type: 'call' as const,
+      body: 'Missed audio call',
+      replyToId: null,
+      editedAt: null,
+      deletedAt: null,
+      createdAt: '2026-10-01T10:00:00.000Z',
+      call: {
+        callId: '11111111-1111-4111-8111-111111111111',
+        media: 'audio' as const,
+        outcome: 'missed' as const,
+        endReason: 'missed' as const,
+        callerId: 'peer-1',
+        durationSec: null,
+      },
+    };
+
+    it("shows the call from the reader's side", () => {
+      renderWith(
+        controller(null),
+        <CallHistoryEntry message={message} myUserId="me" peer={PEER} time="10:00" />,
+      );
+      expect(screen.getByText('Missed audio call')).toBeInTheDocument();
+    });
+
+    it('"Call back" starts a call of the same type through the pre-join check', async () => {
+      const stream = fakeStream();
+      stubMedia(() => Promise.resolve(stream));
+      const ctrl = controller(null);
+      renderWith(
+        ctrl,
+        <CallHistoryEntry message={message} myUserId="me" peer={PEER} time="10:00" />,
+      );
+
+      await userEvent.click(screen.getByRole('button', { name: 'Call Ben Peer back (audio)' }));
+      expect(
+        await screen.findByRole('dialog', { name: 'Start audio call with Ben Peer' }),
+      ).toBeInTheDocument();
+      const call = screen.getByRole('button', { name: 'Call' });
+      await waitFor(() => expect(call).toBeEnabled());
+      await userEvent.click(call);
+
+      expect(ctrl.startCall).toHaveBeenCalledWith(
+        expect.objectContaining({ media: 'audio', conversationId: 'conv-1', peer: PEER }),
+      );
+    });
+
+    it('offers no "Call back" without someone to call (e.g. a group)', () => {
+      renderWith(
+        controller(null),
+        <CallHistoryEntry message={message} myUserId="me" peer={null} time="10:00" />,
+      );
+      expect(screen.queryByRole('button', { name: /call .* back/i })).not.toBeInTheDocument();
     });
   });
 });

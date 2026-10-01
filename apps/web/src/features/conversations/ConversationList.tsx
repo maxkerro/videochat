@@ -13,9 +13,23 @@ import { useRealtimeEvent } from '../chat/RealtimeProvider';
 import { cx } from '../../lib/cx';
 import { fetchConversations, markConversationUnread } from './conversationsApi';
 import styles from './ConversationList.module.css';
+import { callHistoryText, isMissedByMe } from '../calls/callHistory';
 
 function titleFor(conversation: ConversationSummary): string {
   return conversation.peer?.displayName ?? conversation.title ?? 'Conversation';
+}
+
+/** CHAT-044 (and CHAT-015's "last message preview"): the inbox's second line. */
+export function previewFor(
+  conversation: ConversationSummary,
+  myUserId: string | undefined,
+): string {
+  const last = conversation.lastMessage;
+  if (!last) return '';
+  if (last.call) return callHistoryText(last.call, myUserId);
+  if (last.body === null) return 'Message deleted';
+  if (last.type === 'system') return last.body;
+  return last.senderId === myUserId ? `You: ${last.body}` : last.body;
 }
 
 function timeFor(conversation: ConversationSummary): string {
@@ -83,6 +97,13 @@ export function ConversationList() {
         ...current,
         lastSeq: message.seq,
         lastMessageAt: message.createdAt,
+        // CHAT-044: keep the preview line in step with the newest message.
+        lastMessage: {
+          type: message.type,
+          senderId: message.senderId,
+          body: message.body,
+          ...(message.call ? { call: message.call } : {}),
+        },
         // Sending counts as having read your own message (mirrors appendMessage's own
         // bookkeeping server-side), so your own outgoing messages never show up as unread here.
         lastReadSeq: message.senderId === auth.user?.id ? message.seq : current.lastReadSeq,
@@ -192,12 +213,23 @@ export function ConversationList() {
                         <span className={styles.title}>{titleFor(c)}</span>
                         <time className={styles.time}>{timeFor(c)}</time>
                       </span>
-                      {unread > 0 && (
+                      {(unread > 0 || c.lastMessage) && (
                         <span className={styles.row}>
-                          <span className={styles.preview} />
-                          <span className={styles.badge} aria-label={`${unread} unread`}>
-                            {unread > 99 ? '99+' : unread}
+                          <span
+                            className={cx(
+                              styles.preview,
+                              c.lastMessage?.call &&
+                                isMissedByMe(c.lastMessage.call, auth.user?.id) &&
+                                styles.previewMissed,
+                            )}
+                          >
+                            {previewFor(c, auth.user?.id)}
                           </span>
+                          {unread > 0 && (
+                            <span className={styles.badge} aria-label={`${unread} unread`}>
+                              {unread > 99 ? '99+' : unread}
+                            </span>
+                          )}
                         </span>
                       )}
                     </span>

@@ -1,5 +1,30 @@
 import { z } from 'zod';
-import { CONVERSATION_TYPES, LIMITS, MEMBER_ROLES, MESSAGE_TYPES } from './domain.js';
+import {
+  CALL_END_REASONS,
+  CALL_MEDIA,
+  CONVERSATION_TYPES,
+  LIMITS,
+  MEMBER_ROLES,
+  MESSAGE_TYPES,
+} from './domain.js';
+
+/**
+ * CHAT-044: what a `type: 'call'` message records about the call it summarises. One message is
+ * shared by both participants, so it stores facts (who called, how it ended) and each client
+ * words it from its own side ("Missed video call" for the callee, "No answer" for the caller).
+ * - `missed`: never answered (timed out, the caller hung up first, or the callee was busy).
+ * - `declined`: the callee rejected it.
+ * - `completed`: it was answered; `durationSec` is how long it lasted.
+ */
+export const callMessageMetaSchema = z.object({
+  callId: z.uuid(),
+  media: z.enum(CALL_MEDIA),
+  outcome: z.enum(['missed', 'declined', 'completed']),
+  endReason: z.enum(CALL_END_REASONS),
+  callerId: z.uuid(),
+  durationSec: z.number().int().nonnegative().nullable(),
+});
+export type CallMessageMeta = z.infer<typeof callMessageMetaSchema>;
 
 export const usernameSchema = z
   .string()
@@ -100,6 +125,18 @@ export const conversationSummarySchema = z.object({
    *  instead (see `memberSummarySchema.lastReadSeq`). Defaults to `null` so older cached/mocked
    *  responses without this field still parse. */
   peerLastReadSeq: z.number().int().nonnegative().nullable().default(null),
+  /** CHAT-044 (and CHAT-015's "last message preview"): the newest message, for the inbox
+   *  preview line. Null for a conversation with no messages yet; defaults to null so older
+   *  cached/mocked responses without this field still parse. */
+  lastMessage: z
+    .object({
+      type: z.enum(MESSAGE_TYPES),
+      senderId: z.uuid().nullable(),
+      body: z.string().max(LIMITS.messageMaxLength).nullable(),
+      call: callMessageMetaSchema.optional(),
+    })
+    .nullable()
+    .default(null),
 });
 export type ConversationSummary = z.infer<typeof conversationSummarySchema>;
 export const conversationsListSchema = z.array(conversationSummarySchema);
@@ -176,6 +213,8 @@ export const messageSchema = z.object({
   editedAt: z.iso.datetime().nullable(),
   deletedAt: z.iso.datetime().nullable(),
   createdAt: z.iso.datetime(),
+  /** CHAT-044: present only on `type: 'call'` messages. */
+  call: callMessageMetaSchema.optional(),
 });
 export type Message = z.infer<typeof messageSchema>;
 

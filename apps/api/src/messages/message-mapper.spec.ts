@@ -13,6 +13,7 @@ function makeRow(overrides: Partial<MessageRow> = {}): MessageRow {
     replyToId: null,
     editedAt: null,
     deletedAt: null,
+    meta: null,
     createdAt: new Date('2026-01-01T00:00:00Z'),
     ...overrides,
   };
@@ -37,5 +38,19 @@ describe('toMessage', () => {
 
   it('keeps the body when deletedAt is null, even if the body happens to be empty-ish', () => {
     expect(toMessage(makeRow({ body: '', deletedAt: null })).body).toBe('');
+  });
+
+  // CHAT-044
+  it('includes the call summary on a call message, and only there', () => {
+    const call = {
+      callId: '11111111-1111-4111-8111-111111111111',
+      media: 'video' as const,
+      outcome: 'completed' as const,
+      endReason: 'completed' as const,
+      callerId: '22222222-2222-4222-8222-222222222222',
+      durationSec: 754,
+    };
+    expect(toMessage(makeRow({ type: 'call', meta: { call } })).call).toEqual(call);
+    expect('call' in toMessage(makeRow())).toBe(false);
   });
 });

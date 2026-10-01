@@ -31,6 +31,7 @@ function makeMessageRow(overrides: Partial<Record<string, unknown>> = {}) {
     replyToId: null,
     editedAt: null,
     deletedAt: null,
+    meta: null,
     createdAt: new Date('2026-01-01T00:00:00Z'),
     ...overrides,
   };

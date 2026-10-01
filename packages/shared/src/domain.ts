@@ -8,7 +8,8 @@ export type ConversationType = (typeof CONVERSATION_TYPES)[number];
 export const MEMBER_ROLES = ['admin', 'member'] as const;
 export type MemberRole = (typeof MEMBER_ROLES)[number];
 
-export const MESSAGE_TYPES = ['text', 'image', 'file', 'system'] as const;
+/** `call` (CHAT-044): a call's outcome, posted into the conversation when the call ends. */
+export const MESSAGE_TYPES = ['text', 'image', 'file', 'system', 'call'] as const;
 export type MessageType = (typeof MESSAGE_TYPES)[number];
 
 export const DEVICE_PLATFORMS = ['web', 'ios', 'android'] as const;

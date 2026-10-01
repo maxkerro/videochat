@@ -1,6 +1,14 @@
 import { and, asc, desc, eq, inArray, isNull, ne, sql } from 'drizzle-orm';
 import type { Database, DbExecutor } from './client.js';
-import { conversations, memberships, users, type Conversation, type Membership } from './schema.js';
+import {
+  conversations,
+  memberships,
+  messages,
+  users,
+  type Conversation,
+  type Membership,
+  type MessageRow,
+} from './schema.js';
 import { directKeyFor } from './messages.js';
 import { isUniqueViolation } from './pg-errors.js';
 
@@ -109,6 +117,26 @@ export interface ConversationListRow extends ConversationWithMembership {
   /** CHAT-019: the peer's own `lastReadSeq`, for a direct conversation (undefined for a group,
    *  same as `peer` -- see {@link loadDirectPeers}). */
   peerLastReadSeq?: number;
+  /** CHAT-044: the newest message, for the inbox preview (undefined if there are none). */
+  lastMessage?: MessageRow;
+}
+
+/** CHAT-044: each conversation's newest message, keyed by conversation id. One query for the
+ *  whole list: `(conversation_id, seq)` is uniquely indexed and `last_seq` is the newest seq. */
+async function loadLastMessages(
+  db: DbExecutor,
+  conversationIds: string[],
+): Promise<Map<string, MessageRow>> {
+  if (conversationIds.length === 0) return new Map();
+  const rows = await db
+    .select({ message: messages })
+    .from(messages)
+    .innerJoin(
+      conversations,
+      and(eq(conversations.id, messages.conversationId), eq(messages.seq, conversations.lastSeq)),
+    )
+    .where(inArray(conversations.id, conversationIds));
+  return new Map(rows.map((r) => [r.message.conversationId, r.message]));
 }
 
 /** One conversation, as `userId` (a current member) sees it -- used by ChatPane (CHAT-014) to
@@ -141,12 +169,14 @@ export async function findConversationForUser(
     row.conversation.type === 'direct'
       ? (await loadDirectPeers(db, [conversationId], userId)).get(conversationId)
       : undefined;
+  const lastMessage = (await loadLastMessages(db, [conversationId])).get(conversationId);
   return {
     ...row.conversation,
     role: row.role,
     lastReadSeq: row.lastReadSeq,
     peer: peerEntry?.user,
     peerLastReadSeq: peerEntry?.lastReadSeq,
+    lastMessage,
   };
 }
 
@@ -175,6 +205,11 @@ export async function listConversationsForUser(
     userId,
   );
 
+  const lastMessages = await loadLastMessages(
+    db,
+    rows.map((r) => r.conversation.id),
+  );
+
   return rows.map((r) => {
     const peerEntry = peersByConversationId.get(r.conversation.id);
     return {
@@ -183,6 +218,7 @@ export async function listConversationsForUser(
       lastReadSeq: r.lastReadSeq,
       peer: peerEntry?.user,
       peerLastReadSeq: peerEntry?.lastReadSeq,
+      lastMessage: lastMessages.get(r.conversation.id),
     };
   });
 }

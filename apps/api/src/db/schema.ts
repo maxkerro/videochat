@@ -7,12 +7,14 @@ import {
   DEVICE_PLATFORMS,
   MEMBER_ROLES,
   MESSAGE_TYPES,
+  type CallMessageMeta,
 } from '@videochat/shared';
 import { sql } from 'drizzle-orm';
 import {
   bigint,
   boolean,
   char,
+  jsonb,
   check,
   foreignKey,
   index,
@@ -213,6 +215,9 @@ export const messages = pgTable(
     editedAt: timestamp('edited_at', { withTimezone: true }),
     deletedAt: timestamp('deleted_at', { withTimezone: true }),
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+    /** Structured data for non-text message types. CHAT-044: `{ call: CallMessageMeta }` on a
+     *  `call` message. Null for ordinary text. */
+    meta: jsonb('meta').$type<{ call?: CallMessageMeta }>(),
   },
   (t) => [
     // Guarantees ordering integrity and also serves history paging

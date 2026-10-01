@@ -24,6 +24,8 @@ export interface AppendMessageInput {
   type?: MessageType;
   clientMsgId?: string | null;
   replyToId?: string | null;
+  /** CHAT-044: structured data for non-text types (see the `meta` column). */
+  meta?: MessageRow['meta'];
 }
 
 /**
@@ -84,6 +86,7 @@ export async function appendMessage(db: Database, input: AppendMessageInput): Pr
         type: input.type ?? 'text',
         body: input.body,
         replyToId: input.replyToId ?? null,
+        meta: input.meta ?? null,
       })
       .returning();
 

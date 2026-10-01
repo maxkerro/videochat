@@ -35,6 +35,7 @@ import {
 } from '../conversations/conversationsApi';
 import { GroupMembersPanel } from '../conversations/GroupMembersPanel';
 import { CallButtons } from '../calls/CallButtons';
+import { CallHistoryEntry } from '../calls/CallHistoryEntry';
 import { useAuth, withAuthRetry } from '../auth/AuthContext';
 import { linkify } from './linkify';
 import { appendToLatestPage, type MessagesData } from './messagesCache';
@@ -764,22 +765,35 @@ export function ChatPane() {
                       // interaction beyond what a normal message already gets from `buildRows`.
                       <div className={styles.system}>{row.message.body}</div>
                     )}
-                    {row.kind === 'message' && row.message.type !== 'system' && (
-                      <div
-                        className={cx(
-                          styles.message,
-                          row.message.senderId === auth.user?.id && styles.own,
-                          row.grouped && styles.grouped,
-                        )}
-                      >
-                        <span className={styles.bubble}>
-                          {row.message.body ? linkify(row.message.body) : null}
-                        </span>
-                        {!row.grouped && (
-                          <time className={styles.time}>{timeFor(row.message.createdAt)}</time>
-                        )}
+                    {row.kind === 'message' && row.message.type === 'call' && (
+                      // CHAT-044: a call's outcome ("Missed video call"), with "Call back".
+                      <div className={styles.systemRow}>
+                        <CallHistoryEntry
+                          message={row.message}
+                          myUserId={auth.user?.id}
+                          peer={conversation?.type === 'direct' ? (peer ?? null) : null}
+                          time={timeFor(row.message.createdAt)}
+                        />
                       </div>
                     )}
+                    {row.kind === 'message' &&
+                      row.message.type !== 'system' &&
+                      row.message.type !== 'call' && (
+                        <div
+                          className={cx(
+                            styles.message,
+                            row.message.senderId === auth.user?.id && styles.own,
+                            row.grouped && styles.grouped,
+                          )}
+                        >
+                          <span className={styles.bubble}>
+                            {row.message.body ? linkify(row.message.body) : null}
+                          </span>
+                          {!row.grouped && (
+                            <time className={styles.time}>{timeFor(row.message.createdAt)}</time>
+                          )}
+                        </div>
+                      )}
                     {row.kind === 'pending' && (
                       <div className={cx(styles.message, styles.own)}>
                         <span className={styles.bubble}>{linkify(row.pending.body)}</span>

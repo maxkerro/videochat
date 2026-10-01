@@ -393,4 +393,105 @@ describe.skipIf(!hasInfra)('call signalling over WebSocket (CHAT-041)', () => {
         .expect(400);
     });
   });
+  describe('call history in the chat (CHAT-044)', () => {
+    async function conversationFor(user: E2eUser, conversationId: string) {
+      const res = await request(server()).get('/conversations').set(bearer(user.token)).expect(200);
+      return (res.body as Array<Record<string, unknown>>).find((c) => c.id === conversationId)!;
+    }
+
+    it('a missed call is posted to the chat, previewed in the inbox and unread for the callee', async () => {
+      const { caller, callee, conversationId, callerSocket, calleeLaptop } = await setUp();
+      const callId = randomUUID();
+      callerSocket.send(CALL_EVENTS.invite, { callId, conversationId, media: 'video' });
+      await calleeLaptop.waitFor(CALL_EVENTS.incoming, byCall(callId));
+
+      const posted = await calleeLaptop.waitFor(
+        'message.new',
+        (p) => p.type === 'call' && (p.call as { callId?: string } | undefined)?.callId === callId,
+        8000,
+      );
+      expect(posted.payload).toMatchObject({
+        conversationId,
+        senderId: caller.id,
+        type: 'call',
+        body: 'Missed video call',
+        call: {
+          callId,
+          media: 'video',
+          outcome: 'missed',
+          endReason: 'missed',
+          callerId: caller.id,
+          durationSec: null,
+        },
+      });
+
+      const forCallee = await conversationFor(callee, conversationId);
+      expect(forCallee.lastSeq).toBeGreaterThan(forCallee.lastReadSeq as number);
+      expect(forCallee.lastMessage).toMatchObject({ type: 'call', call: { outcome: 'missed' } });
+      const forCaller = await conversationFor(caller, conversationId);
+      expect(forCaller.lastSeq).toBe(forCaller.lastReadSeq);
+    });
+
+    it('a completed call is recorded with its duration and is not unread for either side', async () => {
+      const { caller, callee, conversationId, callerSocket, calleeLaptop } = await setUp();
+      const callId = randomUUID();
+      callerSocket.send(CALL_EVENTS.invite, { callId, conversationId, media: 'audio' });
+      await calleeLaptop.waitFor(CALL_EVENTS.incoming, byCall(callId));
+      calleeLaptop.send(CALL_EVENTS.accept, { callId });
+      await callerSocket.waitFor(CALL_EVENTS.accepted, byCall(callId));
+      await new Promise((r) => setTimeout(r, 1100));
+      callerSocket.send(CALL_EVENTS.end, { callId });
+
+      const posted = await callerSocket.waitFor(
+        'message.new',
+        (p) => (p.call as { callId?: string } | undefined)?.callId === callId,
+      );
+      const meta = (posted.payload as { call: { outcome: string; durationSec: number } }).call;
+      expect(meta.outcome).toBe('completed');
+      expect(meta.durationSec).toBeGreaterThanOrEqual(1);
+
+      await calleeLaptop.waitFor('conversation.read', (p) => p.userId === callee.id);
+      for (const user of [caller, callee]) {
+        const c = await conversationFor(user, conversationId);
+        expect(c.lastSeq).toBe(c.lastReadSeq);
+      }
+    });
+
+    it('a declined call is recorded as declined', async () => {
+      const { conversationId, callerSocket, calleeLaptop } = await setUp();
+      const callId = randomUUID();
+      callerSocket.send(CALL_EVENTS.invite, { callId, conversationId, media: 'video' });
+      await calleeLaptop.waitFor(CALL_EVENTS.incoming, byCall(callId));
+      calleeLaptop.send(CALL_EVENTS.decline, { callId });
+
+      const posted = await callerSocket.waitFor(
+        'message.new',
+        (p) => (p.call as { callId?: string } | undefined)?.callId === callId,
+      );
+      expect(posted.payload).toMatchObject({
+        body: 'Declined video call',
+        call: { outcome: 'declined' },
+      });
+    });
+
+    it('records nothing about a call from someone the callee blocked', async () => {
+      const { caller, callee, conversationId, callerSocket, calleeLaptop } = await setUp();
+      await request(server())
+        .post(`/users/${caller.id}/block`)
+        .set(bearer(callee.token))
+        .expect(200);
+      const callId = randomUUID();
+      callerSocket.send(CALL_EVENTS.invite, { callId, conversationId, media: 'audio' });
+      await callerSocket.waitFor(CALL_EVENTS.ended, byCall(callId), 8000);
+
+      await calleeLaptop.expectNone('message.new', (p) => p.type === 'call', 500);
+      const history = await request(server())
+        .get(`/conversations/${conversationId}/messages`)
+        .set(bearer(callee.token))
+        .expect(200);
+      expect(
+        (history.body.messages as Array<{ type: string }>).some((m) => m.type === 'call'),
+      ).toBe(false);
+    });
+  });
 });

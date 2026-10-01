@@ -242,3 +242,9 @@
     max-width: 88%;
   }
 }
+
+/* CHAT-044: centres a call-history entry like a system message. */
+.systemRow {
+  display: flex;
+  justify-content: center;
+}
