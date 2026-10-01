@@ -3,6 +3,7 @@ import { useState, type ReactNode } from 'react';
 import { ToastProvider } from './components/ui';
 import { AuthProvider } from './features/auth/AuthContext';
 import { RealtimeProvider } from './features/chat/RealtimeProvider';
+import { CallProvider } from './features/calls/CallProvider';
 import { ThemeProvider } from './theme/ThemeProvider';
 
 export function Providers({ children }: { children: ReactNode }) {
@@ -17,7 +18,9 @@ export function Providers({ children }: { children: ReactNode }) {
       <ThemeProvider>
         <ToastProvider>
           <AuthProvider>
-            <RealtimeProvider>{children}</RealtimeProvider>
+            <RealtimeProvider>
+              <CallProvider>{children}</CallProvider>
+            </RealtimeProvider>
           </AuthProvider>
         </ToastProvider>
       </ThemeProvider>

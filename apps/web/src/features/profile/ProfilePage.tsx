@@ -8,6 +8,7 @@ import { fetchBlockedUsers, unblockUser } from '../conversations/blocksApi';
 import { useAuth, withAuthRetry } from '../auth/AuthContext';
 import styles from './ProfilePage.module.css';
 import { checkUsernameAvailable, updateProfile, uploadAvatar } from './profileApi';
+import { CallOverlay } from '../calls/CallOverlay';
 
 type Availability = 'idle' | 'checking' | 'available' | 'taken' | 'invalid';
 
@@ -227,6 +228,9 @@ export function ProfilePage() {
           </ul>
         )}
       </div>
+      {/* CHAT-042: the only signed-in screen outside AppShell -- incoming calls and an ongoing
+       *  call's bar still need to show here. */}
+      <CallOverlay />
     </div>
   );
 }

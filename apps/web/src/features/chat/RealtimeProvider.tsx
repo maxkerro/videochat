@@ -1,5 +1,10 @@
 import { useQueryClient } from '@tanstack/react-query';
-import { makeEnvelope, type TypingSignalInput, type WsEnvelope } from '@videochat/shared';
+import {
+  makeEnvelope,
+  realtimeReadySchema,
+  type TypingSignalInput,
+  type WsEnvelope,
+} from '@videochat/shared';
 import { createContext, useContext, useEffect, useRef, useState, type ReactNode } from 'react';
 import { RealtimeClient, type RealtimeStatus } from '../../lib/realtime';
 import { getLastSeenSeq, recordSeenSeq, trackedConversationIds } from '../../lib/lastSeenSeq';
@@ -20,6 +25,12 @@ interface RealtimeContextValue {
   /** CHAT-020: sends a "I'm typing in this conversation" signal over the socket. Best-effort and
    *  a no-op while disconnected -- see `RealtimeClient.send`. */
   sendTyping: (conversationId: string) => void;
+  /** CHAT-042: sends any client->server envelope (call signalling). Best-effort like typing: a
+   *  no-op while disconnected. */
+  send: (type: string, payload: unknown) => void;
+  /** CHAT-041: this socket's id from the latest `realtime.ready`, or null before it arrives /
+   *  while disconnected. Changes on every reconnect. */
+  getConnectionId: () => string | null;
 }
 
 let envelopeIdCounter = 0;
@@ -27,7 +38,7 @@ let envelopeIdCounter = 0;
  *  `clientMsgId`, nothing server-side ever dedupes on this, so it doesn't need to be a real UUID. */
 function nextEnvelopeId(): string {
   envelopeIdCounter += 1;
-  return `typing-${Date.now()}-${envelopeIdCounter}`;
+  return `env-${Date.now()}-${envelopeIdCounter}`;
 }
 
 const RealtimeContext = createContext<RealtimeContextValue | null>(null);
@@ -44,15 +55,21 @@ interface RealtimeSingleton {
 function createRealtimeSingleton(): RealtimeSingleton {
   let token: string | null = null;
   let status: RealtimeStatus = 'closed';
+  let connectionId: string | null = null;
   const listeners = new Set<EventListener>();
   const statusListeners = new Set<StatusListener>();
   const client = new RealtimeClient({
     getAccessToken: () => token,
     onEvent: (envelope) => {
+      if (envelope.type === 'realtime.ready') {
+        const ready = realtimeReadySchema.safeParse(envelope.payload);
+        if (ready.success) connectionId = ready.data.connectionId;
+      }
       for (const listener of listeners) listener(envelope);
     },
     onStatusChange: (next) => {
       status = next;
+      if (next !== 'open') connectionId = null;
       for (const listener of statusListeners) listener(next);
     },
   });
@@ -80,6 +97,10 @@ function createRealtimeSingleton(): RealtimeSingleton {
           ),
         );
       },
+      send: (type, payload) => {
+        client.send(makeEnvelope(type, payload, nextEnvelopeId()));
+      },
+      getConnectionId: () => connectionId,
     },
   };
 }
@@ -203,4 +224,15 @@ export function useRealtimeStatus(): RealtimeStatus {
   const [status, setStatus] = useState(ctx.getStatus);
   useEffect(() => ctx.subscribeStatus(setStatus), [ctx]);
   return status;
+}
+
+/** CHAT-042: the raw context, for features (calls) that need to send arbitrary envelopes and know
+ *  their own connection id. */
+export function useRealtime(): Pick<
+  RealtimeContextValue,
+  'send' | 'getConnectionId' | 'subscribe' | 'subscribeStatus' | 'getStatus'
+> {
+  const ctx = useContext(RealtimeContext);
+  if (!ctx) throw new Error('useRealtime must be used inside <RealtimeProvider>');
+  return ctx;
 }

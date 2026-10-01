@@ -12,6 +12,7 @@ import {
   startDirectConversation,
 } from '../features/conversations/conversationsApi';
 import { ConversationList } from '../features/conversations/ConversationList';
+import { CallOverlay } from '../features/calls/CallOverlay';
 import { ConnectionStatus } from '../features/system/ConnectionStatus';
 import { ThemeMenu } from '../features/system/ThemeMenu';
 import { useDebouncedValue } from '../lib/useDebouncedValue';
@@ -268,6 +269,7 @@ export function AppShell() {
 
       <main className={styles.main}>
         <Outlet />
+        <CallOverlay />
       </main>
 
       <Modal

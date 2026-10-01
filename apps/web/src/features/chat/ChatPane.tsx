@@ -34,6 +34,7 @@ import {
   markConversationRead,
 } from '../conversations/conversationsApi';
 import { GroupMembersPanel } from '../conversations/GroupMembersPanel';
+import { CallButtons } from '../calls/CallButtons';
 import { useAuth, withAuthRetry } from '../auth/AuthContext';
 import { linkify } from './linkify';
 import { appendToLatestPage, type MessagesData } from './messagesCache';
@@ -677,6 +678,11 @@ export function ChatPane() {
         {/* CHAT-021: block/unblock, direct-conversation-only -- a group has no single "the other
          *  person" to act on (see `MessagesService.send`'s own comment on why block enforcement
          *  itself is scoped to DMs). */}
+        {/* CHAT-042: 1:1 calls only -- calling isn't offered in groups. Disabled while you've
+         *  blocked them (the server would refuse anyway). */}
+        {conversation?.type === 'direct' && peer && conversationId && (
+          <CallButtons peer={peer} conversationId={conversationId} disabled={peerIsBlocked} />
+        )}
         {conversation?.type === 'direct' && peer && (
           <Menu
             trigger={
