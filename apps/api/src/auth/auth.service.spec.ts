@@ -68,6 +68,7 @@ const env: Env = {
   PUBLIC_WEB_URL: 'http://localhost:5173',
   SMTP_URL: 'smtp://localhost:1025',
   MAIL_FROM: 'x',
+  TRUST_PROXY_HOPS: 1,
   S3_ENDPOINT: 'http://localhost:9000',
   S3_REGION: 'us-east-1',
   S3_BUCKET: 'b',

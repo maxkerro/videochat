@@ -18,6 +18,7 @@ import {
 } from '@videochat/shared';
 import type { AccessTokenPayload } from '../auth/access-token.guard.js';
 import type { Database } from '../db/client.js';
+import { isSenderBlockedInDirectConversation } from '../db/blocks.js';
 import { isConversationMember, listConversationIdsForUser } from '../db/conversations.js';
 import { findUserById } from '../db/users.js';
 import { DB } from '../infra/tokens.js';
@@ -163,12 +164,15 @@ export class RealtimeGateway
     }
   }
 
-  /** Re-broadcasts a member's "I'm typing" signal to the rest of the conversation, purely over
-   *  realtime pub/sub -- never touching the database (see `typingEventSchema`'s comment). The
-   *  sender's `userId`/`displayName` are always taken from the authenticated connection, never
-   *  from the client's payload, and membership is re-checked here rather than trusting the
-   *  client's claimed `conversationId` (the same authorisation concern as every other
-   *  conversation-scoped action in this codebase). */
+  /** Re-broadcasts a member's "I'm typing" signal to the rest of the conversation, over realtime
+   *  pub/sub -- it persists no row of its own (see `typingEventSchema`'s comment), but it does
+   *  make one read against the block table below, the same review follow-up to CHAT-021 that
+   *  added the equivalent check to `MessagesService.send()`: "a blocked user's messages to you are
+   *  rejected" is a hollow guarantee if that same blocked person can still show up as "typing..."
+   *  in the DM every time they touch their keyboard. The sender's `userId`/`displayName` are
+   *  always taken from the authenticated connection, never from the client's payload, and
+   *  membership is re-checked here rather than trusting the client's claimed `conversationId` (the
+   *  same authorisation concern as every other conversation-scoped action in this codebase). */
   private async handleTyping(
     client: RealtimeSocket,
     userId: string,
@@ -184,6 +188,12 @@ export class RealtimeGateway
 
     const { conversationId } = parsed.data;
     if (!(await isConversationMember(this.db, conversationId, userId))) return;
+    // Scoped to direct conversations only, same as `MessagesService.send()` -- see
+    // `isSenderBlockedInDirectConversation`'s own comment for why block enforcement doesn't extend
+    // to groups. Silently dropped rather than an error: unlike a message send, there's no client
+    // waiting on an ack to show as failed, and a blocked sender has no way to distinguish "not
+    // delivered" from "the other person just hasn't looked at their phone".
+    if (await isSenderBlockedInDirectConversation(this.db, conversationId, userId)) return;
 
     await this.realtime.publishToConversation(
       conversationId,

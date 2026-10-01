@@ -122,6 +122,13 @@ export class ConversationsService {
     }
     await this.requireUsersExist(uniqueMemberIds);
 
+    // CHAT-021: "blocked users cannot ... add you to groups" applies just as much to being
+    // included in a brand-new group as to being added to an existing one -- `addMembers` isn't
+    // the only door into a group's membership, so it can't be the only place this is enforced.
+    // Shares `assertNoneHaveBlockedActor` with `addMembers` below rather than duplicating the
+    // check, so the two stay in sync.
+    await this.assertNoneHaveBlockedActor(creatorId, uniqueMemberIds);
+
     const conv = await createGroupConversation(this.db, {
       title,
       createdBy: creatorId,
@@ -180,20 +187,9 @@ export class ConversationsService {
     const users = await this.requireUsersExist(uniqueMemberIds);
 
     // CHAT-021: "blocked users cannot ... add you to groups" -- read literally, if A has blocked
-    // B, B can't add A. Checked per member being added (each is an independent `isBlocked` lookup
-    // against the actor) rather than skipping them silently like an already-active member is:
-    // this is the actor's own action being refused, not a harmless duplicate, so it gets an
-    // explicit error rather than quietly leaving that one person out.
-    const blockedByAdds = await Promise.all(
-      uniqueMemberIds.map(async (memberId) => ({
-        memberId,
-        blocked: await isBlocked(this.db, memberId, userId),
-      })),
-    );
-    const blockingMember = blockedByAdds.find((b) => b.blocked);
-    if (blockingMember) {
-      throw new ForbiddenException("Can't add someone who has blocked you");
-    }
+    // B, B can't add A. See `assertNoneHaveBlockedActor` for why the rejection message below is
+    // deliberately generic.
+    await this.assertNoneHaveBlockedActor(userId, uniqueMemberIds);
 
     const added = await addGroupMembers(this.db, conversationId, uniqueMemberIds);
     for (const memberId of added) this.realtime.addConversationForUser(memberId, conversationId);
@@ -389,6 +385,32 @@ export class ConversationsService {
     if (!row) throw new NotFoundException('Conversation not found');
     if (row.type !== 'group') throw new BadRequestException('Not a group conversation');
     return row;
+  }
+
+  /**
+   * CHAT-021 + review follow-up: rejects putting any of `memberIds` into a group with `actorId`
+   * when one of them has blocked the actor -- shared by `createGroup` (joining at creation) and
+   * `addMembers` (joining later), which are otherwise two independent doors into the same
+   * membership set. Checked per member (each an independent `isBlocked` lookup against the
+   * actor) rather than skipped silently like an already-active member is: this is the actor's own
+   * action being refused, not a harmless duplicate, so it gets an explicit error.
+   *
+   * The error message is deliberately generic -- it doesn't say *who* blocked the actor or that a
+   * block is the reason a member couldn't be added. The original, more specific wording
+   * ("Can't add someone who has blocked you") let an actor confirm a block's existence just by
+   * trying to add that person to a group, the same kind of leak `startDirect` already avoids for
+   * DMs by 404ing instead of 403ing.
+   */
+  private async assertNoneHaveBlockedActor(actorId: string, memberIds: string[]): Promise<void> {
+    const blockedByAdds = await Promise.all(
+      memberIds.map(async (memberId) => ({
+        memberId,
+        blocked: await isBlocked(this.db, memberId, actorId),
+      })),
+    );
+    if (blockedByAdds.some((b) => b.blocked)) {
+      throw new ForbiddenException("Some of the requested members couldn't be added");
+    }
   }
 
   private async requireUsersExist(userIds: string[]) {

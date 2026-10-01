@@ -325,9 +325,79 @@ describe.skipIf(!hasInfra)(
         ['POST', '/conversations/direct'],
         ['POST', '/conversations/group'],
         ['PATCH', '/conversations/00000000-0000-0000-0000-000000000000'],
+        // Added alongside the CHAT-021/CHAT-018 member-management and block routes -- these were
+        // exercised by their own suites but missing from this sweep's "every route 401s first"
+        // list, so a regression here (e.g. a guard ordering mistake that checked membership before
+        // authentication) wouldn't have been caught by this file specifically.
+        ['POST', '/conversations/00000000-0000-0000-0000-000000000000/members'],
+        [
+          'DELETE',
+          '/conversations/00000000-0000-0000-0000-000000000000/members/00000000-0000-0000-0000-000000000000',
+        ],
+        ['GET', '/users/blocked'],
+        ['POST', '/users/00000000-0000-0000-0000-000000000000/block'],
+        ['DELETE', '/users/00000000-0000-0000-0000-000000000000/block'],
       ] as const)('%s %s', async (method, path) => {
-        const send = request(server())[method.toLowerCase() as 'get' | 'post' | 'patch'](path);
+        const send =
+          request(server())[method.toLowerCase() as 'get' | 'post' | 'patch' | 'delete'](path);
         await send.expect(401);
+      });
+    });
+
+    describe('a former member (left or removed) is treated exactly like a non-member', () => {
+      // CHAT-018 membership is dynamic -- someone who leaves or is removed still knows the
+      // conversation id from before, so "member-only access" has to mean "*current* member", not
+      // just "was authorized at some point". Every route below should now 404 for them the same
+      // way it does for `outsider` in the describes above, not merely reject the specific action
+      // that changed their membership.
+      it('a member who left can no longer read, send to, or list the conversation', async () => {
+        const { memberB, conversationId } = await setUpGroupConversation();
+        await request(server())
+          .post(`/conversations/${conversationId}/leave`)
+          .set(auth(memberB.session.accessToken))
+          .expect(201);
+
+        await request(server())
+          .get(`/conversations/${conversationId}`)
+          .set(auth(memberB.session.accessToken))
+          .expect(404);
+        await request(server())
+          .get(`/conversations/${conversationId}/messages`)
+          .set(auth(memberB.session.accessToken))
+          .expect(404);
+        await request(server())
+          .post(`/conversations/${conversationId}/messages`)
+          .set(auth(memberB.session.accessToken))
+          .send({ clientMsgId: 'authz-test-former-1', body: 'hi' })
+          .expect(404);
+
+        const res = await request(server())
+          .get('/conversations')
+          .set(auth(memberB.session.accessToken))
+          .expect(200);
+        expect(res.body.map((c: { id: string }) => c.id)).not.toContain(conversationId);
+      });
+
+      it('a member removed by an admin can no longer read, send to, or list the conversation', async () => {
+        const { memberA, memberB, conversationId } = await setUpGroupConversation();
+        await request(server())
+          .delete(`/conversations/${conversationId}/members/${memberB.id}`)
+          .set(auth(memberA.session.accessToken))
+          .expect(200);
+
+        await request(server())
+          .get(`/conversations/${conversationId}`)
+          .set(auth(memberB.session.accessToken))
+          .expect(404);
+        await request(server())
+          .get(`/conversations/${conversationId}/messages`)
+          .set(auth(memberB.session.accessToken))
+          .expect(404);
+        await request(server())
+          .post(`/conversations/${conversationId}/messages`)
+          .set(auth(memberB.session.accessToken))
+          .send({ clientMsgId: 'authz-test-former-2', body: 'hi' })
+          .expect(404);
       });
     });
   },

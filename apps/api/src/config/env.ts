@@ -63,6 +63,15 @@ const envSchema = z.object({
    *  z.stringbool(), not z.coerce.boolean(): coerce would make the literal string "false" truthy. */
   S3_FORCE_PATH_STYLE: z.stringbool().default(true),
 
+  // --- Reverse proxy (review follow-up to CHAT-021) ---
+  /** Number of reverse-proxy hops in front of this process. Render puts exactly one in front of
+   *  every request; Express's `trust proxy` (set from this in `configureApp`) needs that hop
+   *  count to trust and parse `X-Forwarded-For`, otherwise `req.ip` -- and with it every
+   *  IP-tracked rate limit below -- resolves to the proxy's own address for every client, not the
+   *  real caller's. Default of 1 matches Render/production; a bare local process with no proxy in
+   *  front (or a test harness talking to the app directly) should set this to 0. */
+  TRUST_PROXY_HOPS: z.coerce.number().int().nonnegative().default(1),
+
   // --- Rate limiting (CHAT-021) ---
   // AC: "configurable without a deploy" -- these are read at boot (see RateLimitModule), so
   // changing one and restarting the process is enough; no code change or rebuild needed. Each

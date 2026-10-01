@@ -1,6 +1,7 @@
 import type { JwtService } from '@nestjs/jwt';
 import { makeEnvelope } from '@videochat/shared';
 import type { Database } from '../db/client.js';
+import * as blocksDb from '../db/blocks.js';
 import * as conversationsDb from '../db/conversations.js';
 import * as usersDb from '../db/users.js';
 import {
@@ -13,6 +14,10 @@ import type { RealtimeService, RealtimeSocket } from './realtime.service.js';
 vi.mock('../db/conversations.js', () => ({
   listConversationIdsForUser: vi.fn(),
   isConversationMember: vi.fn(),
+}));
+
+vi.mock('../db/blocks.js', () => ({
+  isSenderBlockedInDirectConversation: vi.fn(),
 }));
 
 vi.mock('../db/users.js', () => ({
@@ -43,6 +48,7 @@ describe('RealtimeGateway', () => {
   beforeEach(() => {
     vi.mocked(conversationsDb.listConversationIdsForUser).mockResolvedValue(['conv-1']);
     vi.mocked(conversationsDb.isConversationMember).mockResolvedValue(true);
+    vi.mocked(blocksDb.isSenderBlockedInDirectConversation).mockResolvedValue(false);
     vi.mocked(usersDb.findUserById).mockResolvedValue({ displayName: 'Anna' } as never);
     jwt = { verify: vi.fn() };
     realtime = {
@@ -165,6 +171,23 @@ describe('RealtimeGateway', () => {
 
       await messageHandler(client)(Buffer.from(JSON.stringify(envelope)));
 
+      expect(realtime.publishToConversation).not.toHaveBeenCalled();
+    });
+
+    // Review follow-up to CHAT-021: the same block enforcement `MessagesService.send()` applies
+    // to a DM should stop a blocked sender's typing signal too, not just their messages.
+    it('does not re-broadcast a typing signal into a DM where the recipient has blocked the sender', async () => {
+      vi.mocked(blocksDb.isSenderBlockedInDirectConversation).mockResolvedValue(true);
+      const client = await connectedClient();
+      const envelope = makeEnvelope('conversation.typing', { conversationId }, 'evt-1');
+
+      await messageHandler(client)(Buffer.from(JSON.stringify(envelope)));
+
+      expect(blocksDb.isSenderBlockedInDirectConversation).toHaveBeenCalledWith(
+        expect.anything(),
+        conversationId,
+        'user-1',
+      );
       expect(realtime.publishToConversation).not.toHaveBeenCalled();
     });
 
