@@ -73,6 +73,31 @@ services:
     restart: 'no'
 
   # Catches every email the API sends (verification, password reset). Inbox: http://localhost:8025
+  # CHAT-040: local TURN relay for testing calls across NATs. Opt-in (it's not needed to call
+  # between two tabs on one machine): `docker compose --profile turn up -d coturn`, then set
+  # TURN_PROVIDER=hmac and the TURN_* values from .env.example. The secret must match
+  # TURN_SECRET. Relay ports are kept to a small range so they're easy to publish.
+  coturn:
+    image: coturn/coturn:4.6
+    profiles: ['turn']
+    command:
+      - -n
+      - --log-file=stdout
+      - --listening-port=3478
+      - --use-auth-secret
+      - --static-auth-secret=local-dev-turn-secret-change-me
+      - --realm=videochat.local
+      - --min-port=49160
+      - --max-port=49200
+      - --no-cli
+      - --fingerprint
+      - --prometheus
+    ports:
+      - '3478:3478/udp'
+      - '3478:3478/tcp'
+      - '49160-49200:49160-49200/udp'
+      - '9641:9641'
+
   mailpit:
     image: axllent/mailpit:latest
     ports:

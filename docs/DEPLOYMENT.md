@@ -44,3 +44,35 @@
 - **Migrations** are forward-only (Drizzle). To change the schema, edit `apps/api/src/db/schema.ts`, run `pnpm db:generate`, review the SQL in `apps/api/drizzle/`, and commit it with the code that needs it. Write migrations so that the previous release still works against the new schema: add columns first, remove them in a later release.
 - **Metrics.** `/metrics` is public in staging. Restrict it (for example with an auth token or a private network) before production. Import `infra/grafana/videochat-api.dashboard.json` into Grafana (for example Grafana Cloud) and point a Prometheus scrape job or Grafana Alloy at `/metrics`.
 - **Tracing.** Set `OTEL_EXPORTER_OTLP_ENDPOINT` on the API (for example a Grafana Cloud, Honeycomb or Jaeger OTLP endpoint) to send traces. Logs then include `trace_id`.
+
+## Calls: STUN/TURN (CHAT-040)
+
+Calls are peer-to-peer WebRTC. Most connect directly using STUN; the rest (roughly 10-20%:
+symmetric NATs, corporate firewalls that block UDP) need a TURN relay. The API hands each
+signed-in caller a fresh server list from `GET /calls/ice-servers`, and any TURN credential in it
+expires after `TURN_TTL_SEC` (1 h by default), so a leaked one can't be reused.
+
+Render can't run coturn (it needs UDP ports), so staging uses a managed relay:
+
+| `TURN_PROVIDER`  | What it does                                                                                                                                                                                                                                    | Needs                                                                    |
+| ---------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------ |
+| `none` (default) | Public STUN only. Calls connect on most home networks.                                                                                                                                                                                          | nothing                                                                  |
+| `cloudflare`     | Cloudflare Realtime TURN. Free tier is generous (about 1,000 GB/month relayed at the time of writing). Credentials are minted per call via Cloudflare's API; if that API is down, the API falls back to STUN only rather than failing the call. | `CLOUDFLARE_TURN_KEY_ID`, `CLOUDFLARE_TURN_API_TOKEN`                    |
+| `hmac`           | coturn's `use-auth-secret` scheme. Use with self-hosted coturn (or any TURN service that supports the "TURN REST API" shared-secret scheme). Credentials are derived locally, no network call.                                                  | `TURN_URLS`, `TURN_SECRET` (same value as coturn's `static-auth-secret`) |
+
+**Switching staging to Cloudflare:** Cloudflare dashboard -> Realtime -> TURN -> create a TURN
+key. Then on the `videochat-api` service set `TURN_PROVIDER=cloudflare` plus the key id and API
+token. The API refuses to start if the provider is set without its credentials, so a typo shows
+up as a failed deploy, not as calls that quietly can't relay.
+
+**Self-hosted coturn (any VM with UDP):** run coturn with `use-auth-secret`,
+`static-auth-secret=<TURN_SECRET>`, TLS on 443 (`turns:` URLs get through firewalls that block
+UDP), and set `TURN_PROVIDER=hmac`, `TURN_URLS=turn:host:3478?transport=udp,turns:host:443?transport=tcp`.
+`docker compose --profile turn up -d coturn` runs the same setup locally.
+
+**Relay bandwidth monitoring:** relayed traffic is what TURN costs money for.
+
+- Cloudflare: set a usage notification in the Cloudflare dashboard (Notifications -> Billing /
+  usage) at, say, 80% of the free allowance.
+- coturn: `--prometheus` exposes metrics on port 9641; alert on
+  `rate(turn_traffic_sentb[1h])` crossing your monthly budget divided by 720 (hours in a month).

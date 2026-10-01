@@ -76,4 +76,38 @@ describe('loadEnv', () => {
       process.env = originalEnv;
     }
   });
+  describe('TURN (CHAT-040)', () => {
+    it('defaults to public STUN and no TURN provider', () => {
+      const env = loadEnv(base);
+      expect(env.STUN_URLS).toEqual(['stun:stun.l.google.com:19302']);
+      expect(env.TURN_PROVIDER).toBe('none');
+      expect(env.TURN_TTL_SEC).toBe(3600);
+    });
+
+    it('parses comma-separated STUN/TURN URL lists', () => {
+      const env = loadEnv({
+        ...base,
+        STUN_URLS: 'stun:a.test:3478, stun:b.test:3478',
+        TURN_PROVIDER: 'hmac',
+        TURN_URLS: 'turn:t.test:3478,turns:t.test:443?transport=tcp',
+        TURN_SECRET: 's'.repeat(16),
+      });
+      expect(env.STUN_URLS).toEqual(['stun:a.test:3478', 'stun:b.test:3478']);
+      expect(env.TURN_URLS).toEqual(['turn:t.test:3478', 'turns:t.test:443?transport=tcp']);
+    });
+
+    it('fails fast when hmac is selected without URLs or a long enough secret', () => {
+      expect(() => loadEnv({ ...base, TURN_PROVIDER: 'hmac' })).toThrow(/TURN_URLS.*TURN_SECRET/s);
+    });
+
+    it('fails fast when cloudflare is selected without its key id and token', () => {
+      expect(() => loadEnv({ ...base, TURN_PROVIDER: 'cloudflare' })).toThrow(
+        /CLOUDFLARE_TURN_KEY_ID.*CLOUDFLARE_TURN_API_TOKEN/s,
+      );
+    });
+
+    it('rejects an unknown provider', () => {
+      expect(() => loadEnv({ ...base, TURN_PROVIDER: 'twilio' })).toThrow(/TURN_PROVIDER/);
+    });
+  });
 });

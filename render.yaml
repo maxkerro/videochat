@@ -61,6 +61,15 @@ services:
         sync: false
       - key: SENTRY_DSN
         sync: false
+      # CHAT-040: STUN/TURN for calls. Render can't host coturn (no UDP), so the relay is a
+      # managed service. Leave TURN_PROVIDER unset for STUN only (calls still connect on most
+      # networks); see docs/DEPLOYMENT.md "Calls: STUN/TURN" for switching to Cloudflare.
+      - key: TURN_PROVIDER
+        sync: false
+      - key: CLOUDFLARE_TURN_KEY_ID
+        sync: false
+      - key: CLOUDFLARE_TURN_API_TOKEN
+        sync: false
 
   - type: web
     name: videochat-web
@@ -115,6 +124,9 @@ services:
       - type: rewrite
         source: /conversations/*
         destination: https://videochat-api-p6sw.onrender.com/conversations/:splat
+      - type: rewrite
+        source: /calls/*
+        destination: https://videochat-api-p6sw.onrender.com/calls/:splat
       - type: rewrite
         source: /health
         destination: https://videochat-api-p6sw.onrender.com/health

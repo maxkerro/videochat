@@ -1,6 +1,14 @@
 import { existsSync } from 'node:fs';
 import { z } from 'zod';
 
+/** Comma-separated list -> trimmed, non-empty entries. */
+function splitList(v: string): string[] {
+  return v
+    .split(',')
+    .map((s) => s.trim())
+    .filter(Boolean);
+}
+
 const optionalUrl = z
   .string()
   .optional()
@@ -76,6 +84,29 @@ const envSchema = z.object({
   // AC: "configurable without a deploy" -- these are read at boot (see RateLimitModule), so
   // changing one and restarting the process is enough; no code change or rebuild needed. Each
   // pair is a request cap and the rolling window (seconds) it applies over.
+  // --- Calls: STUN/TURN (CHAT-040) ---
+  /** Comma-separated STUN URLs handed to every client. Free public STUN is enough for most home
+   *  networks; set to an empty string to hand out none. */
+  STUN_URLS: z.string().default('stun:stun.l.google.com:19302').transform(splitList),
+  /** Where TURN relay credentials come from:
+   *   - `none`: STUN only. Calls still connect on most networks, but not behind strict NATs or
+   *     UDP-blocking firewalls (roughly 10-20% of calls in practice).
+   *   - `hmac`: coturn's `use-auth-secret` scheme (also supported by most managed TURN services):
+   *     credentials are derived locally from TURN_SECRET, no network call.
+   *   - `cloudflare`: Cloudflare Realtime TURN; credentials are minted per call through its API. */
+  TURN_PROVIDER: z.enum(['none', 'hmac', 'cloudflare']).default('none'),
+  /** `hmac` only: comma-separated TURN URLs, e.g. `turn:turn.example.com:3478?transport=udp,
+   *  turns:turn.example.com:443?transport=tcp` (the TLS-on-443 entry is what gets through
+   *  firewalls that block UDP). */
+  TURN_URLS: z.string().default('').transform(splitList),
+  /** `hmac` only: the shared secret configured as coturn's `static-auth-secret`. */
+  TURN_SECRET: z.string().default(''),
+  /** How long an issued TURN credential stays valid. The AC's 1 h by default. */
+  TURN_TTL_SEC: z.coerce.number().int().positive().max(86_400).default(3_600),
+  /** `cloudflare` only: the TURN key id and its API token, from the Cloudflare dashboard. */
+  CLOUDFLARE_TURN_KEY_ID: z.string().default(''),
+  CLOUDFLARE_TURN_API_TOKEN: z.string().default(''),
+
   /** Login attempts, tracked per client IP (there's no authenticated user yet at this endpoint).
    *  Distinct from CHAT-010's per-account lockout after 5 *failed* attempts -- this limits the
    *  *rate* of attempts against the endpoint itself, successful or not, and by IP rather than by
@@ -93,6 +124,35 @@ const envSchema = z.object({
 });
 
 const envSchemaWithProductionChecks = envSchema.superRefine((data, ctx) => {
+  // A TURN provider that's selected but not configured would otherwise only show up as calls
+  // silently failing behind strict NATs, so it fails at startup instead, in every environment.
+  if (data.TURN_PROVIDER === 'hmac') {
+    if (data.TURN_URLS.length === 0) {
+      ctx.addIssue({
+        code: 'custom',
+        path: ['TURN_URLS'],
+        message: 'required when TURN_PROVIDER=hmac',
+      });
+    }
+    if (data.TURN_SECRET.length < 16) {
+      ctx.addIssue({
+        code: 'custom',
+        path: ['TURN_SECRET'],
+        message: 'must be at least 16 characters when TURN_PROVIDER=hmac',
+      });
+    }
+  }
+  if (data.TURN_PROVIDER === 'cloudflare') {
+    for (const key of ['CLOUDFLARE_TURN_KEY_ID', 'CLOUDFLARE_TURN_API_TOKEN'] as const) {
+      if (data[key] === '') {
+        ctx.addIssue({
+          code: 'custom',
+          path: [key],
+          message: 'required when TURN_PROVIDER=cloudflare',
+        });
+      }
+    }
+  }
   if (data.NODE_ENV !== 'production') return;
   for (const key of requiredInProduction) {
     // These vars are actual localhost defaults in envSchema. z.url() still passes for
