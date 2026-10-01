@@ -6,15 +6,19 @@
 #     hard gates. Failing any of these always blocks the push.
 #  1a. `pnpm test` -- NOT a hard gate (see warn_step below). Local test runs
 #     have been unreliable on this machine for reasons unrelated to the code
-#     itself (local Postgres/Redis under real resource pressure causing
-#     intermittent timeouts, not actual assertion failures -- see the
-#     CHAT-016 test-infra review's notes). CI runs the same suite against its
-#     own clean, consistently-provisioned Postgres/Redis and still blocks the
-#     merge/deploy on a real failure there, so this only removes a
-#     locally-flaky gate, not the real one. Before `pnpm test` (or the infra
-#     check that precedes it), scripts/check-infra.mjs confirms the local
-#     Postgres/Redis are actually reachable (not just configured) purely so
-#     the warning below can say *why* tests might fail, not to block on it.
+#     itself (local Postgres/Redis under resource pressure causing
+#     intermittent timeouts, not assertion failures). The real gate is
+#     downstream: .github/workflows/ci.yml's "Lint, typecheck, test, build"
+#     job runs `pnpm test` on every push to master against its own clean
+#     Postgres/Redis, and both Render services in render.yaml (videochat-api
+#     and videochat-web) set `autoDeployTrigger: checksPass`, so a commit
+#     whose CI tests fail is never deployed to staging. If either of those
+#     ever changes, make this a hard gate again.
+#     Before the test run, scripts/check-infra.mjs checks that local
+#     Postgres/Redis are reachable; if they aren't, the test run is skipped
+#     outright (it would only fail or hang). Any skipped or failed test run
+#     is repeated right above the confirmation prompt at the end, so it
+#     can't scroll away unnoticed behind the build and review output.
 #  2. An automated code review of the commits being pushed, via the Claude Code
 #     CLI (Opus), followed by a manual confirmation prompt.
 #
@@ -54,23 +58,42 @@ warn_step() {
   echo "[pre-push] Running $label..."
   if ! "$@"; then
     echo "[pre-push] $label failed locally, but this isn't a push-blocking check (CI still runs it for real) -- continuing."
+    tests_status="FAILED"
   fi
+}
+
+# "" (passed), "FAILED", or "SKIPPED (local Postgres/Redis unreachable)".
+# Shown again right before the push confirmation -- see print_tests_status.
+tests_status=""
+
+print_tests_status() {
+  [ -z "$tests_status" ] && return 0
+  echo "========================================"
+  echo "[pre-push] WARNING: local tests $tests_status for this push."
+  echo "[pre-push] CI will run them for real; a failure there blocks the staging deploy."
+  echo "========================================"
 }
 
 run_step "format check" pnpm format:check
 run_step "lint" pnpm lint
 run_step "typecheck" pnpm typecheck
 
+infra_ok=1
 if [ -f scripts/check-infra.mjs ] && command -v node >/dev/null 2>&1; then
   echo "[pre-push] Checking local test infra (Postgres/Redis)..."
   if ! node scripts/check-infra.mjs; then
-    echo "[pre-push] Local test infra isn't ready (see above) -- the test run below will likely fail or hang as a result, but that won't block this push either."
+    infra_ok=0
   fi
 else
   echo "[pre-push] scripts/check-infra.mjs or node not found -- skipping the infra check."
 fi
 
-warn_step "tests" pnpm test
+if [ "$infra_ok" -eq 1 ]; then
+  warn_step "tests" pnpm test
+else
+  echo "[pre-push] Local test infra isn't reachable (see above) -- skipping the test run rather than letting it fail or hang. Not blocking the push."
+  tests_status="SKIPPED (local Postgres/Redis unreachable)"
+fi
 run_step "build" pnpm build
 
 # Prompts on /dev/tty and returns success only on an explicit y/yes.
@@ -85,6 +108,7 @@ run_step "build" pnpm build
 # some /bin/sh implementations, even inside `if`/`!`  -- plain `printf`/
 # `read` redirections just fail normally and can be caught.
 confirm_push() {
+  print_tests_status
   if ! printf '' 2>/dev/null > /dev/tty; then
     echo "[review-hook] No terminal attached to confirm on -- proceeding without asking."
     return 0
@@ -367,6 +391,7 @@ done < "$reffile"
 # harmless but repetitive.
 if [ "$any_reviewed" -eq 0 ]; then
   echo "[review-hook] No new commits to review."
+  print_tests_status
 else
   echo "[review-hook] Total review time: ${total_review_seconds}s."
 fi

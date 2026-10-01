@@ -3,3 +3,4 @@ coverage
 .turbo
 pnpm-lock.yaml
 apps/api/drizzle/meta
+.pnpm-store
