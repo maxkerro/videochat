@@ -36,7 +36,13 @@ describe.skipIf(!hasInfra)('conversations HTTP flow (CHAT-012)', () => {
       .compile();
     app = moduleRef.createNestApplication({ bufferLogs: true });
     configureApp(app);
-    await app.init();
+    // Listen once for the whole file instead of letting supertest do its own listen(0) +
+    // close() on this same server for every single request. That per-request churn (hundreds
+    // of cycles in the bigger suites) occasionally left the socket wedged on macOS, after which
+    // every later request in the file failed with ETIMEDOUT. With the server already listening,
+    // supertest just reuses its address. Bound to 127.0.0.1 because that's exactly the host
+    // supertest connects to. messages/realtime e2e already listen once for their own reasons.
+    await app.listen(0, '127.0.0.1');
     mail = moduleRef.get(MailService) as unknown as FakeMailService;
   });
   afterAll(() => app.close());
