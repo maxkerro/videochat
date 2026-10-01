@@ -157,6 +157,9 @@ export function CallView({ call }: { call: CallSnapshot }) {
             {status}
           </span>
           <span className={styles.badges}>
+            {call.quality === 'poor' && call.phase === 'active' && (
+              <span className={`${styles.badge} ${styles.badgeWarn}`}>Poor connection</span>
+            )}
             {!call.remoteAudioEnabled && (
               <span className={styles.badge}>{call.peer.displayName} is muted</span>
             )}
@@ -165,6 +168,27 @@ export function CallView({ call }: { call: CallSnapshot }) {
             )}
           </span>
         </div>
+        {call.phase === 'reconnecting' && (
+          <div className={styles.reconnecting} role="alert">
+            <span className={styles.spinner} aria-hidden="true" />
+            <span>Reconnecting…</span>
+            <span className={styles.status}>
+              The call ends if the connection doesn’t come back within 15 seconds.
+            </span>
+          </div>
+        )}
+        {call.lowBandwidth && call.videoEnabled && call.phase === 'active' && (
+          <div className={styles.suggestion}>
+            <span>Your connection is too slow for video.</span>
+            <button
+              type="button"
+              className={styles.suggestionButton}
+              onClick={() => void toggleVideo()}
+            >
+              Switch to audio only
+            </button>
+          </div>
+        )}
         <DraggableSelfView call={call} />
       </div>
       <div className={styles.controls} role="toolbar" aria-label="Call controls">

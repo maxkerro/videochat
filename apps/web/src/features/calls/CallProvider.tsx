@@ -13,7 +13,7 @@ import {
 import { useToast } from '../../components/ui';
 import { useAuth, withAuthRetry, type AuthContextValue } from '../auth/AuthContext';
 import { useRealtime } from '../chat/RealtimeProvider';
-import { fetchIceServers } from './callsApi';
+import { fetchIceServers, postCallStats } from './callsApi';
 import { CallEngine, type CallEndCause, type CallPeer, type CallSnapshot } from './CallEngine';
 
 export interface CallController {
@@ -98,6 +98,12 @@ function createBrowserCallEngine(realtime: ReturnType<typeof useRealtime>) {
     createMediaStream: () => new MediaStream(),
     now: () => Date.now(),
     newCallId: () => crypto.randomUUID(),
+    reportStats: (callId, stats) => {
+      if (!auth) return;
+      void withAuthRetry(auth, (token) => postCallStats(token, callId, stats)).catch(
+        () => undefined,
+      );
+    },
   });
   return {
     engine,
@@ -125,9 +131,27 @@ export function CallProvider({ children }: { children: ReactNode }) {
   const [expanded, setExpanded] = useState(true);
 
   useEffect(
-    () => realtime.subscribe((envelope) => engine.handleEvent(envelope)),
+    () =>
+      realtime.subscribe((envelope) => {
+        // CHAT-043: a (re)connected socket is registered server-side once `realtime.ready`
+        // arrives -- only then can it re-attach to a call in progress.
+        if (envelope.type === 'realtime.ready') engine.onSignallingReconnected();
+        engine.handleEvent(envelope);
+      }),
     [realtime, engine],
   );
+
+  // CHAT-043: Wi-Fi -> tethering and similar network switches; restart ICE right away.
+  useEffect(() => {
+    const onChange = () => engine.onNetworkChange();
+    window.addEventListener('online', onChange);
+    const connection = (navigator as Navigator & { connection?: EventTarget }).connection;
+    connection?.addEventListener?.('change', onChange);
+    return () => {
+      window.removeEventListener('online', onChange);
+      connection?.removeEventListener?.('change', onChange);
+    };
+  }, [engine]);
 
   // Signing out mid-call hangs up rather than leaving the other person talking to nobody.
   useEffect(() => {

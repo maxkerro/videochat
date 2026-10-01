@@ -12,3 +12,5 @@ coverage/
 !.vscode/extensions.json
 .idea/
 .pnpm-store/
+# Local command output shared with Claude for debugging (not source).
+last_command*

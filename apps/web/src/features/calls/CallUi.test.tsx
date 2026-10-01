@@ -28,6 +28,8 @@ function snapshot(overrides: Partial<CallSnapshot> = {}): CallSnapshot {
     remoteAudioEnabled: true,
     remoteVideoEnabled: true,
     endCause: null,
+    quality: 'good',
+    lowBandwidth: false,
     ...overrides,
   };
 }
@@ -206,6 +208,25 @@ describe('call UI (CHAT-042)', () => {
       await act(() => router.navigate('/c/other-conv'));
       expect(ctrl.setExpanded).toHaveBeenCalledWith(false);
       expect(ctrl.hangUp).not.toHaveBeenCalled();
+    });
+
+    // CHAT-043
+    it('covers the call with a reconnecting overlay while the connection recovers', () => {
+      renderWith(controller(snapshot({ phase: 'reconnecting' })));
+      expect(screen.getByRole('alert')).toHaveTextContent('Reconnecting…');
+      expect(screen.getByRole('alert')).toHaveTextContent(/15 seconds/);
+    });
+
+    it('shows a poor-connection indicator', () => {
+      renderWith(controller(snapshot({ quality: 'poor' })));
+      expect(screen.getByText('Poor connection')).toBeInTheDocument();
+    });
+
+    it('suggests switching to audio only when bandwidth is too low', async () => {
+      const ctrl = controller(snapshot({ lowBandwidth: true }));
+      renderWith(ctrl);
+      await userEvent.click(screen.getByRole('button', { name: 'Switch to audio only' }));
+      expect(ctrl.toggleVideo).toHaveBeenCalled();
     });
 
     it('the self view can be dragged', () => {

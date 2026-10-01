@@ -42,6 +42,7 @@ class FakePeerConnection {
   senders: { track: FakeTrack; replaceTrack: (t: FakeTrack) => Promise<void> }[] = [];
   closed = false;
   restarted = 0;
+  statsReport: Record<string, unknown>[] = [];
   ontrack: ((e: { track: FakeTrack }) => void) | null = null;
   onicecandidate: ((e: { candidate: { toJSON(): unknown } | null }) => void) | null = null;
   onnegotiationneeded: (() => void) | null = null;
@@ -91,6 +92,10 @@ class FakePeerConnection {
   close() {
     this.closed = true;
   }
+  async getStats() {
+    const stats = this.statsReport;
+    return { forEach: (cb: (s: Record<string, unknown>) => void) => stats.forEach(cb) };
+  }
   setConnectionState(state: RTCPeerConnectionState) {
     this.connectionState = state;
     this.onconnectionstatechange?.();
@@ -117,6 +122,7 @@ function setUp(overrides: Partial<CallEngineDeps> = {}) {
     createMediaStream: () => new FakeStream() as unknown as MediaStream,
     now: () => 1_000,
     newCallId: () => CALL_ID,
+    reportStats: vi.fn(),
     ...overrides,
   };
   const engine = new CallEngine(deps);
@@ -443,6 +449,163 @@ describe('CallEngine (CHAT-042)', () => {
         reason: 'completed',
       });
       expect(engine.getSnapshot()?.phase).toBe('active');
+    });
+  });
+
+  describe('network resilience and quality (CHAT-043)', () => {
+    afterEach(() => vi.useRealTimers());
+
+    async function liveCall(asCallee = false) {
+      const ctx = setUp();
+      if (asCallee) {
+        ctx.event(CALL_EVENTS.incoming, {
+          callId: CALL_ID,
+          conversationId: CONV_ID,
+          media: 'video',
+          caller: PEER,
+        });
+        await ctx.engine.accept(avStream());
+      } else {
+        ctx.engine.startOutgoing({
+          conversationId: CONV_ID,
+          peer: PEER,
+          media: 'video',
+          stream: avStream(),
+        });
+        ctx.event(CALL_EVENTS.accepted, { callId: CALL_ID, connectionId: 'their-conn' });
+        await flush();
+      }
+      const pc = ctx.pcs[0]!;
+      pc.setConnectionState('connected');
+      return { ...ctx, pc };
+    }
+
+    it('shows "reconnecting" on a drop and restarts ICE if it has not recovered in 2 s', async () => {
+      const { engine, pc } = await liveCall();
+      vi.useFakeTimers();
+      pc.setConnectionState('disconnected');
+      expect(engine.getSnapshot()?.phase).toBe('reconnecting');
+      expect(pc.restarted).toBe(0);
+      vi.advanceTimersByTime(2_000);
+      expect(pc.restarted).toBe(1);
+    });
+
+    it('restarts ICE immediately when the connection fails', async () => {
+      const { engine, pc } = await liveCall();
+      pc.setConnectionState('failed');
+      expect(engine.getSnapshot()?.phase).toBe('reconnecting');
+      expect(pc.restarted).toBe(1);
+    });
+
+    it('goes back to the live call when the connection recovers, keeping the timer', async () => {
+      const { engine, pc } = await liveCall();
+      vi.useFakeTimers();
+      pc.setConnectionState('disconnected');
+      pc.setConnectionState('connected');
+      expect(engine.getSnapshot()).toMatchObject({ phase: 'active', startedAt: 1_000 });
+      vi.advanceTimersByTime(20_000);
+      expect(engine.getSnapshot()?.phase).toBe('active');
+    });
+
+    it('ends the call after 15 s of failing to reconnect', async () => {
+      const { engine, pc, lastSent } = await liveCall();
+      vi.useFakeTimers();
+      pc.setConnectionState('disconnected');
+      vi.advanceTimersByTime(14_999);
+      expect(engine.getSnapshot()?.phase).toBe('reconnecting');
+      vi.advanceTimersByTime(1);
+      expect(engine.getSnapshot()).toMatchObject({ phase: 'ended', endCause: 'connection-lost' });
+      expect(lastSent(CALL_EVENTS.end)?.payload).toEqual({ callId: CALL_ID });
+    });
+
+    it('re-attaches the call when the signalling socket reconnects', async () => {
+      const { engine, lastSent } = await liveCall();
+      engine.onSignallingReconnected();
+      expect(lastSent(CALL_EVENTS.resume)?.payload).toEqual({ callId: CALL_ID });
+    });
+
+    it('does nothing on a socket reconnect when not in a call', () => {
+      const { engine, sent } = setUp();
+      engine.onSignallingReconnected();
+      expect(sent).toEqual([]);
+    });
+
+    it('the caller restarts ICE when either side resumes; the callee waits for its offer', async () => {
+      const caller = await liveCall();
+      caller.event(CALL_EVENTS.resume, { callId: CALL_ID });
+      expect(caller.pc.restarted).toBe(1);
+
+      const callee = await liveCall(true);
+      callee.event(CALL_EVENTS.resume, { callId: CALL_ID });
+      expect(callee.pc.restarted).toBe(0);
+    });
+
+    it('restarts ICE straight away when the network changes (e.g. Wi-Fi -> tethering)', async () => {
+      const { engine, pc } = await liveCall();
+      engine.onNetworkChange();
+      expect(pc.restarted).toBe(1);
+    });
+
+    it('flags a poor connection from getStats and suggests audio only on low bandwidth', async () => {
+      // Only the stats interval is faked: it starts as soon as the call connects, inside liveCall().
+      vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval'] });
+      const { engine, pc } = await liveCall();
+      pc.statsReport = [
+        { type: 'inbound-rtp', packetsReceived: 900, packetsLost: 100 },
+        {
+          type: 'candidate-pair',
+          nominated: true,
+          state: 'succeeded',
+          currentRoundTripTime: 0.05,
+          availableOutgoingBitrate: 90_000,
+        },
+      ];
+      await vi.advanceTimersByTimeAsync(2_000);
+      expect(engine.getSnapshot()).toMatchObject({ quality: 'poor', lowBandwidth: true });
+    });
+
+    it('sends a quality summary when the call ends', async () => {
+      // Only the stats interval is faked: it starts as soon as the call connects, inside liveCall().
+      vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval'] });
+      const { engine, pc } = await liveCall();
+      pc.statsReport = [
+        { type: 'inbound-rtp', packetsReceived: 990, packetsLost: 10 },
+        {
+          type: 'candidate-pair',
+          nominated: true,
+          state: 'succeeded',
+          currentRoundTripTime: 0.12,
+          availableOutgoingBitrate: 900_000,
+        },
+      ];
+      await vi.advanceTimersByTimeAsync(2_000);
+      pc.setConnectionState('disconnected');
+      pc.setConnectionState('connected');
+
+      engine.hangUp();
+
+      const report = vi.mocked(engine['deps'].reportStats!);
+      expect(report).toHaveBeenCalledWith(CALL_ID, {
+        durationSec: 0,
+        rttMsAvg: 120,
+        packetLossPctMax: 1,
+        outgoingKbpsMin: 900,
+        reconnects: 1,
+        hadVideo: true,
+        endCause: 'completed',
+      });
+    });
+
+    it('sends no summary for a call that was never answered', () => {
+      const { engine } = setUp();
+      engine.startOutgoing({
+        conversationId: CONV_ID,
+        peer: PEER,
+        media: 'audio',
+        stream: audioStream(),
+      });
+      engine.hangUp();
+      expect(engine['deps'].reportStats).not.toHaveBeenCalled();
     });
   });
 });

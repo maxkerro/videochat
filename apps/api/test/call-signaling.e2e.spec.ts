@@ -293,4 +293,104 @@ describe.skipIf(!hasInfra)('call signalling over WebSocket (CHAT-041)', () => {
       await calleeLaptop.expectNone(CALL_EVENTS.ended, byCall(callId), 100);
     });
   });
+  describe('network resilience (CHAT-043)', () => {
+    async function liveCall() {
+      const ctx = await setUp();
+      const callId = randomUUID();
+      ctx.callerSocket.send(CALL_EVENTS.invite, {
+        callId,
+        conversationId: ctx.conversationId,
+        media: 'video',
+      });
+      await ctx.calleeLaptop.waitFor(CALL_EVENTS.incoming, byCall(callId));
+      ctx.calleeLaptop.send(CALL_EVENTS.accept, { callId });
+      await ctx.callerSocket.waitFor(CALL_EVENTS.accepted, byCall(callId));
+      return { ...ctx, callId };
+    }
+
+    it('a participant whose socket reconnects re-attaches to the call and negotiation flows again', async () => {
+      const { caller, callerSocket, calleeLaptop, callId } = await liveCall();
+
+      callerSocket.close();
+      const fresh = await connect(caller);
+      fresh.send(CALL_EVENTS.resume, { callId });
+
+      await fresh.waitFor(CALL_EVENTS.resume, byCall(callId));
+      await calleeLaptop.waitFor(CALL_EVENTS.resume, byCall(callId));
+      fresh.send(CALL_EVENTS.offer, { callId, sdp: 'v=0 ice-restart' });
+      const offer = await calleeLaptop.waitFor(
+        CALL_EVENTS.offer,
+        (p) => p.callId === callId && p.sdp === 'v=0 ice-restart',
+      );
+      expect(offer).toBeDefined();
+      expect((await callRow(callId))?.callerConnectionId).toBe(fresh.connectionId);
+      expect((await callRow(callId))?.callerDisconnectedAt).toBeNull();
+    });
+
+    it('ends the call as connection-lost if the participant does not come back in time', async () => {
+      const { callerSocket, calleeLaptop, callId } = await liveCall();
+
+      callerSocket.close();
+
+      const ended = await calleeLaptop.waitFor(CALL_EVENTS.ended, byCall(callId), 8000);
+      expect(ended.payload).toEqual({ callId, reason: 'connection-lost' });
+    });
+
+    it("cannot resume someone else's call", async () => {
+      const { callId } = await liveCall();
+      const outsider = await connect(await signUp());
+      outsider.send(CALL_EVENTS.resume, { callId });
+      await outsider.expectNone(CALL_EVENTS.resume, byCall(callId));
+    });
+  });
+
+  describe('POST /calls/:id/stats (CHAT-043)', () => {
+    const stats = {
+      durationSec: 125,
+      rttMsAvg: 80,
+      packetLossPctMax: 1.5,
+      outgoingKbpsMin: 900,
+      reconnects: 1,
+      hadVideo: true,
+      endCause: 'completed',
+    };
+
+    it("records a participant's end-of-call summary", async () => {
+      const { caller, callerSocket, calleeLaptop, conversationId } = await setUp();
+      const callId = randomUUID();
+      callerSocket.send(CALL_EVENTS.invite, { callId, conversationId, media: 'video' });
+      await calleeLaptop.waitFor(CALL_EVENTS.incoming, byCall(callId));
+
+      await request(server())
+        .post(`/calls/${callId}/stats`)
+        .set(bearer(caller.token))
+        .send(stats)
+        .expect(204);
+      const metrics = await request(server()).get('/metrics').expect(200);
+      expect(metrics.text).toMatch(/call_stats_reports_total\{end_cause="completed"\} 1/);
+    });
+
+    it('404s for someone who was not in the call', async () => {
+      const { callerSocket, calleeLaptop, conversationId } = await setUp();
+      const callId = randomUUID();
+      callerSocket.send(CALL_EVENTS.invite, { callId, conversationId, media: 'audio' });
+      await calleeLaptop.waitFor(CALL_EVENTS.incoming, byCall(callId));
+      const outsider = await signUp();
+
+      await request(server())
+        .post(`/calls/${callId}/stats`)
+        .set(bearer(outsider.token))
+        .send(stats)
+        .expect(404);
+    });
+
+    it('rejects a malformed summary', async () => {
+      const user = await signUp();
+      await request(server())
+        .post(`/calls/${randomUUID()}/stats`)
+        .set(bearer(user.token))
+        .send({ ...stats, packetLossPctMax: 250 })
+        .expect(400);
+    });
+  });
 });

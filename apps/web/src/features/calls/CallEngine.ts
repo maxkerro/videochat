@@ -9,9 +9,18 @@ import {
   callSdpSchema,
   type CallEndReason,
   type CallMedia,
+  type CallStats,
   type IceServer,
   type WsEnvelope,
 } from '@videochat/shared';
+
+import { analyzeStats, StatsAccumulator, type StatsCounters } from './callQuality';
+
+/** CHAT-043 AC: "Reconnecting overlay for up to 15 s before ending the call." */
+export const RECONNECT_TIMEOUT_MS = 15_000;
+/** A brief `disconnected` often recovers by itself; restart ICE only if it hasn't by then. */
+export const ICE_RESTART_DELAY_MS = 2_000;
+export const STATS_INTERVAL_MS = 2_000;
 
 export type CallPhase =
   'outgoing' | 'incoming' | 'connecting' | 'active' | 'reconnecting' | 'ended';
@@ -46,6 +55,10 @@ export interface CallSnapshot {
   remoteAudioEnabled: boolean;
   remoteVideoEnabled: boolean;
   endCause: CallEndCause | null;
+  /** CHAT-043: from getStats -- 'poor' above 5% packet loss or 400 ms round trip. */
+  quality: 'unknown' | 'good' | 'poor';
+  /** CHAT-043: too little outgoing bandwidth for video; the UI suggests audio only. */
+  lowBandwidth: boolean;
 }
 
 export interface CallEngineDeps {
@@ -57,6 +70,8 @@ export interface CallEngineDeps {
   createMediaStream: () => MediaStream;
   now: () => number;
   newCallId: () => string;
+  /** CHAT-043: end-of-call quality summary, fire-and-forget. */
+  reportStats?: (callId: string, stats: CallStats) => void;
 }
 
 export class CallBusyError extends Error {
@@ -85,6 +100,15 @@ export class CallEngine {
   private pendingSignals: WsEnvelope[] = [];
   private signalChain: Promise<void> = Promise.resolve();
   private iceServers: Promise<IceServer[]> | null = null;
+  // CHAT-043 resilience/quality state, reset per call.
+  private reconnectTimer: ReturnType<typeof setTimeout> | undefined;
+  private iceRestartTimer: ReturnType<typeof setTimeout> | undefined;
+  private statsTimer: ReturnType<typeof setInterval> | undefined;
+  private statsCounters: StatsCounters | null = null;
+  private statsAcc = new StatsAccumulator();
+  private reconnects = 0;
+  private hadVideo = false;
+  private everConnected = false;
 
   constructor(private readonly deps: CallEngineDeps) {}
 
@@ -128,6 +152,8 @@ export class CallEngine {
       remoteAudioEnabled: true,
       remoteVideoEnabled: args.media === 'video',
       endCause: null,
+      quality: 'unknown',
+      lowBandwidth: false,
     };
     this.emit();
     this.deps.send(CALL_EVENTS.invite, {
@@ -180,6 +206,20 @@ export class CallEngine {
     if (this.snap?.phase !== 'ended') return;
     this.snap = null;
     this.emit();
+  }
+
+  /** CHAT-043: the realtime socket reconnected (new connection id) -- re-attach the call to it so
+   *  negotiation can flow again. */
+  onSignallingReconnected(): void {
+    const snap = this.snap;
+    if (!snap || !['connecting', 'active', 'reconnecting'].includes(snap.phase)) return;
+    this.deps.send(CALL_EVENTS.resume, { callId: snap.callId });
+  }
+
+  /** CHAT-043: the device's network changed (e.g. Wi-Fi -> tethering): find a new media path now
+   *  rather than waiting for the old one to time out. */
+  onNetworkChange(): void {
+    if (this.snap && ['active', 'reconnecting'].includes(this.snap.phase)) this.restartIce();
   }
 
   toggleAudio(): void {
@@ -264,6 +304,13 @@ export class CallEngine {
       case CALL_EVENTS.answer:
       case CALL_EVENTS.ice:
         return this.onSignal(envelope);
+      case CALL_EVENTS.resume: {
+        // The other side (or this device) re-attached after its socket reconnected: refresh the
+        // media path. Only the impolite side restarts, so the two don't race each other.
+        const ref = callRefSchema.safeParse(envelope.payload);
+        if (ref.success && this.isCurrent(ref.data.callId) && !this.polite) this.restartIce();
+        return;
+      }
       case CALL_EVENTS.media: {
         const media = callMediaStateSchema.safeParse(envelope.payload);
         if (media.success && this.isCurrent(media.data.callId)) {
@@ -305,6 +352,8 @@ export class CallEngine {
       remoteAudioEnabled: true,
       remoteVideoEnabled: media === 'video',
       endCause: null,
+      quality: 'unknown',
+      lowBandwidth: false,
     };
     this.emit();
     this.deps.send(CALL_EVENTS.ringing, { callId });
@@ -411,11 +460,69 @@ export class CallEngine {
     const snap = this.snap;
     if (!snap || snap.phase === 'ended') return;
     if (state === 'connected') {
+      clearTimeout(this.reconnectTimer);
+      clearTimeout(this.iceRestartTimer);
+      this.reconnectTimer = undefined;
+      if (snap.phase === 'reconnecting') this.reconnects += 1;
+      this.everConnected = true;
       this.update({ phase: 'active', startedAt: snap.startedAt ?? this.deps.now() });
       this.sendMediaState();
+      this.startStatsPolling();
+    } else if (state === 'disconnected') {
+      this.enterReconnecting();
+      clearTimeout(this.iceRestartTimer);
+      this.iceRestartTimer = setTimeout(() => this.restartIce(), ICE_RESTART_DELAY_MS);
     } else if (state === 'failed') {
-      this.deps.send(CALL_EVENTS.end, { callId: snap.callId });
-      this.finish('failed');
+      this.enterReconnecting();
+      this.restartIce();
+    }
+  }
+
+  /** CHAT-043: show "Reconnecting...", and give up after RECONNECT_TIMEOUT_MS. */
+  private enterReconnecting(): void {
+    const snap = this.snap;
+    if (!snap || snap.phase === 'ended') return;
+    if (snap.phase !== 'reconnecting') this.update({ phase: 'reconnecting' });
+    if (this.reconnectTimer === undefined) {
+      this.reconnectTimer = setTimeout(() => {
+        const current = this.snap;
+        if (!current || current.phase !== 'reconnecting') return;
+        this.deps.send(CALL_EVENTS.end, { callId: current.callId });
+        this.finish('connection-lost');
+      }, RECONNECT_TIMEOUT_MS);
+    }
+  }
+
+  private restartIce(): void {
+    // Triggers `negotiationneeded` with an ICE-restart offer (perfect negotiation handles it).
+    this.pc?.restartIce?.();
+  }
+
+  private startStatsPolling(): void {
+    if (this.statsTimer !== undefined) return;
+    this.statsTimer = setInterval(() => void this.sampleStats(), STATS_INTERVAL_MS);
+  }
+
+  private async sampleStats(): Promise<void> {
+    const pc = this.pc;
+    const snap = this.snap;
+    if (!pc || !snap || snap.phase === 'ended') return;
+    let report: RTCStatsReport;
+    try {
+      report = await pc.getStats();
+    } catch {
+      return;
+    }
+    const sample = analyzeStats(report as never, this.statsCounters);
+    this.statsCounters = sample.counters;
+    this.statsAcc.add(sample);
+    const current = this.snap;
+    if (!current || current.phase === 'ended') return;
+    // Only meaningful while video is actually being sent.
+    const lowBandwidth = sample.lowBandwidth && current.videoEnabled;
+    const quality = sample.poor ? 'poor' : 'good';
+    if (quality !== current.quality || lowBandwidth !== current.lowBandwidth) {
+      this.update({ quality, lowBandwidth });
     }
   }
 
@@ -440,13 +547,47 @@ export class CallEngine {
 
   private finish(cause: CallEndCause): void {
     if (!this.snap || this.snap.phase === 'ended') return;
+    const hadConnection = this.pc !== null;
+    this.stopTimers();
+    if (hadConnection) this.reportStats(cause);
     this.pc?.close();
     this.pc = null;
     stopStream(this.snap.localStream);
     this.update({ phase: 'ended', endCause: cause });
   }
 
+  private stopTimers(): void {
+    clearTimeout(this.reconnectTimer);
+    clearTimeout(this.iceRestartTimer);
+    clearInterval(this.statsTimer);
+    this.reconnectTimer = undefined;
+    this.iceRestartTimer = undefined;
+    this.statsTimer = undefined;
+  }
+
+  /** CHAT-043 AC: "Call statistics are sent to analytics at the end of each call." */
+  private reportStats(cause: CallEndCause): void {
+    const snap = this.snap;
+    if (!snap || !this.deps.reportStats) return;
+    this.deps.reportStats(snap.callId, {
+      durationSec:
+        this.everConnected && snap.startedAt !== null
+          ? Math.max(0, Math.round((this.deps.now() - snap.startedAt) / 1000))
+          : 0,
+      ...this.statsAcc.summary(),
+      reconnects: this.reconnects,
+      hadVideo: this.hadVideo || snap.videoEnabled,
+      endCause: cause,
+    });
+  }
+
   private reset(): void {
+    this.stopTimers();
+    this.statsCounters = null;
+    this.statsAcc = new StatsAccumulator();
+    this.reconnects = 0;
+    this.hadVideo = false;
+    this.everConnected = false;
     this.pc?.close();
     this.pc = null;
     this.pendingSignals = [];
@@ -467,6 +608,7 @@ export class CallEngine {
   protected update(patch: Partial<CallSnapshot>): void {
     if (!this.snap) return;
     this.snap = { ...this.snap, ...patch };
+    if (this.snap.videoEnabled) this.hadVideo = true;
     this.emit();
   }
 

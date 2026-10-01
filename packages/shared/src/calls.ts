@@ -114,3 +114,26 @@ export type CallMediaState = z.infer<typeof callMediaStateSchema>;
  *  `call.accepted` was its own answer or another device's ("answered elsewhere"). */
 export const realtimeReadySchema = z.object({ connectionId: z.string() });
 export type RealtimeReady = z.infer<typeof realtimeReadySchema>;
+
+/**
+ * CHAT-043: a call's quality summary, sent by each participant's client when the call ends
+ * ("call statistics are sent to analytics at the end of each call"). Every metric is optional --
+ * a call that never connected has no RTT or packet loss to report.
+ */
+export const callStatsSchema = z.object({
+  /** Seconds from media connecting to hang-up; 0 if it never connected. */
+  durationSec: z.number().min(0).max(86_400),
+  /** Average round-trip time over the call, in ms. */
+  rttMsAvg: z.number().min(0).max(60_000).nullable(),
+  /** Worst packet loss seen in any sampling window, in percent. */
+  packetLossPctMax: z.number().min(0).max(100).nullable(),
+  /** Lowest available outgoing bitrate seen, in kbps. */
+  outgoingKbpsMin: z.number().min(0).max(1_000_000).nullable(),
+  /** How many times the connection dropped and recovered. */
+  reconnects: z.number().int().min(0).max(1_000),
+  /** Whether video was on at any point. */
+  hadVideo: z.boolean(),
+  /** How it ended from this device's point of view (server reason or local cause). */
+  endCause: z.string().max(32),
+});
+export type CallStats = z.infer<typeof callStatsSchema>;

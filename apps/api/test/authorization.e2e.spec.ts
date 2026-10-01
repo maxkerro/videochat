@@ -345,6 +345,7 @@ describe.skipIf(!hasInfra)(
         ['DELETE', '/users/00000000-0000-0000-0000-000000000000/block'],
         // CHAT-040: TURN credentials cost money to relay through -- never issued anonymously.
         ['GET', '/calls/ice-servers'],
+        ['POST', '/calls/00000000-0000-0000-0000-000000000000/stats'],
       ] as const)('%s %s', async (method, path) => {
         const send =
           request(server())[method.toLowerCase() as 'get' | 'post' | 'patch' | 'delete'](path);
