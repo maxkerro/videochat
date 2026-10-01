@@ -107,6 +107,14 @@ const envSchema = z.object({
   CLOUDFLARE_TURN_KEY_ID: z.string().default(''),
   CLOUDFLARE_TURN_API_TOKEN: z.string().default(''),
 
+  // --- Calls: signalling (CHAT-041) ---
+  /** An unanswered call stops ringing and is logged as missed after this long (the AC's 30 s). */
+  CALL_RING_TIMEOUT_SEC: z.coerce.number().int().positive().default(30),
+  /** How long a participant whose connection dropped mid-call has to reconnect before the call
+   *  is ended (CHAT-043). A little longer than the client's 15 s "Reconnecting..." overlay, so the
+   *  client always gives up first and the server never ends a call the client still shows. */
+  CALL_RECONNECT_GRACE_SEC: z.coerce.number().int().positive().default(20),
+
   /** Login attempts, tracked per client IP (there's no authenticated user yet at this endpoint).
    *  Distinct from CHAT-010's per-account lockout after 5 *failed* attempts -- this limits the
    *  *rate* of attempts against the endpoint itself, successful or not, and by IP rather than by

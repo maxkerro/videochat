@@ -27,12 +27,12 @@ function makeSocket(readyState = 1): RealtimeSocket {
 }
 
 describe('RealtimeService', () => {
-  it('subscribes to both wildcard channels on module init', async () => {
+  it('subscribes to the conversation, user and (CHAT-041) connection wildcard channels on module init', async () => {
     const { redis, subscriber } = makeFakeRedis();
     const service = new RealtimeService(redis);
     await service.onModuleInit();
     expect(subscriber.connect).toHaveBeenCalled();
-    expect(subscriber.psubscribe).toHaveBeenCalledWith('conv:*', 'user:*');
+    expect(subscriber.psubscribe).toHaveBeenCalledWith('conv:*', 'user:*', 'conn:*');
   });
 
   it('publishes a conversation event to the conv:{id} channel', async () => {

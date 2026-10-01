@@ -42,6 +42,8 @@ describe('RealtimeGateway', () => {
     register: ReturnType<typeof vi.fn>;
     unregister: ReturnType<typeof vi.fn>;
     publishToConversation: ReturnType<typeof vi.fn>;
+    dispatchInbound: ReturnType<typeof vi.fn>;
+    notifyDisconnected: ReturnType<typeof vi.fn>;
   };
   let gateway: RealtimeGateway;
 
@@ -55,6 +57,8 @@ describe('RealtimeGateway', () => {
       register: vi.fn(),
       unregister: vi.fn(),
       publishToConversation: vi.fn().mockResolvedValue(undefined),
+      dispatchInbound: vi.fn().mockResolvedValue(false),
+      notifyDisconnected: vi.fn().mockResolvedValue(undefined),
     };
     gateway = new RealtimeGateway(
       jwt as unknown as JwtService,
@@ -198,6 +202,19 @@ describe('RealtimeGateway', () => {
       await messageHandler(client)(Buffer.from(JSON.stringify(envelope)));
 
       expect(realtime.publishToConversation).not.toHaveBeenCalled();
+    });
+
+    // CHAT-041: feature modules (calls) register their own inbound types with RealtimeService.
+    it('hands any other envelope type to the registered feature handlers', async () => {
+      const client = await connectedClient();
+      const envelope = makeEnvelope('call.invite', { callId: 'c1' }, 'evt-1');
+
+      await messageHandler(client)(Buffer.from(JSON.stringify(envelope)));
+
+      expect(realtime.dispatchInbound).toHaveBeenCalledWith(
+        client,
+        expect.objectContaining({ type: 'call.invite', payload: { callId: 'c1' } }),
+      );
     });
 
     it('ignores malformed JSON and a payload missing conversationId, without throwing', async () => {

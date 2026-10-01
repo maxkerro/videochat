@@ -41,3 +41,32 @@ export const LIMITS = {
    *  for, and a bigger page means fewer round trips for someone who was offline a while. */
   messageGapSyncPageSize: 200,
 } as const;
+
+/** CHAT-041: what a call carries. An audio call can be upgraded by turning the camera on later. */
+export const CALL_MEDIA = ['audio', 'video'] as const;
+export type CallMedia = (typeof CALL_MEDIA)[number];
+
+/** CHAT-041: a call's lifecycle. `ringing` until answered (or not), `active` while connected. */
+export const CALL_STATUSES = ['ringing', 'active', 'ended'] as const;
+export type CallStatus = (typeof CALL_STATUSES)[number];
+
+/**
+ * CHAT-041: why a call ended.
+ * - `missed`: nobody answered within the ring timeout.
+ * - `cancelled`: the caller hung up before it was answered.
+ * - `declined`: the callee rejected it.
+ * - `busy`: the callee was already in another call.
+ * - `completed`: either side hung up an answered call.
+ * - `connection-lost`: a participant's connection dropped and didn't come back in time.
+ * - `unavailable`: the call couldn't be placed (not a direct chat, not a member, blocked).
+ */
+export const CALL_END_REASONS = [
+  'missed',
+  'cancelled',
+  'declined',
+  'busy',
+  'completed',
+  'connection-lost',
+  'unavailable',
+] as const;
+export type CallEndReason = (typeof CALL_END_REASONS)[number];

@@ -14,7 +14,9 @@ import {
   makeEnvelope,
   typingSignalSchema,
   wsEnvelopeSchema,
+  type RealtimeReady,
   type TypingEvent,
+  type WsEnvelope,
 } from '@videochat/shared';
 import type { AccessTokenPayload } from '../auth/access-token.guard.js';
 import type { Database } from '../db/client.js';
@@ -91,6 +93,7 @@ export class RealtimeGateway
     }
 
     client.isAlive = true;
+    client.connectionId = randomUUID();
     client.on('pong', () => {
       client.isAlive = true;
     });
@@ -116,12 +119,17 @@ export class RealtimeGateway
     // sees sockets already in its registry). A client -- or a test -- that waits for this event
     // instead of `open` before assuming it will hear about new activity closes that window.
     if (client.readyState === client.OPEN) {
-      client.send(JSON.stringify(makeEnvelope('realtime.ready', {}, randomUUID())));
+      // CHAT-041: the socket's own id, so a device can tell its own call answer from another
+      // device's ("answered elsewhere").
+      const ready: RealtimeReady = { connectionId: client.connectionId };
+      client.send(JSON.stringify(makeEnvelope('realtime.ready', ready, randomUUID())));
     }
   }
 
   handleDisconnect(client: RealtimeSocket): void {
     this.realtime.unregister(client);
+    // Only sockets that finished authenticating can be in a call.
+    if (client.userId) void this.realtime.notifyDisconnected(client);
   }
 
   /** Verifies the access token from the connection URL's `token` query parameter, the same
@@ -161,7 +169,13 @@ export class RealtimeGateway
 
     if (envelope.data.type === 'conversation.typing') {
       await this.handleTyping(client, client.userId, envelope.data.payload);
+      return;
     }
+    // CHAT-041: feature modules (calls) register their own inbound types; anything unclaimed is
+    // ignored like any other unknown message.
+    await this.realtime.dispatchInbound(client, envelope.data as WsEnvelope).catch((err: Error) => {
+      this.logger.warn(`Inbound ${envelope.data.type} failed: ${err.message}`);
+    });
   }
 
   /** Re-broadcasts a member's "I'm typing" signal to the rest of the conversation, over realtime

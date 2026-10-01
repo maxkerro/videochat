@@ -14,6 +14,9 @@ import { REDIS } from '../infra/tokens.js';
 export interface RealtimeSocket extends WebSocket {
   isAlive?: boolean;
   userId?: string;
+  /** CHAT-041: unique per socket (one per tab/device connection). Calls are tied to the one
+   *  connection that placed or answered them, so negotiation reaches that device only. */
+  connectionId?: string;
   /** CHAT-020: this connection's own display name, cached at connect time so the gateway can
    *  embed it in a typing event without a DB round trip per keystroke (see `RealtimeGateway`'s
    *  `handleConnection`). */
@@ -39,6 +42,16 @@ function userChannel(userId: string): string {
   return `user:${userId}`;
 }
 
+function connectionChannel(connectionId: string): string {
+  return `conn:${connectionId}`;
+}
+
+/** CHAT-041: handles client->server envelopes of one `type` prefix (e.g. `call.`), registered by
+ *  feature modules so the gateway doesn't have to depend on them. */
+export type InboundHandler = (client: RealtimeSocket, envelope: WsEnvelope) => Promise<void>;
+/** CHAT-041: told whenever an authenticated socket closes. */
+export type DisconnectListener = (client: RealtimeSocket) => Promise<void>;
+
 /**
  * Local (per-node) socket registry plus the Redis pub/sub bridge that lets a message published
  * on any API node reach a client connected to any other node (CHAT-013's fan-out requirement).
@@ -55,6 +68,9 @@ export class RealtimeService implements OnModuleInit, OnModuleDestroy {
   private readonly subscriber: Redis;
   private readonly byUser = new Map<string, Set<RealtimeSocket>>();
   private readonly byConversation = new Map<string, Set<RealtimeSocket>>();
+  private readonly byConnection = new Map<string, RealtimeSocket>();
+  private readonly inboundHandlers = new Map<string, InboundHandler>();
+  private readonly disconnectListeners: DisconnectListener[] = [];
 
   constructor(@Inject(REDIS) private readonly redis: Redis) {
     this.subscriber = redis.duplicate();
@@ -67,7 +83,7 @@ export class RealtimeService implements OnModuleInit, OnModuleDestroy {
     await this.subscriber.connect().catch((err: Error) => {
       this.logger.warn(`Realtime subscriber not connected at startup: ${err.message}`);
     });
-    await this.subscriber.psubscribe('conv:*', 'user:*').catch((err: Error) => {
+    await this.subscriber.psubscribe('conv:*', 'user:*', 'conn:*').catch((err: Error) => {
       this.logger.warn(`Realtime psubscribe failed: ${err.message}`);
     });
   }
@@ -82,6 +98,7 @@ export class RealtimeService implements OnModuleInit, OnModuleDestroy {
     client.conversationIds = new Set(conversationIds);
 
     addToSetMap(this.byUser, userId, client);
+    if (client.connectionId) this.byConnection.set(client.connectionId, client);
     for (const conversationId of client.conversationIds) {
       addToSetMap(this.byConversation, conversationId, client);
     }
@@ -89,6 +106,9 @@ export class RealtimeService implements OnModuleInit, OnModuleDestroy {
 
   unregister(client: RealtimeSocket): void {
     if (client.userId) removeFromSetMap(this.byUser, client.userId, client);
+    if (client.connectionId && this.byConnection.get(client.connectionId) === client) {
+      this.byConnection.delete(client.connectionId);
+    }
     for (const conversationId of client.conversationIds ?? []) {
       removeFromSetMap(this.byConversation, conversationId, client);
     }
@@ -142,7 +162,46 @@ export class RealtimeService implements OnModuleInit, OnModuleDestroy {
     await this.redis.publish(userChannel(userId), JSON.stringify(envelope));
   }
 
+  /** CHAT-041: sends to exactly one socket (one device's connection), on whichever node holds it. */
+  async publishToConnection(connectionId: string, envelope: WsEnvelope): Promise<void> {
+    await this.redis.publish(connectionChannel(connectionId), JSON.stringify(envelope));
+  }
+
+  /** CHAT-041: routes client->server envelopes whose `type` starts with `prefix` to `handler`. */
+  registerInboundHandler(prefix: string, handler: InboundHandler): void {
+    this.inboundHandlers.set(prefix, handler);
+  }
+
+  /** Returns true if a registered handler took the envelope. */
+  async dispatchInbound(client: RealtimeSocket, envelope: WsEnvelope): Promise<boolean> {
+    for (const [prefix, handler] of this.inboundHandlers) {
+      if (envelope.type.startsWith(prefix)) {
+        await handler(client, envelope);
+        return true;
+      }
+    }
+    return false;
+  }
+
+  onDisconnect(listener: DisconnectListener): void {
+    this.disconnectListeners.push(listener);
+  }
+
+  /** Called by the gateway once an authenticated socket has closed and been unregistered. */
+  async notifyDisconnected(client: RealtimeSocket): Promise<void> {
+    for (const listener of this.disconnectListeners) {
+      await listener(client).catch((err: Error) => {
+        this.logger.warn(`Disconnect listener failed: ${err.message}`);
+      });
+    }
+  }
+
   private deliverLocally(channel: string, message: string): void {
+    if (channel.startsWith('conn:')) {
+      const client = this.byConnection.get(channel.slice('conn:'.length));
+      if (client && client.readyState === client.OPEN) client.send(message);
+      return;
+    }
     const targets = channel.startsWith('conv:')
       ? this.byConversation.get(channel.slice('conv:'.length))
       : channel.startsWith('user:')

@@ -76,6 +76,8 @@ const env: Env = {
   TURN_TTL_SEC: 3600,
   CLOUDFLARE_TURN_KEY_ID: '',
   CLOUDFLARE_TURN_API_TOKEN: '',
+  CALL_RING_TIMEOUT_SEC: 30,
+  CALL_RECONNECT_GRACE_SEC: 20,
   S3_ENDPOINT: 'http://localhost:9000',
   S3_REGION: 'us-east-1',
   S3_BUCKET: 'b',
