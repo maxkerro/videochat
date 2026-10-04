@@ -68,6 +68,7 @@ export type CallEndedListener = (call: CallRow) => Promise<void>;
 export class CallSignalingService implements OnModuleInit, OnModuleDestroy {
   private readonly logger = new Logger(CallSignalingService.name);
   private sweepTimer?: NodeJS.Timeout;
+  private sweepFailing = false;
   private readonly endedListeners: CallEndedListener[] = [];
 
   constructor(
@@ -324,10 +325,22 @@ export class CallSignalingService implements OnModuleInit, OnModuleDestroy {
         this.env.CALL_RING_TIMEOUT_SEC,
         this.env.CALL_RECONNECT_GRACE_SEC,
       );
+      if (this.sweepFailing) {
+        this.sweepFailing = false;
+        this.logger.log('Call sweep recovered');
+      }
       for (const call of expired) await this.announceEnded(call);
     } catch (err) {
-      // A DB blip shouldn't crash the node; the next sweep picks the same calls up.
-      this.logger.warn(`Call sweep failed: ${(err as Error).message}`);
+      // A DB blip shouldn't crash the node; the next sweep picks the same calls up. Logged once
+      // per failure streak, not every second -- e.g. a missing `calls` table (migrations not run
+      // yet) would otherwise flood the log until someone noticed.
+      if (!this.sweepFailing) {
+        this.sweepFailing = true;
+        const cause = (err as { cause?: { message?: string } }).cause?.message;
+        this.logger.warn(
+          `Call sweep failing (logged once until it recovers): ${cause ?? (err as Error).message}`,
+        );
+      }
     }
   }
 

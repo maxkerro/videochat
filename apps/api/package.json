@@ -18,7 +18,7 @@
     "test:watch": "vitest",
     "test:coverage": "vitest run --coverage",
     "db:generate": "drizzle-kit generate",
-    "db:migrate": "tsx src/db/scripts/migrate.ts",
+    "db:migrate": "pnpm --filter @videochat/shared build && tsx src/db/scripts/migrate.ts",
     "db:migrate:prod": "node dist/db/scripts/migrate.js",
     "db:seed": "tsx src/db/scripts/seed.ts",
     "db:reset": "tsx src/db/scripts/reset.ts",
