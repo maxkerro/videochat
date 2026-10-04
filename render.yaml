@@ -100,6 +100,9 @@ services:
       # SameSite=None doesn't hold up either once Safari/Chrome block third-party cookies.
       # Proxying makes every request the browser sees same-origin, so the cookie just works.
       # These rules must come before the catch-all SPA rewrite below (first match wins).
+      # Wildcard syntax: Render substitutes the Source's `*` match wherever `*` appears in the
+      # Destination. NOT `:splat` (that's Netlify) -- Render passes it through literally, and the
+      # API then sees `POST /auth/:splat` and 404s.
       # IMPORTANT: <service name>.onrender.com is only the hostname if that plain name was free
       # globally across all Render accounts -- Render silently appends a random suffix
       # (videochat-api-p6sw.onrender.com, not videochat-api.onrender.com) when it collides. The
@@ -108,25 +111,25 @@ services:
       # update every destination below to match.
       - type: rewrite
         source: /auth/*
-        destination: https://videochat-api-p6sw.onrender.com/auth/:splat
+        destination: https://videochat-api-p6sw.onrender.com/auth/*
       - type: rewrite
         source: /me
         destination: https://videochat-api-p6sw.onrender.com/me
       - type: rewrite
         source: /me/*
-        destination: https://videochat-api-p6sw.onrender.com/me/:splat
+        destination: https://videochat-api-p6sw.onrender.com/me/*
       - type: rewrite
         source: /users/*
-        destination: https://videochat-api-p6sw.onrender.com/users/:splat
+        destination: https://videochat-api-p6sw.onrender.com/users/*
       - type: rewrite
         source: /conversations
         destination: https://videochat-api-p6sw.onrender.com/conversations
       - type: rewrite
         source: /conversations/*
-        destination: https://videochat-api-p6sw.onrender.com/conversations/:splat
+        destination: https://videochat-api-p6sw.onrender.com/conversations/*
       - type: rewrite
         source: /calls/*
-        destination: https://videochat-api-p6sw.onrender.com/calls/:splat
+        destination: https://videochat-api-p6sw.onrender.com/calls/*
       - type: rewrite
         source: /health
         destination: https://videochat-api-p6sw.onrender.com/health
