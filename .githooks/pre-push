@@ -270,7 +270,9 @@ while read -r local_ref local_sha remote_ref remote_sha; do
   # see, or failing the whole review with no explanation.
   diff_max_chars=200000
   if [ "${#diff_text}" -gt "$diff_max_chars" ]; then
-    diff_text=$(printf '%s' "$diff_text" | head -c "$diff_max_chars")
+    # `head` exits once it has enough, so printf hits a closed pipe ("write error: Broken
+    # pipe"). Expected, harmless -- silence it rather than alarm whoever is pushing.
+    diff_text=$(printf '%s' "$diff_text" 2>/dev/null | head -c "$diff_max_chars")
     diff_text="$diff_text
 
 [...diff truncated at $diff_max_chars characters -- there was more, but it was cut off here to stay within a size the reviewer can handle. Treat missing test coverage or missing context here as a reason to be cautious, not as a clean bill of health.]"
