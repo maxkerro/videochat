@@ -1,4 +1,16 @@
 #!/bin/sh
 # Runs lint-staged (ESLint + Prettier on staged files) before each commit.
 # Installed via: git config core.hooksPath .githooks (see README.md)
+# Apple Silicon + an Intel (x86_64) build of git: git runs hooks under Rosetta, so node and every
+# native module it loads (rolldown, esbuild) start in x86_64 mode and look for Intel binaries that
+# were never installed -- "Cannot find module '@rolldown/binding-darwin-x64'" -- even though the
+# same command works fine typed into a Terminal. Re-run this hook natively instead. `exec` keeps
+# the hook's stdin (for pre-push, git's list of refs being pushed) and arguments intact; the guard
+# variable stops it from looping if `arch` itself can't switch.
+if [ "$(uname -s)" = "Darwin" ] && [ "$(uname -m)" = "x86_64" ] &&
+  [ "$(sysctl -n hw.optional.arm64 2>/dev/null)" = "1" ] && [ -z "${VIDEOCHAT_HOOK_NATIVE:-}" ]; then
+  export VIDEOCHAT_HOOK_NATIVE=1
+  exec arch -arm64 /bin/sh "$0" "$@"
+fi
+
 pnpm exec lint-staged
