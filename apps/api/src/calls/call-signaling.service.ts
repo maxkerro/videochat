@@ -313,13 +313,14 @@ export class CallSignalingService implements OnModuleInit, OnModuleDestroy {
   private async handleDisconnect(client: RealtimeSocket): Promise<void> {
     if (!client.connectionId) return;
     const { cancelled } = await handleConnectionGone(this.db, client.connectionId);
-    for (const call of cancelled) await this.announceEnded(call);
+    for (const call of cancelled) await this.announceEndedSafely(call);
   }
 
   /** Ends calls whose ring timeout or reconnect grace has passed. Public for tests. */
   async sweep(now: Date = new Date()): Promise<void> {
+    let expired: CallRow[];
     try {
-      const expired = await endExpiredCalls(
+      expired = await endExpiredCalls(
         this.db,
         now,
         this.env.CALL_RING_TIMEOUT_SEC,
@@ -329,11 +330,10 @@ export class CallSignalingService implements OnModuleInit, OnModuleDestroy {
         this.sweepFailing = false;
         this.logger.log('Call sweep recovered');
       }
-      for (const call of expired) await this.announceEnded(call);
     } catch (err) {
-      // A DB blip shouldn't crash the node; the next sweep picks the same calls up. Logged once
-      // per failure streak, not every second -- e.g. a missing `calls` table (migrations not run
-      // yet) would otherwise flood the log until someone noticed.
+      // The UPDATE itself failed, so nothing was ended and the next sweep picks the same calls up.
+      // Logged once per failure streak, not every second -- e.g. a missing `calls` table
+      // (migrations not run yet) would otherwise flood the log until someone noticed.
       if (!this.sweepFailing) {
         this.sweepFailing = true;
         const cause = (err as { cause?: { message?: string } }).cause?.message;
@@ -341,6 +341,19 @@ export class CallSignalingService implements OnModuleInit, OnModuleDestroy {
           `Call sweep failing (logged once until it recovers): ${cause ?? (err as Error).message}`,
         );
       }
+      return;
+    }
+    // These rows are already `ended` in the DB; no later sweep will see them again. So one call's
+    // announcement failing (e.g. a Redis publish error) must not stop the rest of the batch from
+    // being announced, and isn't a DB outage either.
+    for (const call of expired) await this.announceEndedSafely(call);
+  }
+
+  private async announceEndedSafely(call: CallRow): Promise<void> {
+    try {
+      await this.announceEnded(call);
+    } catch (err) {
+      this.logger.warn(`Couldn't announce the end of call ${call.id}: ${(err as Error).message}`);
     }
   }
 

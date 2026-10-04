@@ -1,12 +1,31 @@
-import type { CallRow } from '../db/schema.js';
-import { callOutcome, callSummaryText, formatCallDuration } from './call-history.service.js';
+import type { Database } from '../db/client.js';
+import { isConversationMember, markConversationRead } from '../db/conversations.js';
+import { appendMessage, SenderNotAMemberError } from '../db/messages.js';
+import type { CallRow, MessageRow } from '../db/schema.js';
+import type { RealtimeService } from '../realtime/realtime.service.js';
+import type { CallSignalingService } from './call-signaling.service.js';
+import {
+  CallHistoryService,
+  callOutcome,
+  callSummaryText,
+  formatCallDuration,
+} from './call-history.service.js';
+
+vi.mock('../db/messages.js', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../db/messages.js')>()),
+  appendMessage: vi.fn(),
+}));
+vi.mock('../db/conversations.js', () => ({
+  isConversationMember: vi.fn(),
+  markConversationRead: vi.fn(),
+}));
 
 function call(overrides: Partial<CallRow>): CallRow {
   return {
     id: '11111111-1111-4111-8111-111111111111',
-    conversationId: 'c',
-    callerId: 'a',
-    calleeId: 'b',
+    conversationId: 'conv',
+    callerId: 'caller',
+    calleeId: 'callee',
     media: 'video',
     status: 'ended',
     endReason: 'completed',
@@ -54,5 +73,109 @@ describe('call history wording (CHAT-044)', () => {
   it('formats long calls with hours', () => {
     expect(formatCallDuration(3_725)).toBe('1:02:05');
     expect(formatCallDuration(5)).toBe('0:05');
+  });
+});
+
+describe('CallHistoryService.record (CHAT-044)', () => {
+  let realtime: { publishToConversation: ReturnType<typeof vi.fn> };
+  let service: CallHistoryService;
+  const row = (overrides: Partial<MessageRow> = {}) =>
+    ({
+      id: '01J9ZQ3X4K7M8N9P0QRSTVWXYZ',
+      seq: 7,
+      conversationId: 'conv',
+      senderId: 'caller',
+      clientMsgId: null,
+      type: 'call',
+      body: 'x',
+      replyToId: null,
+      editedAt: null,
+      deletedAt: null,
+      createdAt: new Date(),
+      meta: null,
+      ...overrides,
+    }) as MessageRow;
+
+  beforeEach(() => {
+    vi.resetAllMocks();
+    realtime = { publishToConversation: vi.fn().mockResolvedValue(undefined) };
+    service = new CallHistoryService(
+      {} as Database,
+      realtime as unknown as RealtimeService,
+      { onCallEnded: vi.fn() } as unknown as CallSignalingService,
+    );
+    vi.mocked(appendMessage).mockResolvedValue(row());
+  });
+
+  const published = (type: string) =>
+    realtime.publishToConversation.mock.calls.filter(
+      ([, env]) => (env as { type: string }).type === type,
+    );
+
+  it('posts a missed call idempotently, attributed to the caller, and leaves it unread', async () => {
+    await service.record(call({ endReason: 'missed', answeredAt: null }));
+
+    expect(appendMessage).toHaveBeenCalledWith(
+      {},
+      expect.objectContaining({
+        conversationId: 'conv',
+        senderId: 'caller',
+        clientMsgId: 'call:11111111-1111-4111-8111-111111111111',
+        type: 'call',
+        meta: { call: expect.objectContaining({ outcome: 'missed', durationSec: null }) },
+      }),
+    );
+    expect(published('message.new')).toHaveLength(1);
+    expect(markConversationRead).not.toHaveBeenCalled();
+  });
+
+  it('marks an answered call read for the callee and tells their devices', async () => {
+    vi.mocked(markConversationRead).mockResolvedValue({ lastReadSeq: 7 } as never);
+    await service.record(call({ endReason: 'completed' }));
+    expect(markConversationRead).toHaveBeenCalledWith({}, 'conv', 'callee', 7);
+    expect(published('conversation.read')).toHaveLength(1);
+  });
+
+  it('skips the read event when the callee is no longer a member', async () => {
+    vi.mocked(markConversationRead).mockResolvedValue(undefined);
+    await service.record(call({ endReason: 'declined', answeredAt: null }));
+    expect(published('conversation.read')).toHaveLength(0);
+  });
+
+  it('records nothing for a silenced (blocked) call or one that never rang', async () => {
+    await service.record(call({ silenced: true, endReason: 'missed', answeredAt: null }));
+    await service.record(call({ endReason: 'unavailable', answeredAt: null }));
+    expect(appendMessage).not.toHaveBeenCalled();
+    expect(realtime.publishToConversation).not.toHaveBeenCalled();
+  });
+
+  it('falls back to an unattributed entry when the caller has left, if the callee is still there', async () => {
+    vi.mocked(appendMessage)
+      .mockRejectedValueOnce(new SenderNotAMemberError('conv'))
+      .mockResolvedValueOnce(row({ senderId: null }));
+    vi.mocked(isConversationMember).mockResolvedValue(true);
+
+    await service.record(call({ endReason: 'missed', answeredAt: null }));
+
+    expect(isConversationMember).toHaveBeenCalledWith({}, 'conv', 'callee');
+    expect(vi.mocked(appendMessage).mock.calls[1]![1]).toMatchObject({ senderId: null });
+    expect(published('message.new')).toHaveLength(1);
+  });
+
+  it('writes nothing when neither participant is still in the conversation', async () => {
+    vi.mocked(appendMessage).mockRejectedValueOnce(new SenderNotAMemberError('conv'));
+    vi.mocked(isConversationMember).mockResolvedValue(false);
+
+    await service.record(call({ endReason: 'missed', answeredAt: null }));
+
+    expect(appendMessage).toHaveBeenCalledTimes(1);
+    expect(realtime.publishToConversation).not.toHaveBeenCalled();
+  });
+
+  it('propagates other write errors (the signalling service isolates them per listener)', async () => {
+    vi.mocked(appendMessage).mockRejectedValue(new Error('db down'));
+    await expect(service.record(call({ endReason: 'missed', answeredAt: null }))).rejects.toThrow(
+      'db down',
+    );
   });
 });

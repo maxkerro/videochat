@@ -38,6 +38,7 @@ function toLastMessagePreview(row: MessageRow | undefined): ConversationSummary[
     type: row.type,
     senderId: row.senderId,
     body: row.deletedAt ? null : row.body,
-    ...(row.type === 'call' && row.meta?.call ? { call: row.meta.call } : {}),
+    // A deleted call entry previews as "Message deleted", not as the call it used to describe.
+    ...(row.type === 'call' && row.meta?.call && !row.deletedAt ? { call: row.meta.call } : {}),
   };
 }

@@ -5,10 +5,13 @@
 # native module it loads (rolldown, esbuild) start in x86_64 mode and look for Intel binaries that
 # were never installed -- "Cannot find module '@rolldown/binding-darwin-x64'" -- even though the
 # same command works fine typed into a Terminal. Re-run this hook natively instead. `exec` keeps
-# the hook's stdin (for pre-push, git's list of refs being pushed) and arguments intact; the guard
-# variable stops it from looping if `arch` itself can't switch.
+# the hook's stdin (for pre-push, git's list of refs being pushed) and arguments intact. The
+# `arch -arm64 /usr/bin/true` probe means a machine where switching isn't possible just carries on
+# in x86_64 (as before this existed) instead of failing the hook outright, and the guard variable
+# stops a re-exec loop if `arch` runs but doesn't actually switch.
 if [ "$(uname -s)" = "Darwin" ] && [ "$(uname -m)" = "x86_64" ] &&
-  [ "$(sysctl -n hw.optional.arm64 2>/dev/null)" = "1" ] && [ -z "${VIDEOCHAT_HOOK_NATIVE:-}" ]; then
+  [ "$(sysctl -n hw.optional.arm64 2>/dev/null)" = "1" ] && [ -z "${VIDEOCHAT_HOOK_NATIVE:-}" ] &&
+  arch -arm64 /usr/bin/true 2>/dev/null; then
   export VIDEOCHAT_HOOK_NATIVE=1
   exec arch -arm64 /bin/sh "$0" "$@"
 fi

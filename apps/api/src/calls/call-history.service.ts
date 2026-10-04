@@ -2,7 +2,7 @@ import { Inject, Injectable, Logger, type OnModuleInit } from '@nestjs/common';
 import { makeEnvelope, type CallMessageMeta, type ConversationReadEvent } from '@videochat/shared';
 import { randomUUID } from 'node:crypto';
 import type { Database } from '../db/client.js';
-import { markConversationRead } from '../db/conversations.js';
+import { isConversationMember, markConversationRead } from '../db/conversations.js';
 import { appendMessage, SenderNotAMemberError } from '../db/messages.js';
 import type { CallRow } from '../db/schema.js';
 import { DB } from '../infra/tokens.js';
@@ -97,6 +97,7 @@ export class CallHistoryService implements OnModuleInit {
     };
 
     const row = await this.append(call, meta);
+    if (!row) return;
     const message = toMessage(row);
     await this.realtime.publishToConversation(
       call.conversationId,
@@ -135,13 +136,26 @@ export class CallHistoryService implements OnModuleInit {
       meta: { call: meta },
     };
     try {
-      return await appendMessage(this.db, { ...input, senderId: call.callerId });
+      // Idempotent: `(sender_id, client_msg_id)` is unique and appendMessage returns the existing
+      // row for a repeat, so even if this ever ran twice for one call (a retry, a listener
+      // registered twice) it can't post a duplicate entry or inflate the unread count.
+      return await appendMessage(this.db, {
+        ...input,
+        senderId: call.callerId,
+        clientMsgId: `call:${call.id}`,
+      });
     } catch (err) {
-      // The caller left the conversation while the call was ringing: still record it, just not
-      // attributed to them.
       if (!(err instanceof SenderNotAMemberError)) throw err;
-      this.logger.debug(`Caller no longer a member; recording call ${call.id} as a system entry`);
-      return appendMessage(this.db, { ...input, senderId: null });
     }
+    // The caller left the conversation while the call was ringing. A null-sender entry skips
+    // appendMessage's sender-membership check, so only write it if the conversation still has
+    // the callee as a current member -- otherwise there's nobody left for whom it means anything.
+    // (A null sender also isn't covered by the uniqueness index above; this path is rare enough
+    // that a theoretical duplicate is acceptable.)
+    if (!(await isConversationMember(this.db, call.conversationId, call.calleeId))) {
+      return undefined;
+    }
+    this.logger.debug(`Caller no longer a member; recording call ${call.id} as a system entry`);
+    return appendMessage(this.db, { ...input, senderId: null });
   }
 }
