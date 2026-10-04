@@ -1,6 +1,6 @@
 import type { Database } from '../db/client.js';
 import { isConversationMember, markConversationRead } from '../db/conversations.js';
-import { appendMessage, SenderNotAMemberError } from '../db/messages.js';
+import { appendMessageWithStatus, SenderNotAMemberError } from '../db/messages.js';
 import type { CallRow, MessageRow } from '../db/schema.js';
 import type { RealtimeService } from '../realtime/realtime.service.js';
 import type { CallSignalingService } from './call-signaling.service.js';
@@ -13,7 +13,7 @@ import {
 
 vi.mock('../db/messages.js', async (importOriginal) => ({
   ...(await importOriginal<typeof import('../db/messages.js')>()),
-  appendMessage: vi.fn(),
+  appendMessageWithStatus: vi.fn(),
 }));
 vi.mock('../db/conversations.js', () => ({
   isConversationMember: vi.fn(),
@@ -104,7 +104,7 @@ describe('CallHistoryService.record (CHAT-044)', () => {
       realtime as unknown as RealtimeService,
       { onCallEnded: vi.fn() } as unknown as CallSignalingService,
     );
-    vi.mocked(appendMessage).mockResolvedValue(row());
+    vi.mocked(appendMessageWithStatus).mockResolvedValue({ row: row(), created: true });
   });
 
   const published = (type: string) =>
@@ -115,7 +115,7 @@ describe('CallHistoryService.record (CHAT-044)', () => {
   it('posts a missed call idempotently, attributed to the caller, and leaves it unread', async () => {
     await service.record(call({ endReason: 'missed', answeredAt: null }));
 
-    expect(appendMessage).toHaveBeenCalledWith(
+    expect(appendMessageWithStatus).toHaveBeenCalledWith(
       {},
       expect.objectContaining({
         conversationId: 'conv',
@@ -145,35 +145,43 @@ describe('CallHistoryService.record (CHAT-044)', () => {
   it('records nothing for a silenced (blocked) call or one that never rang', async () => {
     await service.record(call({ silenced: true, endReason: 'missed', answeredAt: null }));
     await service.record(call({ endReason: 'unavailable', answeredAt: null }));
-    expect(appendMessage).not.toHaveBeenCalled();
+    expect(appendMessageWithStatus).not.toHaveBeenCalled();
     expect(realtime.publishToConversation).not.toHaveBeenCalled();
   });
 
   it('falls back to an unattributed entry when the caller has left, if the callee is still there', async () => {
-    vi.mocked(appendMessage)
+    vi.mocked(appendMessageWithStatus)
       .mockRejectedValueOnce(new SenderNotAMemberError('conv'))
-      .mockResolvedValueOnce(row({ senderId: null }));
+      .mockResolvedValueOnce({ row: row({ senderId: null }), created: true });
     vi.mocked(isConversationMember).mockResolvedValue(true);
 
     await service.record(call({ endReason: 'missed', answeredAt: null }));
 
     expect(isConversationMember).toHaveBeenCalledWith({}, 'conv', 'callee');
-    expect(vi.mocked(appendMessage).mock.calls[1]![1]).toMatchObject({ senderId: null });
+    expect(vi.mocked(appendMessageWithStatus).mock.calls[1]![1]).toMatchObject({ senderId: null });
     expect(published('message.new')).toHaveLength(1);
   });
 
   it('writes nothing when neither participant is still in the conversation', async () => {
-    vi.mocked(appendMessage).mockRejectedValueOnce(new SenderNotAMemberError('conv'));
+    vi.mocked(appendMessageWithStatus).mockRejectedValueOnce(new SenderNotAMemberError('conv'));
     vi.mocked(isConversationMember).mockResolvedValue(false);
 
     await service.record(call({ endReason: 'missed', answeredAt: null }));
 
-    expect(appendMessage).toHaveBeenCalledTimes(1);
+    expect(appendMessageWithStatus).toHaveBeenCalledTimes(1);
     expect(realtime.publishToConversation).not.toHaveBeenCalled();
   });
 
-  it('propagates other write errors (the signalling service isolates them per listener)', async () => {
-    vi.mocked(appendMessage).mockRejectedValue(new Error('db down'));
+  it("doesn't re-announce an entry that already existed (a repeated record for the same call)", async () => {
+    vi.mocked(appendMessageWithStatus).mockResolvedValue({ row: row(), created: false });
+    vi.mocked(markConversationRead).mockResolvedValue({ lastReadSeq: 7 } as never);
+    await service.record(call({ endReason: 'completed' }));
+    expect(realtime.publishToConversation).not.toHaveBeenCalled();
+    expect(markConversationRead).not.toHaveBeenCalled();
+  });
+
+  it('propagates other write errors (the signalling service catches them per listener)', async () => {
+    vi.mocked(appendMessageWithStatus).mockRejectedValue(new Error('db down'));
     await expect(service.record(call({ endReason: 'missed', answeredAt: null }))).rejects.toThrow(
       'db down',
     );

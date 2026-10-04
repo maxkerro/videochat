@@ -16,6 +16,7 @@ vi.mock('../db/messages.js', async () => {
     listMessagesPage: vi.fn(),
     listMessagesAfter: vi.fn(),
     SenderNotAMemberError: actual.SenderNotAMemberError,
+    ClientMsgIdConflictError: actual.ClientMsgIdConflictError,
   };
 });
 
@@ -82,10 +83,10 @@ describe('MessagesService', () => {
 
     it('rejects with 409 when clientMsgId was already used in a different conversation, without broadcasting', async () => {
       vi.mocked(conversationsDb.isConversationMember).mockResolvedValue(true);
-      // appendMessage dedupes on (senderId, clientMsgId) alone, so it can return a row that
-      // belongs to some *other* conversation than the one this call is targeting.
-      vi.mocked(messagesDb.appendMessage).mockResolvedValue(
-        makeMessageRow({ conversationId: 'conv-other' }),
+      // appendMessage dedupes on (senderId, clientMsgId) alone, and refuses a match that belongs
+      // to some *other* conversation than the one this call is targeting.
+      vi.mocked(messagesDb.appendMessage).mockRejectedValue(
+        new messagesDb.ClientMsgIdConflictError('c-1'),
       );
 
       await expect(

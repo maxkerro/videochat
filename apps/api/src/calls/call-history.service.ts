@@ -3,7 +3,7 @@ import { makeEnvelope, type CallMessageMeta, type ConversationReadEvent } from '
 import { randomUUID } from 'node:crypto';
 import type { Database } from '../db/client.js';
 import { isConversationMember, markConversationRead } from '../db/conversations.js';
-import { appendMessage, SenderNotAMemberError } from '../db/messages.js';
+import { appendMessageWithStatus, SenderNotAMemberError } from '../db/messages.js';
 import type { CallRow } from '../db/schema.js';
 import { DB } from '../infra/tokens.js';
 import { toMessage } from '../messages/message-mapper.js';
@@ -96,8 +96,11 @@ export class CallHistoryService implements OnModuleInit {
           : null,
     };
 
-    const row = await this.append(call, meta);
-    if (!row) return;
+    const result = await this.append(call, meta);
+    // Nothing written (no member left), or this call's entry already existed: in the latter case
+    // it was already announced, so don't re-publish it or re-mark anything read.
+    if (!result?.created) return;
+    const { row } = result;
     const message = toMessage(row);
     await this.realtime.publishToConversation(
       call.conversationId,
@@ -139,7 +142,7 @@ export class CallHistoryService implements OnModuleInit {
       // Idempotent: `(sender_id, client_msg_id)` is unique and appendMessage returns the existing
       // row for a repeat, so even if this ever ran twice for one call (a retry, a listener
       // registered twice) it can't post a duplicate entry or inflate the unread count.
-      return await appendMessage(this.db, {
+      return await appendMessageWithStatus(this.db, {
         ...input,
         senderId: call.callerId,
         clientMsgId: `call:${call.id}`,
@@ -156,6 +159,6 @@ export class CallHistoryService implements OnModuleInit {
       return undefined;
     }
     this.logger.debug(`Caller no longer a member; recording call ${call.id} as a system entry`);
-    return appendMessage(this.db, { ...input, senderId: null });
+    return appendMessageWithStatus(this.db, { ...input, senderId: null });
   }
 }

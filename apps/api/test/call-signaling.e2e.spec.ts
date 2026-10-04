@@ -4,6 +4,8 @@ import { randomUUID } from 'node:crypto';
 import { eq } from 'drizzle-orm';
 import request from 'supertest';
 import { createDb, createPool } from '../src/db/client.js';
+import { CallHistoryService } from '../src/calls/call-history.service.js';
+import { appendMessage, ClientMsgIdConflictError } from '../src/db/messages.js';
 import { calls } from '../src/db/schema.js';
 import { bearer, startE2eApp, type E2eUser, type TestSocket } from './e2e-app.js';
 import { hasInfra } from './helpers.js';
@@ -18,10 +20,11 @@ describe.skipIf(!hasInfra)('call signalling over WebSocket (CHAT-041)', () => {
   let signUp: () => Promise<E2eUser>;
   let connect: (user: E2eUser) => Promise<TestSocket>;
   let closeAll: () => Promise<void>;
+  let app: INestApplication;
   const pool = () => createPool(process.env.TEST_DATABASE_URL!, 1);
 
   beforeAll(async () => {
-    ({ server, signUp, connect, close: closeAll } = await startE2eApp('sig'));
+    ({ app, server, signUp, connect, close: closeAll } = await startE2eApp('sig'));
   });
   afterAll(() => closeAll());
 
@@ -384,6 +387,32 @@ describe.skipIf(!hasInfra)('call signalling over WebSocket (CHAT-041)', () => {
         .expect(404);
     });
 
+    it('counts one report per participant, however often it is posted', async () => {
+      const { caller, callee, callerSocket, calleeLaptop, conversationId } = await setUp();
+      const callId = randomUUID();
+      callerSocket.send(CALL_EVENTS.invite, { callId, conversationId, media: 'audio' });
+      await calleeLaptop.waitFor(CALL_EVENTS.incoming, byCall(callId));
+
+      for (const user of [caller, caller, caller, callee]) {
+        await request(server())
+          .post(`/calls/${callId}/stats`)
+          .set(bearer(user.token))
+          .send({ ...stats, endCause: 'answered-elsewhere' })
+          .expect(204);
+      }
+      const metrics = await request(server()).get('/metrics').expect(200);
+      expect(metrics.text).toMatch(/call_stats_reports_total\{end_cause="answered-elsewhere"\} 2/);
+    });
+
+    it('rejects an end cause outside the known set (it becomes a metrics label)', async () => {
+      const user = await signUp();
+      await request(server())
+        .post(`/calls/${randomUUID()}/stats`)
+        .set(bearer(user.token))
+        .send({ ...stats, endCause: 'made-up-cause' })
+        .expect(400);
+    });
+
     it('rejects a malformed summary', async () => {
       const user = await signUp();
       await request(server())
@@ -472,6 +501,77 @@ describe.skipIf(!hasInfra)('call signalling over WebSocket (CHAT-041)', () => {
         body: 'Declined video call',
         call: { outcome: 'declined' },
       });
+    });
+
+    it('recording the same call twice leaves one entry and one unread', async () => {
+      const { callee, conversationId, callerSocket, calleeLaptop } = await setUp();
+      const callId = randomUUID();
+      callerSocket.send(CALL_EVENTS.invite, { callId, conversationId, media: 'audio' });
+      await calleeLaptop.waitFor(CALL_EVENTS.incoming, byCall(callId));
+      await calleeLaptop.waitFor(
+        'message.new',
+        (p) => (p.call as { callId?: string } | undefined)?.callId === callId,
+        8000,
+      );
+      const before = await conversationFor(callee, conversationId);
+
+      await app.get(CallHistoryService).record((await callRow(callId))!);
+
+      const history = await request(server())
+        .get(`/conversations/${conversationId}/messages`)
+        .set(bearer(callee.token))
+        .expect(200);
+      const entries = (history.body.messages as Array<{ call?: { callId: string } }>).filter(
+        (m) => m.call?.callId === callId,
+      );
+      expect(entries).toHaveLength(1);
+      const after = await conversationFor(callee, conversationId);
+      expect(after.lastSeq).toBe(before.lastSeq);
+      expect(after.lastReadSeq).toBe(before.lastReadSeq);
+    });
+
+    it("can't be steered onto a caller's own message by pre-claiming the call's key", async () => {
+      const { caller, callee, callerSocket, calleeLaptop, conversationId } = await setUp();
+      const other = await signUp();
+      const otherConversation = await directChat(caller, other);
+      const callId = randomUUID();
+
+      // Through the API the reserved prefix is refused outright...
+      await request(server())
+        .post(`/conversations/${otherConversation}/messages`)
+        .set(bearer(caller.token))
+        .send({ clientMsgId: `call:${callId}`, body: 'decoy' })
+        .expect(400);
+
+      // ...and even a row that somehow holds the key elsewhere isn't treated as this call's entry.
+      const p = pool();
+      try {
+        await appendMessage(createDb(p), {
+          conversationId: otherConversation,
+          senderId: caller.id,
+          body: 'decoy',
+          clientMsgId: `call:${callId}`,
+        });
+        await expect(
+          appendMessage(createDb(p), {
+            conversationId,
+            senderId: caller.id,
+            body: 'x',
+            type: 'call',
+            clientMsgId: `call:${callId}`,
+          }),
+        ).rejects.toBeInstanceOf(ClientMsgIdConflictError);
+      } finally {
+        await p.end();
+      }
+      const before = await conversationFor(callee, conversationId);
+
+      callerSocket.send(CALL_EVENTS.invite, { callId, conversationId, media: 'audio' });
+      await calleeLaptop.waitFor(CALL_EVENTS.incoming, byCall(callId));
+      await callerSocket.waitFor(CALL_EVENTS.ended, byCall(callId), 8000);
+      await calleeLaptop.expectNone('message.new', (p) => p.body === 'decoy', 500);
+      const after = await conversationFor(callee, conversationId);
+      expect(after.lastReadSeq).toBe(before.lastReadSeq);
     });
 
     it('records nothing about a call from someone the callee blocked', async () => {

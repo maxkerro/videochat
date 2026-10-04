@@ -1,10 +1,14 @@
 import { Inject, Injectable, Logger, NotFoundException } from '@nestjs/common';
 import type { CallStats } from '@videochat/shared';
+import { Redis } from 'ioredis';
 import { Counter, Histogram } from 'prom-client';
 import { getCall } from '../db/calls.js';
 import type { Database } from '../db/client.js';
-import { DB } from '../infra/tokens.js';
+import { DB, REDIS } from '../infra/tokens.js';
 import { MetricsService } from '../metrics/metrics.service.js';
+
+/** Long enough to cover any client retry; after that, a late duplicate is just noise. */
+const REPORT_DEDUPE_TTL_SEC = 7 * 24 * 3600;
 
 /**
  * CHAT-043 AC: "Call statistics are sent to analytics at the end of each call." Each participant's
@@ -23,6 +27,7 @@ export class CallStatsService {
 
   constructor(
     @Inject(DB) private readonly db: Database,
+    @Inject(REDIS) private readonly redis: Redis,
     metrics: MetricsService,
   ) {
     const registers = [metrics.registry];
@@ -64,6 +69,16 @@ export class CallStatsService {
     if (!call || (call.callerId !== userId && call.calleeId !== userId)) {
       throw new NotFoundException('Call not found');
     }
+    // One report per (call, participant): a repeat (client retry, or someone replaying the
+    // request) is accepted but not counted twice. Shared across API nodes via Redis.
+    const first = await this.redis.set(
+      `callstats:${callId}:${userId}`,
+      '1',
+      'EX',
+      REPORT_DEDUPE_TTL_SEC,
+      'NX',
+    );
+    if (first !== 'OK') return;
     this.logger.log({
       event: 'call.stats',
       callId,

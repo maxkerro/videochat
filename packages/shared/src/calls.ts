@@ -115,6 +115,10 @@ export type CallMediaState = z.infer<typeof callMediaStateSchema>;
 export const realtimeReadySchema = z.object({ connectionId: z.string() });
 export type RealtimeReady = z.infer<typeof realtimeReadySchema>;
 
+/** How a call ended from one device's point of view: the server's reason, or a local cause. */
+export const CALL_STATS_END_CAUSES = [...CALL_END_REASONS, 'answered-elsewhere', 'failed'] as const;
+export type CallStatsEndCause = (typeof CALL_STATS_END_CAUSES)[number];
+
 /**
  * CHAT-043: a call's quality summary, sent by each participant's client when the call ends
  * ("call statistics are sent to analytics at the end of each call"). Every metric is optional --
@@ -133,7 +137,8 @@ export const callStatsSchema = z.object({
   reconnects: z.number().int().min(0).max(1_000),
   /** Whether video was on at any point. */
   hadVideo: z.boolean(),
-  /** How it ended from this device's point of view (server reason or local cause). */
-  endCause: z.string().max(32),
+  /** How it ended from this device's point of view (server reason or local cause). A closed set:
+   *  it becomes a Prometheus label, so free-form values would mean unbounded series. */
+  endCause: z.enum(CALL_STATS_END_CAUSES),
 });
 export type CallStats = z.infer<typeof callStatsSchema>;

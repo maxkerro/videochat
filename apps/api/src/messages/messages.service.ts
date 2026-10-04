@@ -19,6 +19,7 @@ import {
   appendMessage,
   listMessagesAfter,
   listMessagesPage,
+  ClientMsgIdConflictError,
   SenderNotAMemberError,
 } from '../db/messages.js';
 import { DB } from '../infra/tokens.js';
@@ -73,14 +74,13 @@ export class MessagesService {
       if (err instanceof SenderNotAMemberError) {
         throw new NotFoundException('Conversation not found');
       }
+      // `appendMessage` dedupes on (senderId, clientMsgId) alone, with no conversation in the key.
+      // A clientMsgId reused across conversations would otherwise return -- and re-broadcast into
+      // this conversation -- a message that belongs to another one; it rejects that instead.
+      if (err instanceof ClientMsgIdConflictError) {
+        throw new ConflictException('clientMsgId already used in another conversation');
+      }
       throw err;
-    }
-    // `appendMessage` dedupes on (senderId, clientMsgId) alone, with no conversation in the key.
-    // If a client reuses a clientMsgId across two different conversations, the second call would
-    // otherwise return -- and re-broadcast into this conversation -- a message that actually
-    // belongs to the first one. Reject that rather than leaking it.
-    if (row.conversationId !== conversationId) {
-      throw new ConflictException('clientMsgId already used in another conversation');
     }
     const message = toMessage(row);
 

@@ -8,6 +8,8 @@ import {
   memberSummarySchema,
   messagesPageQuerySchema,
   renameConversationSchema,
+  callStatsSchema,
+  sendMessageSchema,
   typingEventSchema,
   typingSignalSchema,
   usernameSchema,
@@ -188,5 +190,36 @@ describe('blockedUsersListSchema', () => {
 
   it('rejects a row missing required PublicUser fields', () => {
     expect(blockedUsersListSchema.safeParse({ users: [{ id: uuid }] }).success).toBe(false);
+  });
+});
+
+describe('sendMessageSchema', () => {
+  it('accepts an ordinary client id', () => {
+    expect(sendMessageSchema.safeParse({ clientMsgId: 'c-1', body: 'hi' }).success).toBe(true);
+  });
+
+  it('rejects the prefix reserved for server-originated entries', () => {
+    expect(sendMessageSchema.safeParse({ clientMsgId: 'call:abc', body: 'hi' }).success).toBe(
+      false,
+    );
+  });
+});
+
+describe('callStatsSchema', () => {
+  const stats = {
+    durationSec: 1,
+    rttMsAvg: null,
+    packetLossPctMax: null,
+    outgoingKbpsMin: null,
+    reconnects: 0,
+    hadVideo: false,
+  };
+
+  it.each(['completed', 'answered-elsewhere', 'failed'])('accepts end cause %s', (endCause) => {
+    expect(callStatsSchema.safeParse({ ...stats, endCause }).success).toBe(true);
+  });
+
+  it('rejects an end cause outside the known set', () => {
+    expect(callStatsSchema.safeParse({ ...stats, endCause: 'whatever' }).success).toBe(false);
   });
 });

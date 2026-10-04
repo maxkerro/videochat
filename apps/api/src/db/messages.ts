@@ -17,6 +17,24 @@ export class SenderNotAMemberError extends Error {
   }
 }
 
+/** Thrown by {@link appendMessage} when `(senderId, clientMsgId)` already names a message in a
+ *  *different* conversation, or of a different type. The key has no conversation in it, so
+ *  returning that row as an idempotent hit would re-broadcast it into the wrong conversation (and
+ *  let a caller steer server-originated writes, e.g. call history, onto one of their own messages).
+ *  A conflict, not a retry. */
+export class ClientMsgIdConflictError extends Error {
+  constructor(clientMsgId: string) {
+    super(`clientMsgId ${clientMsgId} is already used by a different message`);
+    this.name = 'ClientMsgIdConflictError';
+  }
+}
+
+export interface AppendMessageResult {
+  row: MessageRow;
+  /** False when (senderId, clientMsgId) matched an existing message and nothing was inserted. */
+  created: boolean;
+}
+
 export interface AppendMessageInput {
   conversationId: string;
   senderId: string | null;
@@ -36,13 +54,30 @@ export interface AppendMessageInput {
  * while appends to different conversations run in parallel.
  *
  * Idempotent on (senderId, clientMsgId): a retry returns the original message instead of a
- * duplicate. This is the foundation for CHAT-014's optimistic send and retry.
+ * duplicate. This is the foundation for CHAT-014's optimistic send and retry. A match in another
+ * conversation (or of another type) throws {@link ClientMsgIdConflictError} instead.
  */
 export async function appendMessage(db: Database, input: AppendMessageInput): Promise<MessageRow> {
+  return (await appendMessageWithStatus(db, input)).row;
+}
+
+/** {@link appendMessage}, also saying whether a row was actually inserted. */
+export async function appendMessageWithStatus(
+  db: Database,
+  input: AppendMessageInput,
+): Promise<AppendMessageResult> {
   return db.transaction(async (tx) => {
     if (input.senderId && input.clientMsgId) {
       const existing = await findByClientMsgId(tx, input.senderId, input.clientMsgId);
-      if (existing) return existing;
+      if (existing) {
+        if (
+          existing.conversationId !== input.conversationId ||
+          existing.type !== (input.type ?? 'text')
+        ) {
+          throw new ClientMsgIdConflictError(input.clientMsgId);
+        }
+        return { row: existing, created: false };
+      }
     }
 
     const [conv] = await tx
@@ -108,7 +143,7 @@ export async function appendMessage(db: Database, input: AppendMessageInput): Pr
         );
     }
 
-    return row!;
+    return { row: row!, created: true };
   });
 }
 

@@ -364,15 +364,24 @@ export class CallSignalingService implements OnModuleInit, OnModuleDestroy {
       { callId: call.id, reason: call.endReason },
       randomUUID(),
     );
-    await Promise.all([
-      this.realtime.publishToUser(call.callerId, event),
-      // A silenced call (callee blocked the caller) was never shown to the callee.
-      call.silenced ? Promise.resolve() : this.realtime.publishToUser(call.calleeId, event),
-    ]);
+    // The row is already `ended`, so this is the only chance to run the listeners (call history)
+    // for it: a failed `call.ended` publish is logged, not allowed to skip them.
+    try {
+      await Promise.all([
+        this.realtime.publishToUser(call.callerId, event),
+        // A silenced call (callee blocked the caller) was never shown to the callee.
+        call.silenced ? Promise.resolve() : this.realtime.publishToUser(call.calleeId, event),
+      ]);
+    } catch (err) {
+      this.logger.warn(`Couldn't publish the end of call ${call.id}: ${(err as Error).message}`);
+    }
+    // Each listener isolated from the others (and from a synchronous throw).
     for (const listener of this.endedListeners) {
-      await listener(call).catch((err: Error) => {
-        this.logger.warn(`Call-ended listener failed for ${call.id}: ${err.message}`);
-      });
+      try {
+        await listener(call);
+      } catch (err) {
+        this.logger.warn(`Call-ended listener failed for ${call.id}: ${(err as Error).message}`);
+      }
     }
   }
 

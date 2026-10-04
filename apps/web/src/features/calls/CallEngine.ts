@@ -7,9 +7,9 @@ import {
   callMediaStateSchema,
   callRefSchema,
   callSdpSchema,
-  type CallEndReason,
   type CallMedia,
   type CallStats,
+  type CallStatsEndCause,
   type IceServer,
   type WsEnvelope,
 } from '@videochat/shared';
@@ -27,7 +27,8 @@ export type CallPhase =
 
 /** Why a call is over from this device's point of view: the server's reason, or one only this
  *  device knows (another of my devices answered; my own media/connection failed). */
-export type CallEndCause = CallEndReason | 'answered-elsewhere' | 'failed';
+/** The server's end reason, or a local cause; the same set the stats endpoint accepts. */
+export type CallEndCause = CallStatsEndCause;
 
 export interface CallPeer {
   id: string;

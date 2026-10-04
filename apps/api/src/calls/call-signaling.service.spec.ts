@@ -88,7 +88,7 @@ describe('CallSignalingService.sweep', () => {
     expect(log).not.toHaveBeenCalledWith('Call sweep recovered');
   });
 
-  it('isolates a failing call-ended listener (e.g. call history) from the others', async () => {
+  it("isolates one call's failing listener from the next call", async () => {
     vi.mocked(endExpiredCalls).mockResolvedValue([expiredCall('a'), expiredCall('b')]);
     const seen: string[] = [];
     service.onCallEnded(async (call) => {
@@ -99,5 +99,31 @@ describe('CallSignalingService.sweep', () => {
     await service.sweep();
 
     expect(seen).toEqual(['b']);
+  });
+
+  it('isolates listeners from each other, including a synchronous throw', async () => {
+    vi.mocked(endExpiredCalls).mockResolvedValue([expiredCall('a')]);
+    const second = vi.fn().mockResolvedValue(undefined);
+    service.onCallEnded((() => {
+      throw new Error('sync boom');
+    }) as never);
+    service.onCallEnded(second);
+
+    await service.sweep();
+
+    expect(second).toHaveBeenCalledWith(expect.objectContaining({ id: 'a' }));
+    expect(warn).toHaveBeenCalledWith(expect.stringMatching(/listener failed for a: sync boom/));
+  });
+
+  it('still runs the listeners (call history) when publishing call.ended fails', async () => {
+    vi.mocked(endExpiredCalls).mockResolvedValue([expiredCall('a')]);
+    realtime.publishToUser.mockRejectedValue(new Error('redis publish failed'));
+    const listener = vi.fn().mockResolvedValue(undefined);
+    service.onCallEnded(listener);
+
+    await service.sweep();
+
+    expect(listener).toHaveBeenCalledWith(expect.objectContaining({ id: 'a' }));
+    expect(warn).toHaveBeenCalledWith(expect.stringMatching(/publish the end of call a/));
   });
 });
