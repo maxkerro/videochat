@@ -4,6 +4,7 @@ vi.mock('../db/users.js', () => ({
   createUser: vi.fn(),
   findUserByEmail: vi.fn(),
   findUserById: vi.fn(),
+  findUserByUsername: vi.fn(),
   isUsernameTaken: vi.fn(),
   markEmailVerified: vi.fn(),
   recordFailedLogin: vi.fn(),
@@ -31,7 +32,7 @@ import * as authTokensDb from '../db/auth-tokens.js';
 import * as refreshTokensDb from '../db/refresh-tokens.js';
 import * as usersDb from '../db/users.js';
 import { hashPassword, verifyPassword } from './password.js';
-import { AuthService } from './auth.service.js';
+import { AuthService, INVALID_LOGIN_MESSAGE } from './auth.service.js';
 import type { Env } from '../config/env.js';
 import type { User } from '../db/schema.js';
 
@@ -219,11 +220,47 @@ describe('AuthService', () => {
   });
 
   describe('login', () => {
+    it('looks an identifier with an @ up by email, and one without by username', async () => {
+      const user = makeUser();
+      (usersDb.findUserByUsername as Mock).mockResolvedValue(user);
+      (verifyPassword as Mock).mockResolvedValue(true);
+      (usersDb.findUserById as Mock).mockResolvedValue(user);
+      (refreshTokensDb.createRefreshToken as Mock).mockResolvedValue({ id: 'rt-1' });
+      const { service } = makeService();
+
+      await service.login({ identifier: 'Ada_L', password: 'pw' });
+      expect(usersDb.findUserByUsername).toHaveBeenCalledWith(expect.anything(), 'Ada_L');
+      expect(usersDb.findUserByEmail).not.toHaveBeenCalled();
+
+      (usersDb.findUserByEmail as Mock).mockResolvedValue(user);
+      await service.login({ identifier: 'ada@test.dev', password: 'pw' });
+      expect(usersDb.findUserByEmail).toHaveBeenCalledWith(expect.anything(), 'ada@test.dev');
+      expect(usersDb.findUserByUsername).toHaveBeenCalledTimes(1);
+    });
+
+    it('rejects an unknown username with the same message as a wrong password', async () => {
+      (usersDb.findUserByUsername as Mock).mockResolvedValue(undefined);
+      const { service } = makeService();
+      await expect(service.login({ identifier: 'nobody', password: 'x' })).rejects.toThrow(
+        INVALID_LOGIN_MESSAGE,
+      );
+    });
+
+    it('applies the per-account lockout to a username login too', async () => {
+      const user = makeUser({ lockedUntil: new Date(Date.now() + 60_000) });
+      (usersDb.findUserByUsername as Mock).mockResolvedValue(user);
+      const { service } = makeService();
+      await expect(service.login({ identifier: user.username, password: 'pw' })).rejects.toThrow(
+        /Too many failed attempts/,
+      );
+      expect(verifyPassword).not.toHaveBeenCalled();
+    });
+
     it('rejects an unknown email with the same message as a wrong password', async () => {
       (usersDb.findUserByEmail as Mock).mockResolvedValue(undefined);
       const { service } = makeService();
-      await expect(service.login({ email: 'nobody@test.dev', password: 'x' })).rejects.toThrow(
-        'Invalid email or password',
+      await expect(service.login({ identifier: 'nobody@test.dev', password: 'x' })).rejects.toThrow(
+        INVALID_LOGIN_MESSAGE,
       );
     });
 
@@ -231,7 +268,7 @@ describe('AuthService', () => {
       const user = makeUser({ lockedUntil: new Date(Date.now() + 60_000) });
       (usersDb.findUserByEmail as Mock).mockResolvedValue(user);
       const { service } = makeService();
-      await expect(service.login({ email: user.email, password: 'pw' })).rejects.toThrow(
+      await expect(service.login({ identifier: user.email, password: 'pw' })).rejects.toThrow(
         /Too many failed attempts/,
       );
       expect(verifyPassword).not.toHaveBeenCalled();
@@ -242,8 +279,8 @@ describe('AuthService', () => {
       (usersDb.findUserByEmail as Mock).mockResolvedValue(user);
       (verifyPassword as Mock).mockResolvedValue(false);
       const { service } = makeService();
-      await expect(service.login({ email: user.email, password: 'wrong' })).rejects.toThrow(
-        'Invalid email or password',
+      await expect(service.login({ identifier: user.email, password: 'wrong' })).rejects.toThrow(
+        INVALID_LOGIN_MESSAGE,
       );
       expect(usersDb.recordFailedLogin).toHaveBeenCalledWith(expect.anything(), user.id);
     });
@@ -253,7 +290,7 @@ describe('AuthService', () => {
       (usersDb.findUserByEmail as Mock).mockResolvedValue(user);
       (verifyPassword as Mock).mockResolvedValue(true);
       const { service } = makeService();
-      await expect(service.login({ email: user.email, password: 'pw' })).rejects.toThrow(
+      await expect(service.login({ identifier: user.email, password: 'pw' })).rejects.toThrow(
         /verify your email/,
       );
       // Attempts are still reset on a correct password, even though login is refused for
@@ -269,7 +306,10 @@ describe('AuthService', () => {
       (refreshTokensDb.createRefreshToken as Mock).mockResolvedValue({ id: 'rt-1' });
       const { service, jwt } = makeService();
 
-      const { session, refreshToken } = await service.login({ email: user.email, password: 'pw' });
+      const { session, refreshToken } = await service.login({
+        identifier: user.email,
+        password: 'pw',
+      });
 
       expect(usersDb.resetFailedLogins).toHaveBeenCalledWith(expect.anything(), user.id);
       expect(jwt.sign).toHaveBeenCalledWith({ sub: user.id });

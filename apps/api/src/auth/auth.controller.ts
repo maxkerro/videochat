@@ -1,6 +1,6 @@
 import { Body, Controller, HttpCode, Inject, Post, Req, Res, UseGuards } from '@nestjs/common';
 import {
-  loginSchema,
+  loginRequestSchema,
   requestPasswordResetSchema,
   resetPasswordSchema,
   signUpSchema,
@@ -56,7 +56,8 @@ export class AuthController {
   @HttpCode(200)
   @UseGuards(LoginThrottlerGuard)
   async login(
-    @Body(new ZodValidationPipe(loginSchema)) body: z.infer<typeof loginSchema>,
+    // CHAT-080: `{identifier, password}`, or the legacy `{email, password}`; normalised here.
+    @Body(new ZodValidationPipe(loginRequestSchema)) body: z.infer<typeof loginRequestSchema>,
     @Res({ passthrough: true }) res: Response,
   ): Promise<AuthSession> {
     const { session, refreshToken } = await this.auth.login(body);

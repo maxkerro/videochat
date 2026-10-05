@@ -7,7 +7,13 @@ import {
   UnauthorizedException,
 } from '@nestjs/common';
 import { JwtService } from '@nestjs/jwt';
-import type { AuthSession, LoginInput, ResetPasswordInput, SignUpInput } from '@videochat/shared';
+import {
+  isEmailIdentifier,
+  type AuthSession,
+  type LoginInput,
+  type ResetPasswordInput,
+  type SignUpInput,
+} from '@videochat/shared';
 import { randomUUID } from 'node:crypto';
 import type { Env } from '../config/env.js';
 import type { Database } from '../db/client.js';
@@ -25,6 +31,7 @@ import {
   createUser,
   findUserByEmail,
   findUserById,
+  findUserByUsername,
   isUsernameTaken,
   markEmailVerified,
   recordFailedLogin,
@@ -44,6 +51,9 @@ export interface IssuedSession {
   session: AuthSession;
   refreshToken: string;
 }
+
+/** CHAT-080: one message for an unknown email, an unknown username and a wrong password. */
+export const INVALID_LOGIN_MESSAGE = 'Incorrect email/username or password';
 
 @Injectable()
 export class AuthService {
@@ -110,10 +120,14 @@ export class AuthService {
   }
 
   async login(input: LoginInput): Promise<IssuedSession> {
-    const user = await findUserByEmail(this.db, input.email);
-    // Same generic error whether the email doesn't exist or the password is wrong: don't let a
-    // login attempt reveal which emails have an account.
-    const invalid = () => new UnauthorizedException('Invalid email or password');
+    // CHAT-080: email or username. Everything after the lookup -- lockout (per account, so
+    // switching between the two doesn't reset it), password check, verification -- is the same.
+    const user = isEmailIdentifier(input.identifier)
+      ? await findUserByEmail(this.db, input.identifier)
+      : await findUserByUsername(this.db, input.identifier);
+    // Same generic error whether the account doesn't exist or the password is wrong: don't let a
+    // login attempt reveal which emails or usernames have an account.
+    const invalid = () => new UnauthorizedException(INVALID_LOGIN_MESSAGE);
     if (!user || !user.passwordHash) throw invalid();
 
     if (user.lockedUntil && user.lockedUntil.getTime() > Date.now()) {

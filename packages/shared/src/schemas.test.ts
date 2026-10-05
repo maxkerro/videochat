@@ -9,6 +9,8 @@ import {
   messagesPageQuerySchema,
   renameConversationSchema,
   callStatsSchema,
+  isEmailIdentifier,
+  loginRequestSchema,
   sendMessageSchema,
   typingEventSchema,
   typingSignalSchema,
@@ -221,5 +223,31 @@ describe('callStatsSchema', () => {
 
   it('rejects an end cause outside the known set', () => {
     expect(callStatsSchema.safeParse({ ...stats, endCause: 'whatever' }).success).toBe(false);
+  });
+});
+
+describe('loginRequestSchema (CHAT-080)', () => {
+  it('accepts an identifier and trims it', () => {
+    expect(loginRequestSchema.parse({ identifier: '  ada ', password: 'pw' })).toEqual({
+      identifier: 'ada',
+      password: 'pw',
+    });
+  });
+
+  it('maps the legacy {email} body onto identifier', () => {
+    expect(loginRequestSchema.parse({ email: 'ada@example.com', password: 'pw' })).toEqual({
+      identifier: 'ada@example.com',
+      password: 'pw',
+    });
+  });
+
+  it('requires an identifier or email', () => {
+    expect(loginRequestSchema.safeParse({ password: 'pw' }).success).toBe(false);
+    expect(loginRequestSchema.safeParse({ identifier: '   ', password: 'pw' }).success).toBe(false);
+  });
+
+  it('tells emails from usernames by the @', () => {
+    expect(isEmailIdentifier('ada@example.com')).toBe(true);
+    expect(isEmailIdentifier('ada_l')).toBe(false);
   });
 });

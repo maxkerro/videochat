@@ -27,6 +27,19 @@ export async function findUserByEmail(db: DbExecutor, email: string): Promise<Us
   return row;
 }
 
+/** CHAT-080: login by username. Case-insensitive, like the `users_username_lower_uq` index. */
+export async function findUserByUsername(
+  db: DbExecutor,
+  username: string,
+): Promise<User | undefined> {
+  const [row] = await db
+    .select()
+    .from(users)
+    .where(sql`lower(${users.username}) = lower(${username})`)
+    .limit(1);
+  return row;
+}
+
 export async function findUserById(db: DbExecutor, id: string): Promise<User | undefined> {
   const [row] = await db.select().from(users).where(eq(users.id, id)).limit(1);
   return row;

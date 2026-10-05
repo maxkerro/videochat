@@ -1,4 +1,4 @@
-import { loginSchema, type LoginInput } from '@videochat/shared';
+import { isEmailIdentifier, loginSchema, type LoginInput } from '@videochat/shared';
 import { useState, type FormEvent } from 'react';
 import { Link, useLocation, useNavigate } from 'react-router';
 import { Button, Input } from '../../components/ui';
@@ -9,7 +9,7 @@ import { fieldErrors } from '../../lib/formErrors';
 import { AuthLayout } from './AuthLayout';
 import styles from './auth.module.css';
 
-const EMPTY: LoginInput = { email: '', password: '' };
+const EMPTY: LoginInput = { identifier: '', password: '' };
 
 export function LoginPage() {
   const { login } = useAuth();
@@ -68,31 +68,40 @@ export function LoginPage() {
       {unverified && (
         <p className={styles.formError} role="alert">
           Verify your email before logging in.{' '}
-          <Button
-            variant="ghost"
-            size="sm"
-            loading={resent}
-            onClick={async () => {
-              setResent(true);
-              try {
-                await resendVerification(form.email);
-              } finally {
-                setResent(false);
-              }
-            }}
-          >
-            Resend the email
-          </Button>
+          {/* Resending needs the address; after a username login we don't have it (and
+              mustn't reveal it), so point at the email login instead. */}
+          {isEmailIdentifier(form.identifier) ? (
+            <Button
+              variant="ghost"
+              size="sm"
+              loading={resent}
+              onClick={async () => {
+                setResent(true);
+                try {
+                  await resendVerification(form.identifier.trim());
+                } finally {
+                  setResent(false);
+                }
+              }}
+            >
+              Resend the email
+            </Button>
+          ) : (
+            'To get a new link, log in with your email address instead.'
+          )}
         </p>
       )}
       <form className={styles.form} onSubmit={handleSubmit} noValidate>
         <Input
-          label="Email"
-          type="email"
-          autoComplete="email"
-          value={form.email}
-          onChange={update('email')}
-          error={errors.email}
+          label="Email or username"
+          type="text"
+          autoComplete="username"
+          autoCapitalize="none"
+          autoCorrect="off"
+          spellCheck={false}
+          value={form.identifier}
+          onChange={update('identifier')}
+          error={errors.identifier}
         />
         <Input
           label="Password"

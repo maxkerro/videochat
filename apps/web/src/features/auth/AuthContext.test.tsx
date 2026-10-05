@@ -40,7 +40,9 @@ function Probe() {
     <div>
       <p data-testid="status">{auth.status}</p>
       <p data-testid="user">{auth.user?.displayName ?? 'none'}</p>
-      <button onClick={() => void auth.login({ email: 'ada@example.com', password: 'hunter22' })}>
+      <button
+        onClick={() => void auth.login({ identifier: 'ada@example.com', password: 'hunter22' })}
+      >
         Log in
       </button>
       <button onClick={() => void auth.logout()}>Log out</button>

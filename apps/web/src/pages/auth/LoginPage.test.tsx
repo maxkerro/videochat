@@ -18,8 +18,8 @@ const session = {
 
 afterEach(() => vi.unstubAllGlobals());
 
-async function submitLogin(email = 'ada@example.com', password = 'a-strong-password') {
-  await userEvent.type(screen.getByLabelText('Email'), email);
+async function submitLogin(identifier = 'ada@example.com', password = 'a-strong-password') {
+  await userEvent.type(screen.getByLabelText('Email or username'), identifier);
   await userEvent.type(screen.getByLabelText('Password'), password);
   await userEvent.click(screen.getByRole('button', { name: 'Log in' }));
 }
@@ -29,7 +29,8 @@ describe('LoginPage', () => {
     vi.stubGlobal('fetch', fetchAlwaysReturning({ message: 'no cookie' }, 401));
     renderApp('/login');
     await userEvent.click(screen.getByRole('button', { name: 'Log in' }));
-    expect(await screen.findByText('Invalid email address')).toBeInTheDocument();
+    expect(await screen.findByText('Enter your email or username')).toBeInTheDocument();
+    expect(screen.getByText('Enter your password')).toBeInTheDocument();
   });
 
   it('logs in and lands on the home route', async () => {
@@ -39,11 +40,28 @@ describe('LoginPage', () => {
     await vi.waitFor(() => expect(router.state.location.pathname).toBe('/'));
   });
 
+  it('logs in with a username, sending it as the identifier', async () => {
+    const fetchMock = fetchAlwaysReturning(session);
+    vi.stubGlobal('fetch', fetchMock);
+    const { router } = renderApp('/login');
+    await submitLogin('ada');
+    await vi.waitFor(() => expect(router.state.location.pathname).toBe('/'));
+    const calls = fetchMock.mock.calls as unknown as Array<[RequestInfo | URL, RequestInit?]>;
+    const login = calls.find(([input]) => String(input).endsWith('/auth/login'));
+    expect(JSON.parse(String(login![1]!.body))).toEqual({
+      identifier: 'ada',
+      password: 'a-strong-password',
+    });
+  });
+
   it('shows a generic invalid-credentials message on a 401', async () => {
-    vi.stubGlobal('fetch', fetchAlwaysReturning({ message: 'Invalid email or password' }, 401));
+    vi.stubGlobal(
+      'fetch',
+      fetchAlwaysReturning({ message: 'Incorrect email/username or password' }, 401),
+    );
     renderApp('/login');
     await submitLogin();
-    expect(await screen.findByText('Invalid email or password')).toBeInTheDocument();
+    expect(await screen.findByText('Incorrect email/username or password')).toBeInTheDocument();
   });
 
   it('offers to resend the verification email on a 403', async () => {
@@ -52,5 +70,13 @@ describe('LoginPage', () => {
     await submitLogin();
     expect(await screen.findByText(/Verify your email/)).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Resend the email' })).toBeInTheDocument();
+  });
+
+  it("doesn't offer a resend after a username login (there's no address to send to)", async () => {
+    vi.stubGlobal('fetch', fetchAlwaysReturning({ message: 'Email not verified' }, 403));
+    renderApp('/login');
+    await submitLogin('ada');
+    expect(await screen.findByText(/log in with your email address/)).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Resend the email' })).not.toBeInTheDocument();
   });
 });

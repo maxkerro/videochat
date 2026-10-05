@@ -67,11 +67,46 @@ export const signUpSchema = z.object({
 });
 export type SignUpInput = z.infer<typeof signUpSchema>;
 
+/**
+ * CHAT-080: what the login form's "Email or username" field holds. Usernames can't contain '@'
+ * (see `usernameSchema`), so the server tells the two apart by that alone -- see
+ * {@link isEmailIdentifier}. Deliberately not validated as either format here: a malformed
+ * value just fails to match anyone, with the same generic error as a wrong password.
+ */
+export const loginIdentifierSchema = z
+  .string()
+  .trim()
+  .min(1, 'Enter your email or username')
+  .max(254);
+
+/** True when a login identifier is an email address rather than a username. */
+export function isEmailIdentifier(identifier: string): boolean {
+  return identifier.includes('@');
+}
+
 export const loginSchema = z.object({
-  email: emailSchema,
-  password: z.string().min(1),
+  identifier: loginIdentifierSchema,
+  password: z.string().min(1, 'Enter your password'),
 });
 export type LoginInput = z.infer<typeof loginSchema>;
+
+/**
+ * What `POST /auth/login` accepts: `{identifier, password}`, or the pre-CHAT-080 shape
+ * `{email, password}` so a web tab loaded before the deploy (or an older mobile build) keeps
+ * working. Normalised to {@link LoginInput}. The legacy `email` field can be dropped once no
+ * client sends it.
+ */
+export const loginRequestSchema = z
+  .object({
+    identifier: loginIdentifierSchema.optional(),
+    email: loginIdentifierSchema.optional(),
+    password: z.string().min(1, 'Enter your password'),
+  })
+  .refine((v) => v.identifier !== undefined || v.email !== undefined, {
+    message: 'Enter your email or username',
+    path: ['identifier'],
+  })
+  .transform((v): LoginInput => ({ identifier: (v.identifier ?? v.email)!, password: v.password }));
 
 export const requestPasswordResetSchema = z.object({ email: emailSchema });
 export type RequestPasswordResetInput = z.infer<typeof requestPasswordResetSchema>;

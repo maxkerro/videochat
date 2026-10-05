@@ -143,6 +143,62 @@ describe.skipIf(!hasInfra)('auth HTTP flow (CHAT-010)', () => {
       .expect(403);
   });
 
+  describe('logging in with a username (CHAT-080)', () => {
+    it('logs in with username + password, ignoring case and surrounding spaces', async () => {
+      const user = await signUpAndVerify();
+      const res = await request(server())
+        .post('/auth/login')
+        .send({ identifier: `  ${user.username.toUpperCase()} `, password: user.password })
+        .expect(200);
+      expect(authSessionSchema.parse(res.body).user.username).toBe(user.username);
+    });
+
+    it('still logs in with email as the identifier, and with the legacy {email} body', async () => {
+      const user = await signUpAndVerify();
+      await request(server())
+        .post('/auth/login')
+        .send({ identifier: user.email, password: user.password })
+        .expect(200);
+      await request(server())
+        .post('/auth/login')
+        .send({ email: user.email, password: user.password })
+        .expect(200);
+    });
+
+    it('gives an unknown username, a wrong password and an unknown email the same answer', async () => {
+      const user = await signUpAndVerify();
+      const answers = await Promise.all(
+        [
+          { identifier: 'no_such_user_here', password: 'nope-nope-nope' },
+          { identifier: user.username, password: 'nope-nope-nope' },
+          { identifier: 'no-such-user@test.dev', password: 'nope-nope-nope' },
+          // Looks like an email, so it's looked up as one -- never as a username.
+          { identifier: `${user.username}@`, password: user.password },
+        ].map((body) => request(server()).post('/auth/login').send(body).expect(401)),
+      );
+      expect(new Set(answers.map((a) => a.body.message)).size).toBe(1);
+      expect(answers[0]!.body.message).toBe('Incorrect email/username or password');
+    });
+
+    it('counts failures across username and email toward the same lockout', async () => {
+      const user = await signUpAndVerify();
+      for (let i = 0; i < 5; i++) {
+        await request(server())
+          .post('/auth/login')
+          .send({ identifier: i % 2 ? user.email : user.username, password: 'wrong' })
+          .expect(401);
+      }
+      await request(server())
+        .post('/auth/login')
+        .send({ identifier: user.username, password: user.password })
+        .expect(403);
+    });
+
+    it('rejects a body with neither identifier nor email', async () => {
+      await request(server()).post('/auth/login').send({ password: 'whatever' }).expect(400);
+    });
+  });
+
   it('GET /me rejects a missing or invalid access token', async () => {
     await request(server()).get('/me').expect(401);
     await request(server()).get('/me').set('Authorization', 'Bearer garbage').expect(401);
