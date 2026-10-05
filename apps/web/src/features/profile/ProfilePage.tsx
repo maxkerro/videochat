@@ -159,6 +159,8 @@ export function ProfilePage() {
             ref={fileInput}
             type="file"
             accept={ACCEPTED_AVATAR_TYPES.join(',')}
+            aria-label="Choose a new avatar image"
+            tabIndex={-1}
             className="visually-hidden"
             onChange={handleAvatarChange}
           />

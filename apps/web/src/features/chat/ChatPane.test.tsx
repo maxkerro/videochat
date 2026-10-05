@@ -1040,6 +1040,80 @@ describe('ChatPane', () => {
     });
   });
 
+  describe('CHAT-038 accessibility', () => {
+    it('announces a new incoming message to screen readers', async () => {
+      vi.stubGlobal(
+        'fetch',
+        routedFetch({
+          'POST /auth/refresh': () => jsonResponse(session()),
+          [`GET /conversations/${conversationId}`]: () => jsonResponse(conversation()),
+          [`GET /conversations/${conversationId}/messages`]: () =>
+            jsonResponse({ messages: [], hasMore: false }),
+        }),
+      );
+      renderApp(`/c/${conversationId}`);
+      await screen.findByLabelText('Message');
+      await waitFor(() => expect(FakeWebSocket.instances).toHaveLength(1));
+      const socket = FakeWebSocket.instances[0]!;
+      socket.emit('open');
+      const incoming = message({ id: '01ARZ3NDEKTSV4RRFFQ69G5FC1', seq: 2, body: 'knock knock' });
+      socket.emit('message', {
+        data: JSON.stringify(makeEnvelope('message.new', incoming, incoming.id)),
+      });
+      expect(await screen.findByRole('log')).toHaveTextContent(
+        'New message from Ben Okafor: knock knock',
+      );
+    });
+
+    it('replies and reacts with the keyboard only', async () => {
+      let sent: Record<string, unknown> | undefined;
+      let reacted: Record<string, unknown> | undefined;
+      const target = message({ body: 'keyboard?' });
+      vi.stubGlobal(
+        'fetch',
+        routedFetch({
+          'POST /auth/refresh': () => jsonResponse(session()),
+          [`GET /conversations/${conversationId}`]: () => jsonResponse(conversation()),
+          [`GET /conversations/${conversationId}/messages`]: () =>
+            jsonResponse({ messages: [target], hasMore: false }),
+          [`POST /conversations/${conversationId}/messages/${target.id}/reactions`]: (_u, init) => {
+            reacted = JSON.parse(String(init?.body)) as Record<string, unknown>;
+            return jsonResponse({ conversationId, messageId: target.id, reactions: [] });
+          },
+          [`POST /conversations/${conversationId}/messages`]: (_u, init) => {
+            sent = JSON.parse(String(init?.body)) as Record<string, unknown>;
+            return jsonResponse(
+              message({
+                id: '01ARZ3NDEKTSV4RRFFQ69G5FC2',
+                seq: 2,
+                senderId: baseUser.id,
+                body: 'yes',
+              }),
+            );
+          },
+        }),
+      );
+      renderApp(`/c/${conversationId}`);
+      await screen.findByText('keyboard?');
+
+      // React: focus the button, open with Enter, Enter picks the first quick reaction.
+      screen.getByRole('button', { name: 'React' }).focus();
+      await userEvent.keyboard('{Enter}');
+      await screen.findByRole('menuitem', { name: '👍' });
+      await userEvent.keyboard('{Enter}');
+      await waitFor(() => expect(reacted).toEqual({ emoji: '👍' }));
+
+      // Reply: open the actions menu, Enter on the first item (Reply), type, Enter to send.
+      screen.getByRole('button', { name: 'Message actions' }).focus();
+      await userEvent.keyboard('{Enter}');
+      await screen.findByRole('menuitem', { name: 'Reply' });
+      await userEvent.keyboard('{Enter}');
+      await waitFor(() => expect(screen.getByLabelText('Message')).toHaveFocus());
+      await userEvent.keyboard('yes{Enter}');
+      await waitFor(() => expect(sent).toMatchObject({ body: 'yes', replyToId: target.id }));
+    });
+  });
+
   describe('CHAT-018 groups', () => {
     const groupId = '77777777-7777-4777-8777-777777777777';
 

@@ -257,6 +257,8 @@ export function ChatPane() {
   const [deleteTarget, setDeleteTarget] = useState<Message | null>(null);
   const [highlightId, setHighlightId] = useState<string | null>(null);
   const [pickerTarget, setPickerTarget] = useState<Message | null>(null);
+  // CHAT-038 AC: "new incoming messages are announced by the screen reader".
+  const [announcement, setAnnouncement] = useState('');
 
   // `ChatPane` stays mounted across a conversation switch, so an in-progress draft would
   // otherwise follow the person into the next conversation and could get sent to the wrong
@@ -392,6 +394,16 @@ export function ChatPane() {
     recordSeenSeq(message.conversationId, message.seq);
     if (message.conversationId !== conversationId) return;
     if (!isOwn && !atLatest) setNewArrivals((n) => n + 1);
+    if (!isOwn && message.type !== 'system') {
+      const what = message.attachment
+        ? message.attachment.kind === 'image'
+          ? 'sent a photo'
+          : `sent ${message.attachment.filename}`
+        : message.type === 'call'
+          ? 'call'
+          : (message.body ?? '');
+      setAnnouncement(`New message from ${nameFor(message.senderId)}: ${what}`);
+    }
   });
 
   // CHAT-031/032: a newer version of a message already shown (link preview added or removed).
@@ -725,7 +737,8 @@ export function ChatPane() {
   function startReply(message: Message) {
     setEditingId(null);
     setReplyTo(message);
-    document.getElementById('composer')?.focus();
+    // After the menu has closed and handed focus back to its trigger.
+    window.setTimeout(() => document.getElementById('composer')?.focus(), 50);
   }
 
   async function saveEdit(message: Message, body: string) {
@@ -1082,6 +1095,10 @@ export function ChatPane() {
           )}
         </div>
       )}
+
+      <div className="visually-hidden" role="log" aria-live="polite" aria-atomic="true">
+        {announcement}
+      </div>
 
       {typingLabel && (
         <div className={styles.typingIndicator} role="status" aria-live="polite">
