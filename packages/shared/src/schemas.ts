@@ -365,7 +365,9 @@ export const emojiSchema = z
     /^(?:\p{Extended_Pictographic}|\p{Regional_Indicator}|\u200d|\ufe0f|\u20e3|\p{Emoji_Modifier}|[#*0-9])+$/u,
     'Not an emoji',
   )
-  .refine((v) => /\p{Extended_Pictographic}|\p{Regional_Indicator}/u.test(v), 'Not an emoji')
+  // Needs a pictographic, a flag letter, or a keycap mark (1️⃣ is "1" + U+FE0F + U+20E3):
+  // a bare digit or # on its own isn't an emoji.
+  .refine((v) => /\p{Extended_Pictographic}|\p{Regional_Indicator}|\u20e3/u.test(v), 'Not an emoji')
   // One emoji, not several in a row (a flag or a ZWJ family still counts as one).
   .refine(
     (v) =>

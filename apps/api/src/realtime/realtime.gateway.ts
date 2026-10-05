@@ -123,8 +123,11 @@ export class RealtimeGateway
     // join against later, so the server has to embed a display name itself, and doing that with a
     // DB round trip on every keystroke-driven event would be wasteful for something this frequent.
     client.displayName = user?.displayName;
+    // Closed while we were loading: `handleDisconnect` already ran (and found nothing registered),
+    // so registering now would leave a dead socket -- and a ghost presence entry -- behind.
+    if (client.readyState !== client.OPEN) return;
     this.realtime.register(client, userId, conversationIds);
-    void this.presence.connected(userId, client.connectionId);
+    client.presenceReady = this.presence.connected(userId, client.connectionId);
 
     // The client's WebSocket fires `open` as soon as the handshake completes, which is before
     // this handler's DB query and registration above finish -- there's no way to delay `open`
@@ -143,7 +146,11 @@ export class RealtimeGateway
   handleDisconnect(client: RealtimeSocket): void {
     this.realtime.unregister(client);
     if (client.userId && client.connectionId) {
-      void this.presence.disconnected(client.userId, client.connectionId);
+      const { userId, connectionId } = client;
+      // After the connect's presence write, never before it (see `presenceReady`).
+      void (client.presenceReady ?? Promise.resolve()).then(() =>
+        this.presence.disconnected(userId, connectionId),
+      );
     }
     // Only sockets that finished authenticating can be in a call.
     if (client.userId) void this.realtime.notifyDisconnected(client);

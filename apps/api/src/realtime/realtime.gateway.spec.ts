@@ -48,6 +48,11 @@ describe('RealtimeGateway', () => {
     notifyDisconnected: ReturnType<typeof vi.fn>;
   };
   let gateway: RealtimeGateway;
+  let presence: {
+    connected: ReturnType<typeof vi.fn>;
+    disconnected: ReturnType<typeof vi.fn>;
+    refresh: ReturnType<typeof vi.fn>;
+  };
 
   beforeEach(() => {
     vi.mocked(conversationsDb.listConversationIdsForUser).mockResolvedValue(['conv-1']);
@@ -55,6 +60,11 @@ describe('RealtimeGateway', () => {
     vi.mocked(blocksDb.isSenderBlockedInDirectConversation).mockResolvedValue(false);
     vi.mocked(usersDb.findUserById).mockResolvedValue({ displayName: 'Anna' } as never);
     jwt = { verify: vi.fn() };
+    presence = {
+      connected: vi.fn().mockResolvedValue(undefined),
+      disconnected: vi.fn().mockResolvedValue(undefined),
+      refresh: vi.fn().mockResolvedValue(undefined),
+    };
     realtime = {
       register: vi.fn(),
       unregister: vi.fn(),
@@ -66,11 +76,7 @@ describe('RealtimeGateway', () => {
       jwt as unknown as JwtService,
       realtime as unknown as RealtimeService,
       {} as Database,
-      {
-        connected: vi.fn().mockResolvedValue(undefined),
-        disconnected: vi.fn().mockResolvedValue(undefined),
-        refresh: vi.fn().mockResolvedValue(undefined),
-      } as unknown as PresenceService,
+      presence as unknown as PresenceService,
       { isTokenValid: vi.fn().mockResolvedValue(true) } as unknown as TokenStateService,
     );
   });
@@ -86,6 +92,18 @@ describe('RealtimeGateway', () => {
       expect(realtime.register).toHaveBeenCalledWith(client, 'user-1', ['conv-1']);
       expect(client.isAlive).toBe(true);
       expect(client.on).toHaveBeenCalledWith('pong', expect.any(Function));
+    });
+
+    it("CHAT-034: doesn't register (or mark online) a socket that closed while connecting", async () => {
+      jwt.verify.mockReturnValue({ sub: 'user-1' });
+      const client = makeClient();
+      vi.mocked(conversationsDb.listConversationIdsForUser).mockImplementationOnce(async () => {
+        (client as { readyState: number }).readyState = 3; // CLOSED
+        return ['conv-1'];
+      });
+      await gateway.handleConnection(client, { url: '/realtime?token=good' } as never);
+      expect(realtime.register).not.toHaveBeenCalled();
+      expect(presence.connected).not.toHaveBeenCalled();
     });
 
     it('closes the connection when no token is provided', async () => {
@@ -273,6 +291,18 @@ describe('RealtimeGateway', () => {
       const client = makeClient();
       gateway.handleDisconnect(client);
       expect(realtime.unregister).toHaveBeenCalledWith(client);
+    });
+
+    it('CHAT-034: removes the presence entry only after the connect wrote it', async () => {
+      let finishConnect!: () => void;
+      const client = makeClient();
+      Object.assign(client, { userId: 'user-1', connectionId: 'c1' });
+      client.presenceReady = new Promise<void>((r) => (finishConnect = r));
+      gateway.handleDisconnect(client);
+      await Promise.resolve();
+      expect(presence.disconnected).not.toHaveBeenCalled();
+      finishConnect();
+      await vi.waitFor(() => expect(presence.disconnected).toHaveBeenCalledWith('user-1', 'c1'));
     });
   });
 

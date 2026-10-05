@@ -260,10 +260,10 @@ describe('loginRequestSchema (CHAT-080)', () => {
 });
 
 describe('emojiSchema (CHAT-033)', () => {
-  it.each(['👍', '❤️', '👍🏽', '👨‍👩‍👧', '🇩🇪'])('accepts %s', (e) => {
+  it.each(['👍', '❤️', '👍🏽', '👨‍👩‍👧', '🇩🇪', '1️⃣', '#️⃣'])('accepts %s', (e) => {
     expect(emojiSchema.safeParse(e).success).toBe(true);
   });
-  it.each(['a', '1', '👍 ', '<b>', '😀😀', ''])('refuses %j', (e) => {
+  it.each(['a', '1', '#', '1\u20e3x', '👍 ', '<b>', '😀😀', ''])('refuses %j', (e) => {
     expect(emojiSchema.safeParse(e).success).toBe(false);
   });
 });

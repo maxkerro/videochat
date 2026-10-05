@@ -25,6 +25,9 @@ export interface RealtimeSocket extends WebSocket {
   /** CHAT-020: `Date.now()` of the last typing signal accepted from this connection -- the
    *  server-side defense-in-depth throttle (see `TYPING_MIN_INTERVAL_MS`). */
   lastTypingAt?: number;
+  /** CHAT-034: settles once this socket's presence entry is written. A disconnect waits for it, so
+   *  the removal can't land before the add and leave a ghost "online" connection. */
+  presenceReady?: Promise<void>;
   /** Snapshot, taken at connect time, of the conversations this socket should hear about.
    *  CHAT-013 doesn't push live updates into this set when membership changes mid-connection, but
    *  `RealtimeService.addConversationForUser`/`removeConversationForUser` (CHAT-012/CHAT-018) patch
