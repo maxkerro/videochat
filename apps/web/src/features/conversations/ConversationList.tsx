@@ -3,6 +3,7 @@ import {
   conversationReadEventSchema,
   messageSchema,
   type ConversationSummary,
+  type Message,
   type WsEnvelope,
 } from '@videochat/shared';
 import { useState } from 'react';
@@ -36,6 +37,19 @@ export function previewFor(
   if (last.body === null) return 'Message deleted';
   if (last.type === 'system') return last.body;
   return last.senderId === myUserId ? `You: ${last.body}` : last.body;
+}
+
+/** The inbox preview fields of a message (CHAT-044/030). */
+function toPreview(message: Message): NonNullable<ConversationSummary['lastMessage']> {
+  return {
+    type: message.type,
+    senderId: message.senderId,
+    body: message.body,
+    ...(message.call ? { call: message.call } : {}),
+    ...(message.attachment
+      ? { attachment: { kind: message.attachment.kind, filename: message.attachment.filename } }
+      : {}),
+  };
 }
 
 function timeFor(conversation: ConversationSummary): string {
@@ -104,20 +118,7 @@ export function ConversationList() {
         lastSeq: message.seq,
         lastMessageAt: message.createdAt,
         // CHAT-044: keep the preview line in step with the newest message.
-        lastMessage: {
-          type: message.type,
-          senderId: message.senderId,
-          body: message.body,
-          ...(message.call ? { call: message.call } : {}),
-          ...(message.attachment
-            ? {
-                attachment: {
-                  kind: message.attachment.kind,
-                  filename: message.attachment.filename,
-                },
-              }
-            : {}),
-        },
+        lastMessage: toPreview(message),
         // Sending counts as having read your own message (mirrors appendMessage's own
         // bookkeeping server-side), so your own outgoing messages never show up as unread here.
         lastReadSeq: message.senderId === auth.user?.id ? message.seq : current.lastReadSeq,
@@ -125,6 +126,22 @@ export function ConversationList() {
       const copy = list.slice();
       copy[i] = next;
       copy.sort(byRecency);
+      return copy;
+    });
+  });
+
+  // CHAT-032: an edit or delete of the newest message changes its preview line.
+  useRealtimeEvent((envelope: WsEnvelope) => {
+    if (envelope.type !== 'message.updated') return;
+    const parsed = messageSchema.safeParse(envelope.payload);
+    if (!parsed.success) return;
+    const message = parsed.data;
+    queryClient.setQueryData<ConversationSummary[]>(['conversations'], (list) => {
+      if (!list) return list;
+      const i = list.findIndex((c) => c.id === message.conversationId);
+      if (i < 0 || list[i]!.lastSeq !== message.seq) return list;
+      const copy = list.slice();
+      copy[i] = { ...list[i]!, lastMessage: toPreview(message) };
       return copy;
     });
   });

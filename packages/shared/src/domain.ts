@@ -45,6 +45,10 @@ export const LIMITS = {
   attachmentMaxBytes: 25 * 1024 * 1024,
   /** CHAT-030: longest edge of an image attachment's preview thumbnail, in px. */
   attachmentThumbMaxPx: 512,
+  /** CHAT-032: how long after sending a message can still be edited. */
+  messageEditWindowMinutes: 15,
+  /** CHAT-032: how much of the original a reply quote carries. */
+  replySnippetLength: 200,
 } as const;
 
 /** CHAT-030: images get a thumbnail and open in the lightbox; anything else is a download card. */

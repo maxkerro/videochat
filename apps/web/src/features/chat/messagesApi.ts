@@ -6,7 +6,7 @@ import {
   type MessagePage,
   type SendMessageInput,
 } from '@videochat/shared';
-import { apiGet, apiPost } from '../../lib/api';
+import { apiDelete, apiGet, apiPatch, apiPost } from '../../lib/api';
 
 function authHeader(accessToken: string) {
   return { Authorization: `Bearer ${accessToken}` };
@@ -46,6 +46,34 @@ export function sendMessage(
 ): Promise<Message> {
   sendMessageSchema.parse(input);
   return apiPost(`/conversations/${conversationId}/messages`, messageSchema, input, {
+    headers: authHeader(accessToken),
+  });
+}
+
+/** CHAT-032: edit your own message's text (within the edit window). */
+export function editMessage(
+  accessToken: string,
+  conversationId: string,
+  messageId: string,
+  body: string,
+): Promise<Message> {
+  return apiPatch(
+    `/conversations/${conversationId}/messages/${messageId}`,
+    messageSchema,
+    { body },
+    {
+      headers: authHeader(accessToken),
+    },
+  );
+}
+
+/** CHAT-032: delete for everyone. Resolves to the tombstone. */
+export function deleteMessage(
+  accessToken: string,
+  conversationId: string,
+  messageId: string,
+): Promise<Message> {
+  return apiDelete(`/conversations/${conversationId}/messages/${messageId}`, messageSchema, {
     headers: authHeader(accessToken),
   });
 }

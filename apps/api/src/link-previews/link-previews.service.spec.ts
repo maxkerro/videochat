@@ -6,7 +6,11 @@ import type { RealtimeService } from '../realtime/realtime.service.js';
 import type { LinkPreviewFetcher } from './link-preview.fetcher.js';
 import { LinkPreviewsService } from './link-previews.service.js';
 
-vi.mock('../db/messages.js', () => ({ setMessageLinkPreview: vi.fn(), findMessage: vi.fn() }));
+vi.mock('../db/messages.js', () => ({
+  setMessageLinkPreview: vi.fn(),
+  findMessage: vi.fn(),
+  findMessagesByIds: vi.fn(async () => []),
+}));
 vi.mock('../db/conversations.js', () => ({ isConversationMember: vi.fn(async () => true) }));
 
 const preview = {

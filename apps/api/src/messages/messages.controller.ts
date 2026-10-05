@@ -1,5 +1,16 @@
-import { Body, Controller, Get, Param, Post, Query, UseGuards } from '@nestjs/common';
 import {
+  Body,
+  Controller,
+  Delete,
+  Get,
+  Param,
+  Patch,
+  Post,
+  Query,
+  UseGuards,
+} from '@nestjs/common';
+import {
+  editMessageSchema,
   messagesPageQuerySchema,
   sendMessageSchema,
   type Message,
@@ -7,6 +18,7 @@ import {
 } from '@videochat/shared';
 import { z } from 'zod';
 import { AccessTokenGuard, CurrentUserId } from '../auth/access-token.guard.js';
+import { UlidParamPipe } from '../common/ulid-param.pipe.js';
 import { UuidParamPipe } from '../common/uuid-param.pipe.js';
 import { ZodValidationPipe } from '../common/zod-validation.pipe.js';
 import { MessageThrottlerGuard } from '../rate-limit/rate-limit.guards.js';
@@ -44,5 +56,27 @@ export class MessagesController {
     @Body(new ZodValidationPipe(sendMessageSchema)) body: z.infer<typeof sendMessageSchema>,
   ): Promise<Message> {
     return this.messages.send(conversationId, userId, body);
+  }
+
+  /** CHAT-032: edit your own message's text, within the edit window. */
+  @Patch(':messageId')
+  @UseGuards(MessageThrottlerGuard)
+  edit(
+    @Param('conversationId', UuidParamPipe) conversationId: string,
+    @Param('messageId', UlidParamPipe) messageId: string,
+    @CurrentUserId() userId: string,
+    @Body(new ZodValidationPipe(editMessageSchema)) body: z.infer<typeof editMessageSchema>,
+  ): Promise<Message> {
+    return this.messages.edit(conversationId, userId, messageId, body.body);
+  }
+
+  /** CHAT-032: delete for everyone -- the sender, or a group admin. Returns the tombstone. */
+  @Delete(':messageId')
+  delete(
+    @Param('conversationId', UuidParamPipe) conversationId: string,
+    @Param('messageId', UlidParamPipe) messageId: string,
+    @CurrentUserId() userId: string,
+  ): Promise<Message> {
+    return this.messages.delete(conversationId, userId, messageId);
   }
 }

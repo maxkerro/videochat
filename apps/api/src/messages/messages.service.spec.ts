@@ -1,6 +1,7 @@
 import { ConflictException, ForbiddenException, NotFoundException } from '@nestjs/common';
 import type { Database } from '../db/client.js';
 import * as blocksDb from '../db/blocks.js';
+import * as attachmentsDb from '../db/attachments.js';
 import * as conversationsDb from '../db/conversations.js';
 import * as messagesDb from '../db/messages.js';
 import { SenderNotAMemberError } from '../db/messages.js';
@@ -10,12 +11,20 @@ import type { RealtimeService } from '../realtime/realtime.service.js';
 import { MessagesService } from './messages.service.js';
 
 vi.mock('../db/blocks.js', () => ({ isSenderBlockedInDirectConversation: vi.fn() }));
-vi.mock('../db/conversations.js', () => ({ isConversationMember: vi.fn() }));
+vi.mock('../db/conversations.js', () => ({
+  isConversationMember: vi.fn(),
+  findConversationForUser: vi.fn(),
+}));
+vi.mock('../db/attachments.js', () => ({ findAttachmentsForMessage: vi.fn() }));
 vi.mock('../db/messages.js', async () => {
   const actual = await vi.importActual<typeof import('../db/messages.js')>('../db/messages.js');
   return {
     appendMessage: vi.fn(),
     appendMessageWithStatus: vi.fn(),
+    findMessage: vi.fn(),
+    findMessagesByIds: vi.fn(),
+    editMessageBody: vi.fn(),
+    softDeleteMessage: vi.fn(),
     listMessagesPage: vi.fn(),
     listMessagesAfter: vi.fn(),
     SenderNotAMemberError: actual.SenderNotAMemberError,
@@ -48,6 +57,7 @@ describe('MessagesService', () => {
   let attachments: {
     prepareForMessage: ReturnType<typeof vi.fn>;
     linkToMessage: ReturnType<typeof vi.fn>;
+    deleteRows: ReturnType<typeof vi.fn>;
   };
 
   beforeEach(() => {
@@ -55,8 +65,10 @@ describe('MessagesService', () => {
     attachments = {
       prepareForMessage: vi.fn(),
       linkToMessage: vi.fn().mockResolvedValue(undefined),
+      deleteRows: vi.fn().mockResolvedValue(undefined),
     };
     linkPreviews = { attachToMessage: vi.fn().mockResolvedValue(undefined) };
+    vi.mocked(messagesDb.findMessagesByIds).mockResolvedValue([]);
     // The service uses appendMessageWithStatus; tests stub appendMessage's result and assert on it.
     vi.mocked(messagesDb.appendMessageWithStatus).mockImplementation(async (db, input) => ({
       row: await messagesDb.appendMessage(db, input),
@@ -281,6 +293,116 @@ describe('MessagesService', () => {
         'conv-1',
         expect.objectContaining({ afterSeq: 2 }),
       );
+    });
+  });
+
+  describe('CHAT-032 edit and delete', () => {
+    const mine = () =>
+      makeMessageRow({ senderId: 'user-1', createdAt: new Date(), body: 'original' });
+
+    beforeEach(() => {
+      vi.mocked(conversationsDb.isConversationMember).mockResolvedValue(true);
+      vi.mocked(attachmentsDb.findAttachmentsForMessage).mockResolvedValue([]);
+    });
+
+    it('edits within the window, announces it, and re-checks the link preview', async () => {
+      vi.mocked(messagesDb.findMessage).mockResolvedValue(mine() as never);
+      vi.mocked(messagesDb.editMessageBody).mockResolvedValue(
+        makeMessageRow({ senderId: 'user-1', body: 'fixed', editedAt: new Date() }) as never,
+      );
+      const message = await service.edit('conv-1', 'user-1', 'm', 'fixed');
+      expect(message).toMatchObject({ body: 'fixed' });
+      expect(message.editedAt).not.toBeNull();
+      const [, envelope] = realtime.publishToConversation.mock.calls[0]!;
+      expect(envelope).toMatchObject({ type: 'message.updated', payload: { body: 'fixed' } });
+      expect(linkPreviews.attachToMessage).toHaveBeenCalled();
+    });
+
+    it("refuses editing someone else's message, a call entry, or after 15 minutes", async () => {
+      vi.mocked(messagesDb.findMessage).mockResolvedValue(
+        makeMessageRow({ senderId: 'user-2', createdAt: new Date() }) as never,
+      );
+      await expect(service.edit('conv-1', 'user-1', 'm', 'x')).rejects.toThrow(ForbiddenException);
+      vi.mocked(messagesDb.findMessage).mockResolvedValue(
+        makeMessageRow({ senderId: 'user-1', type: 'call', createdAt: new Date() }) as never,
+      );
+      await expect(service.edit('conv-1', 'user-1', 'm', 'x')).rejects.toThrow(/can’t be edited/);
+      vi.mocked(messagesDb.findMessage).mockResolvedValue(
+        makeMessageRow({
+          senderId: 'user-1',
+          createdAt: new Date(Date.now() - 16 * 60_000),
+        }) as never,
+      );
+      await expect(service.edit('conv-1', 'user-1', 'm', 'x')).rejects.toThrow(/15 minutes/);
+      expect(messagesDb.editMessageBody).not.toHaveBeenCalled();
+    });
+
+    it('404s a message from another conversation', async () => {
+      vi.mocked(messagesDb.findMessage).mockResolvedValue(
+        makeMessageRow({ conversationId: 'conv-other' }) as never,
+      );
+      await expect(service.edit('conv-1', 'user-1', 'm', 'x')).rejects.toThrow(NotFoundException);
+      await expect(service.delete('conv-1', 'user-1', 'm')).rejects.toThrow(NotFoundException);
+    });
+
+    it('deletes for the sender: wipes content, removes attachment files, announces it', async () => {
+      vi.mocked(messagesDb.findMessage).mockResolvedValue(mine() as never);
+      vi.mocked(messagesDb.softDeleteMessage).mockResolvedValue(
+        makeMessageRow({ senderId: 'user-1', body: null, deletedAt: new Date() }) as never,
+      );
+      vi.mocked(attachmentsDb.findAttachmentsForMessage).mockResolvedValue([{ id: 'a' }] as never);
+      const tombstone = await service.delete('conv-1', 'user-1', 'm');
+      expect(tombstone).toMatchObject({ body: null });
+      expect(tombstone.deletedAt).not.toBeNull();
+      expect(attachments.deleteRows).toHaveBeenCalledWith([{ id: 'a' }]);
+      expect(realtime.publishToConversation).toHaveBeenCalled();
+    });
+
+    it("lets a group admin delete someone else's message, but not a plain member", async () => {
+      vi.mocked(messagesDb.findMessage).mockResolvedValue(
+        makeMessageRow({ senderId: 'user-2' }) as never,
+      );
+      vi.mocked(messagesDb.softDeleteMessage).mockResolvedValue(
+        makeMessageRow({ senderId: 'user-2', body: null, deletedAt: new Date() }) as never,
+      );
+      vi.mocked(conversationsDb.findConversationForUser).mockResolvedValue({
+        type: 'group',
+        role: 'member',
+      } as never);
+      await expect(service.delete('conv-1', 'user-1', 'm')).rejects.toThrow(ForbiddenException);
+      vi.mocked(conversationsDb.findConversationForUser).mockResolvedValue({
+        type: 'direct',
+        role: 'admin',
+      } as never);
+      await expect(service.delete('conv-1', 'user-1', 'm')).rejects.toThrow(ForbiddenException);
+      vi.mocked(conversationsDb.findConversationForUser).mockResolvedValue({
+        type: 'group',
+        role: 'admin',
+      } as never);
+      await expect(service.delete('conv-1', 'user-1', 'm')).resolves.toMatchObject({ body: null });
+    });
+
+    it('rejects a reply to a message in another conversation or a deleted one', async () => {
+      vi.mocked(messagesDb.findMessage).mockResolvedValue(
+        makeMessageRow({ conversationId: 'conv-other' }) as never,
+      );
+      await expect(
+        service.send('conv-1', 'user-1', {
+          clientMsgId: 'c',
+          body: 'hi',
+          replyToId: '01J9ZQ3X4K7M8N9P0QRSTVWXYZ',
+        }),
+      ).rejects.toThrow(/no longer available/);
+      vi.mocked(messagesDb.findMessage).mockResolvedValue(
+        makeMessageRow({ deletedAt: new Date() }) as never,
+      );
+      await expect(
+        service.send('conv-1', 'user-1', {
+          clientMsgId: 'c',
+          body: 'hi',
+          replyToId: '01J9ZQ3X4K7M8N9P0QRSTVWXYZ',
+        }),
+      ).rejects.toThrow(/no longer available/);
     });
   });
 });

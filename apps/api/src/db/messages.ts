@@ -1,4 +1,4 @@
-import { and, asc, desc, eq, gt, isNull, lt, sql } from 'drizzle-orm';
+import { and, asc, desc, eq, gt, inArray, isNull, lt, sql } from 'drizzle-orm';
 import { ulid } from 'ulid';
 import type { LinkPreview, MessageType } from '@videochat/shared';
 import type { Database, DbExecutor } from './client.js';
@@ -260,5 +260,46 @@ export async function findMessage(
   messageId: string,
 ): Promise<MessageRow | undefined> {
   const [row] = await db.select().from(messages).where(eq(messages.id, messageId)).limit(1);
+  return row;
+}
+
+export async function findMessagesByIds(db: DbExecutor, ids: string[]): Promise<MessageRow[]> {
+  if (!ids.length) return [];
+  return db.select().from(messages).where(inArray(messages.id, ids));
+}
+
+/** CHAT-032: replaces a message's text. A link preview made for the old text is dropped (the
+ *  caller re-fetches one for the new text). Nothing happens to a deleted message. */
+export async function editMessageBody(
+  db: DbExecutor,
+  messageId: string,
+  body: string,
+): Promise<MessageRow | undefined> {
+  const [row] = await db
+    .update(messages)
+    .set({
+      body,
+      editedAt: sql`now()`,
+      meta: sql`case when ${messages.meta} is null then null else ${messages.meta} - 'linkPreview' end`,
+    })
+    .where(and(eq(messages.id, messageId), isNull(messages.deletedAt)))
+    .returning();
+  return row;
+}
+
+/**
+ * CHAT-032: "delete for everyone". The row stays as a tombstone (it holds a `seq`, and replies
+ * point at it) but its content is really gone: body and meta (attachment summary, link preview)
+ * are wiped, not just hidden.
+ */
+export async function softDeleteMessage(
+  db: DbExecutor,
+  messageId: string,
+): Promise<MessageRow | undefined> {
+  const [row] = await db
+    .update(messages)
+    .set({ deletedAt: sql`now()`, body: null, meta: null })
+    .where(and(eq(messages.id, messageId), isNull(messages.deletedAt)))
+    .returning();
   return row;
 }

@@ -1,4 +1,4 @@
-import { fireEvent, screen, waitFor } from '@testing-library/react';
+import { fireEvent, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { makeEnvelope, type MessageType } from '@videochat/shared';
 import { ApiError } from '../../lib/api';
@@ -766,6 +766,117 @@ describe('ChatPane', () => {
       expect(screen.queryByRole('link', { name: 'A great post' })).not.toBeInTheDocument();
       await userEvent.click(screen.getByRole('button', { name: 'Send message' }));
       await waitFor(() => expect(sentBody).toMatchObject({ linkPreview: false }));
+    });
+  });
+
+  describe('CHAT-032 reply, edit, delete', () => {
+    it('replies to a message: the reply bar shows it and the send carries replyToId', async () => {
+      let sentBody: Record<string, unknown> | undefined;
+      vi.stubGlobal(
+        'fetch',
+        routedFetch({
+          'POST /auth/refresh': () => jsonResponse(session()),
+          [`GET /conversations/${conversationId}`]: () => jsonResponse(conversation()),
+          [`GET /conversations/${conversationId}/messages`]: () =>
+            jsonResponse({ messages: [message({ body: 'Lunch at 12?' })], hasMore: false }),
+          [`POST /conversations/${conversationId}/messages`]: (_u, init) => {
+            sentBody = JSON.parse(String(init?.body)) as Record<string, unknown>;
+            return jsonResponse(
+              message({
+                id: '01ARZ3NDEKTSV4RRFFQ69G5FB1',
+                seq: 2,
+                senderId: baseUser.id,
+                body: 'Yes',
+              }),
+            );
+          },
+        }),
+      );
+      renderApp(`/c/${conversationId}`);
+      await screen.findByText('Lunch at 12?');
+      await userEvent.click(screen.getByRole('button', { name: 'Message actions' }));
+      await userEvent.click(await screen.findByRole('menuitem', { name: 'Reply' }));
+      expect(screen.getByText(/Replying to/)).toHaveTextContent(
+        'Replying to Ben Okafor: Lunch at 12?',
+      );
+      await userEvent.type(screen.getByLabelText('Message'), 'Yes');
+      await userEvent.click(screen.getByRole('button', { name: 'Send message' }));
+      await waitFor(() =>
+        expect(sentBody).toMatchObject({ body: 'Yes', replyToId: '01ARZ3NDEKTSV4RRFFQ69G5FAV' }),
+      );
+      expect(screen.queryByText(/Replying to/)).not.toBeInTheDocument();
+    });
+
+    it('edits your own recent message in place and marks it edited', async () => {
+      const mine = message({
+        senderId: baseUser.id,
+        body: 'helo',
+        createdAt: new Date().toISOString(),
+      });
+      vi.stubGlobal(
+        'fetch',
+        routedFetch({
+          'POST /auth/refresh': () => jsonResponse(session()),
+          [`GET /conversations/${conversationId}`]: () => jsonResponse(conversation()),
+          [`GET /conversations/${conversationId}/messages`]: () =>
+            jsonResponse({ messages: [mine], hasMore: false }),
+          [`PATCH /conversations/${conversationId}/messages/${mine.id}`]: (_u, init) =>
+            jsonResponse({
+              ...mine,
+              body: (JSON.parse(String(init?.body)) as { body: string }).body,
+              editedAt: new Date().toISOString(),
+            }),
+        }),
+      );
+      renderApp(`/c/${conversationId}`);
+      await screen.findByText('helo');
+      await userEvent.click(screen.getByRole('button', { name: 'Message actions' }));
+      await userEvent.click(await screen.findByRole('menuitem', { name: 'Edit' }));
+      const box = screen.getByLabelText('Edit message');
+      await userEvent.clear(box);
+      await userEvent.type(box, 'hello{Enter}');
+      expect(await screen.findByText('hello')).toBeInTheDocument();
+      expect(screen.getByText('(edited)')).toBeInTheDocument();
+    });
+
+    it('deletes after confirming and shows the tombstone; a deletion from elsewhere arrives live', async () => {
+      const mine = message({ senderId: baseUser.id, body: 'oops' });
+      const theirs = message({ id: '01ARZ3NDEKTSV4RRFFQ69G5FB2', seq: 2, body: 'from ben' });
+      vi.stubGlobal(
+        'fetch',
+        routedFetch({
+          'POST /auth/refresh': () => jsonResponse(session()),
+          [`GET /conversations/${conversationId}`]: () =>
+            jsonResponse(conversation({ lastSeq: 2, lastReadSeq: 2 })),
+          [`GET /conversations/${conversationId}/messages`]: () =>
+            jsonResponse({ messages: [mine, theirs], hasMore: false }),
+          [`DELETE /conversations/${conversationId}/messages/${mine.id}`]: () =>
+            jsonResponse({ ...mine, body: null, deletedAt: new Date().toISOString() }),
+        }),
+      );
+      renderApp(`/c/${conversationId}`);
+      await screen.findByText('oops');
+      // Only my own message offers delete (this is a DM, nobody is admin).
+      const mineRow = screen.getByText('oops').closest<HTMLElement>('[data-message-id]')!;
+      await userEvent.click(within(mineRow).getByRole('button', { name: 'Message actions' }));
+      await userEvent.click(await screen.findByRole('menuitem', { name: 'Delete for everyone' }));
+      await userEvent.click(screen.getByRole('button', { name: 'Delete' }));
+      await waitFor(() => expect(screen.queryByText('oops')).not.toBeInTheDocument());
+      expect(screen.getByText('Message deleted')).toBeInTheDocument();
+
+      await waitFor(() => expect(FakeWebSocket.instances).toHaveLength(1));
+      const socket = FakeWebSocket.instances[0]!;
+      socket.emit('open');
+      socket.emit('message', {
+        data: JSON.stringify(
+          makeEnvelope(
+            'message.updated',
+            { ...theirs, body: null, deletedAt: new Date().toISOString() },
+            'e',
+          ),
+        ),
+      });
+      await waitFor(() => expect(screen.getAllByText('Message deleted')).toHaveLength(2));
     });
   });
 

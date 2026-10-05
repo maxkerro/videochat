@@ -291,6 +291,25 @@ export type MemberSummary = z.infer<typeof memberSummarySchema>;
 export const membersListSchema = z.array(memberSummarySchema);
 export type MembersList = z.infer<typeof membersListSchema>;
 
+/**
+ * CHAT-032: what a reply shows of the message it answers -- read from the original every time, so
+ * an edit shows up and a deleted original shows as deleted (its text is gone, not kept here).
+ */
+export const replyPreviewSchema = z.object({
+  id: ulidSchema,
+  seq: z.number().int().positive(),
+  senderId: z.uuid().nullable(),
+  type: z.enum(MESSAGE_TYPES),
+  /** Up to `LIMITS.replySnippetLength` characters; null when deleted or there's no text. */
+  snippet: z
+    .string()
+    .max(LIMITS.replySnippetLength + 1)
+    .nullable(),
+  attachment: attachmentSchema.pick({ kind: true, filename: true }).optional(),
+  deleted: z.boolean(),
+});
+export type ReplyPreview = z.infer<typeof replyPreviewSchema>;
+
 export const messageSchema = z.object({
   id: ulidSchema,
   conversationId: z.uuid(),
@@ -310,8 +329,16 @@ export const messageSchema = z.object({
   /** CHAT-031: added shortly after sending (via `message.updated`) for a text message with a URL,
    *  unless the sender turned it off. */
   linkPreview: linkPreviewSchema.optional(),
+  /** CHAT-032: the message this one replies to (when `replyToId` is set and it still exists). */
+  replyTo: replyPreviewSchema.optional(),
 });
 export type Message = z.infer<typeof messageSchema>;
+
+/** CHAT-032: edit a message's text (sender only, within the edit window). */
+export const editMessageSchema = z.object({
+  body: z.string().trim().min(1).max(LIMITS.messageMaxLength),
+});
+export type EditMessageInput = z.infer<typeof editMessageSchema>;
 
 /** CHAT-016: a cursor-paged page of history, oldest first. `hasMore` tells the client whether
  *  requesting messages before the oldest one in this page would return anything -- computed by
@@ -366,6 +393,8 @@ export const sendMessageSchema = z
     attachmentId: z.uuid().optional(),
     /** CHAT-031: false when the sender dismissed the preview before sending. */
     linkPreview: z.boolean().optional(),
+    /** CHAT-032: the message being replied to, in the same conversation. */
+    replyToId: ulidSchema.optional(),
   })
   .refine((v) => v.body !== undefined || v.attachmentId !== undefined, {
     message: 'Write a message or attach a file',

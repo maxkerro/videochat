@@ -8,6 +8,7 @@ import {
   type ConversationSummary,
   type MembersList,
   type Message,
+  type ReplyPreview,
   type WsEnvelope,
 } from '@videochat/shared';
 import {
@@ -34,18 +35,18 @@ import {
   markConversationRead,
 } from '../conversations/conversationsApi';
 import { GroupMembersPanel } from '../conversations/GroupMembersPanel';
-import { AttachmentView } from '../attachments/AttachmentView';
 import { PendingUploads } from '../attachments/PendingUploads';
 import { useAttachmentUploads } from '../attachments/useAttachmentUploads';
 import { CallButtons } from '../calls/CallButtons';
 import { LinkPreviewCard } from '../linkPreviews/LinkPreviewCard';
+import { MessageBubble, replyQuoteText } from './MessageBubble';
 import { removeLinkPreview } from '../linkPreviews/linkPreviewsApi';
 import { useComposerLinkPreview } from '../linkPreviews/useComposerLinkPreview';
 import { CallHistoryEntry } from '../calls/CallHistoryEntry';
 import { useAuth, withAuthRetry } from '../auth/AuthContext';
 import { linkify } from './linkify';
 import { appendToLatestPage, replaceMessage, type MessagesData } from './messagesCache';
-import { fetchMessages, sendMessage } from './messagesApi';
+import { deleteMessage, editMessage, fetchMessages, sendMessage } from './messagesApi';
 import { ReadReceiptThrottle } from './readReceipts';
 import { useRealtimeEvent, useSendTyping } from './RealtimeProvider';
 import { TypingThrottle } from './typingThrottle';
@@ -78,6 +79,8 @@ interface PendingMessage {
   failureReason?: SendFailureReason;
   /** CHAT-031: false when the sender dismissed the link preview before sending. */
   linkPreview?: boolean;
+  /** CHAT-032: the message this one replies to. */
+  replyToId?: string;
 }
 
 /** CHAT-021: classifies a failed send's `ApiError` status into the reasons the composer can show
@@ -222,6 +225,12 @@ export function ChatPane() {
   // divider and initial scroll target stay put even after later reads move `lastReadSeq` on.
   const unreadThroughRef = useRef<number | null>(null);
   const landedRef = useRef(false);
+  // CHAT-032: replying to / editing / about to delete a message; a reply quote's original being
+  // briefly highlighted after jumping to it.
+  const [replyTo, setReplyTo] = useState<Message | null>(null);
+  const [editingId, setEditingId] = useState<string | null>(null);
+  const [deleteTarget, setDeleteTarget] = useState<Message | null>(null);
+  const [highlightId, setHighlightId] = useState<string | null>(null);
 
   // `ChatPane` stays mounted across a conversation switch, so an in-progress draft would
   // otherwise follow the person into the next conversation and could get sent to the wrong
@@ -236,6 +245,9 @@ export function ChatPane() {
     setNewArrivals(0);
     setAtLatest(true);
     setTypingEntries(new Map());
+    setReplyTo(null);
+    setEditingId(null);
+    setDeleteTarget(null);
   }
 
   const enabled = auth.status === 'authenticated' && Boolean(conversationId);
@@ -432,6 +444,10 @@ export function ChatPane() {
     [allMessages, pendingHere],
   );
   const reversedRows = useMemo(() => [...rows].reverse(), [rows]);
+  const reversedRowsRef = useRef(reversedRows);
+  useEffect(() => {
+    reversedRowsRef.current = reversedRows;
+  }, [reversedRows]);
 
   const rowVirtualizer = useVirtualizer({
     count: reversedRows.length,
@@ -562,6 +578,7 @@ export function ChatPane() {
     conversationId: string;
     body: string;
     linkPreview?: boolean;
+    replyToId?: string;
   }) {
     try {
       const message = await withAuthRetry(auth, (token) =>
@@ -569,6 +586,7 @@ export function ChatPane() {
           clientMsgId: target.clientMsgId,
           body: target.body,
           ...(target.linkPreview === false ? { linkPreview: false } : {}),
+          ...(target.replyToId ? { replyToId: target.replyToId } : {}),
         }),
       );
       queryClient.setQueryData<MessagesData>(['messages', target.conversationId], (old) =>
@@ -610,13 +628,15 @@ export function ChatPane() {
     if (!body || !conversationId) return;
     const clientMsgId = newClientMsgId();
     const linkPreview = composerPreview.wantsPreview ? undefined : false;
+    const replyToId = replyTo?.id;
     setPending((prev) => [
       ...prev,
-      { clientMsgId, conversationId, body, status: 'sending', linkPreview },
+      { clientMsgId, conversationId, body, status: 'sending', linkPreview, replyToId },
     ]);
     setDraft('');
+    setReplyTo(null);
     composerPreview.reset();
-    void trySend({ clientMsgId, conversationId, body, linkPreview });
+    void trySend({ clientMsgId, conversationId, body, linkPreview, replyToId });
     scrollToLatest('auto');
   }
 
@@ -631,7 +651,96 @@ export function ChatPane() {
     if (event.key === 'Enter' && !event.shiftKey) {
       event.preventDefault();
       event.currentTarget.form?.requestSubmit();
+    } else if (event.key === 'Escape' && replyTo) {
+      event.preventDefault();
+      setReplyTo(null);
     }
+  }
+
+  // CHAT-032: who a reply quote / the reply bar is about.
+  const nameFor = useCallback(
+    (userId: string | null): string => {
+      if (!userId) return 'Someone';
+      if (userId === auth.user?.id) return 'You';
+      const conversation = conversationQuery.data;
+      if (conversation?.peer?.id === userId) return conversation.peer.displayName;
+      return membersQuery.data?.find((m) => m.userId === userId)?.displayName ?? 'Someone';
+    },
+    [auth.user?.id, conversationQuery.data, membersQuery.data],
+  );
+  const isGroupAdmin =
+    conversationQuery.data?.type === 'group' && conversationQuery.data.role === 'admin';
+
+  function startReply(message: Message) {
+    setEditingId(null);
+    setReplyTo(message);
+    document.getElementById('composer')?.focus();
+  }
+
+  async function saveEdit(message: Message, body: string) {
+    try {
+      const updated = await withAuthRetry(auth, (token) =>
+        editMessage(token, message.conversationId, message.id, body),
+      );
+      queryClient.setQueryData<MessagesData>(['messages', updated.conversationId], (old) =>
+        replaceMessage(old, updated),
+      );
+      setEditingId(null);
+    } catch (error) {
+      toast({
+        title: error instanceof ApiError ? error.message : 'Couldn’t save the edit',
+        tone: 'danger',
+      });
+    }
+  }
+
+  async function confirmDelete() {
+    const target = deleteTarget;
+    setDeleteTarget(null);
+    if (!target) return;
+    try {
+      const tombstone = await withAuthRetry(auth, (token) =>
+        deleteMessage(token, target.conversationId, target.id),
+      );
+      queryClient.setQueryData<MessagesData>(['messages', tombstone.conversationId], (old) =>
+        replaceMessage(old, tombstone),
+      );
+      if (replyTo?.id === target.id) setReplyTo(null);
+    } catch {
+      toast({ title: 'Couldn’t delete that message', tone: 'danger' });
+    }
+  }
+
+  function removePreview(message: Message) {
+    void withAuthRetry(auth, (token) =>
+      removeLinkPreview(token, message.conversationId, message.id),
+    ).catch(() => toast({ title: 'Couldn’t remove the preview', tone: 'danger' }));
+  }
+
+  /** CHAT-032 AC: a reply quote links to its original "even if it is far up in history" --
+   *  older pages are loaded until it's in, then it's scrolled to and briefly highlighted. */
+  async function jumpTo(reply: ReplyPreview) {
+    const isLoaded = () =>
+      (
+        queryClient.getQueryData<MessagesData>(['messages', conversationId]) ?? { pages: [] }
+      ).pages.some((page) => page.messages.some((m) => m.id === reply.id));
+    for (let i = 0; i < 40 && !isLoaded(); i++) {
+      const result = await messagesQuery.fetchPreviousPage();
+      if (!result.hasPreviousPage) break;
+    }
+    if (!isLoaded()) {
+      toast({ title: 'That message is no longer available' });
+      return;
+    }
+    // Rows recompute on the next render; find the index then.
+    requestAnimationFrame(() => {
+      const index = reversedRowsRef.current.findIndex(
+        (r) => r.kind === 'message' && r.message.id === reply.id,
+      );
+      if (index >= 0) rowVirtualizer.scrollToIndex(index, { align: 'center' });
+      setHighlightId(reply.id);
+      setTimeout(() => setHighlightId((id) => (id === reply.id ? null : id)), 2000);
+    });
   }
 
   // CHAT-019: "Seen" for a direct conversation once the peer's own `lastReadSeq` catches up to
@@ -845,50 +954,23 @@ export function ChatPane() {
                     {row.kind === 'message' &&
                       row.message.type !== 'system' &&
                       row.message.type !== 'call' && (
-                        <div
-                          className={cx(
-                            styles.message,
-                            row.message.senderId === auth.user?.id && styles.own,
-                            row.grouped && styles.grouped,
-                          )}
-                        >
-                          <span
-                            className={cx(
-                              styles.bubble,
-                              row.message.attachment && styles.attachmentBubble,
-                            )}
-                          >
-                            {row.message.attachment && (
-                              <AttachmentView attachment={row.message.attachment} />
-                            )}
-                            {row.message.body ? (
-                              <span className={styles.caption}>{linkify(row.message.body)}</span>
-                            ) : null}
-                          </span>
-                          {row.message.linkPreview && (
-                            <LinkPreviewCard
-                              preview={row.message.linkPreview}
-                              onRemove={
-                                row.message.senderId === auth.user?.id
-                                  ? () => {
-                                      const m = row.message;
-                                      void withAuthRetry(auth, (token) =>
-                                        removeLinkPreview(token, m.conversationId, m.id),
-                                      ).catch(() =>
-                                        toast({
-                                          title: 'Couldn’t remove the preview',
-                                          tone: 'danger',
-                                        }),
-                                      );
-                                    }
-                                  : undefined
-                              }
-                            />
-                          )}
-                          {!row.grouped && (
-                            <time className={styles.time}>{timeFor(row.message.createdAt)}</time>
-                          )}
-                        </div>
+                        <MessageBubble
+                          message={row.message}
+                          myUserId={auth.user?.id}
+                          grouped={row.grouped}
+                          time={timeFor(row.message.createdAt)}
+                          isGroupAdmin={isGroupAdmin}
+                          highlighted={highlightId === row.message.id}
+                          editing={editingId === row.message.id}
+                          nameFor={nameFor}
+                          onReply={startReply}
+                          onStartEdit={(m) => setEditingId(m.id)}
+                          onCancelEdit={() => setEditingId(null)}
+                          onSaveEdit={saveEdit}
+                          onDelete={setDeleteTarget}
+                          onJumpTo={(reply) => void jumpTo(reply)}
+                          onRemovePreview={removePreview}
+                        />
                       )}
                     {row.kind === 'pending' && (
                       <div className={cx(styles.message, styles.own)}>
@@ -937,6 +1019,38 @@ export function ChatPane() {
         onCancel={attachmentUploads.cancel}
         onRetry={attachmentUploads.retry}
       />
+
+      {replyTo && (
+        <div className={styles.replyBar}>
+          <span className={styles.replyBarText}>
+            Replying to <strong>{nameFor(replyTo.senderId)}</strong>:{' '}
+            {replyQuoteText({
+              id: replyTo.id,
+              seq: replyTo.seq,
+              senderId: replyTo.senderId,
+              type: replyTo.type,
+              snippet: replyTo.body,
+              deleted: false,
+              ...(replyTo.attachment
+                ? {
+                    attachment: {
+                      kind: replyTo.attachment.kind,
+                      filename: replyTo.attachment.filename,
+                    },
+                  }
+                : {}),
+            })}
+          </span>
+          <Button
+            variant="ghost"
+            size="sm"
+            onClick={() => setReplyTo(null)}
+            aria-label="Cancel reply"
+          >
+            Cancel
+          </Button>
+        </div>
+      )}
 
       {composerPreview.preview && (
         <div className={styles.composerPreview}>
@@ -1014,6 +1128,23 @@ export function ChatPane() {
           Send
         </Button>
       </form>
+
+      <Modal
+        open={deleteTarget !== null}
+        onOpenChange={(open) => !open && setDeleteTarget(null)}
+        title="Delete for everyone?"
+        description="The message is removed for everyone in this conversation. This can’t be undone."
+        footer={
+          <>
+            <Button variant="ghost" onClick={() => setDeleteTarget(null)}>
+              Cancel
+            </Button>
+            <Button variant="danger" onClick={() => void confirmDelete()}>
+              Delete
+            </Button>
+          </>
+        }
+      />
 
       {conversation?.type === 'group' && (
         <Modal open={membersOpen} onOpenChange={setMembersOpen} title="Group members" footer={null}>

@@ -7,7 +7,7 @@ import { isConversationMember } from '../db/conversations.js';
 import { findMessage, setMessageLinkPreview } from '../db/messages.js';
 import type { MessageRow } from '../db/schema.js';
 import { DB, REDIS } from '../infra/tokens.js';
-import { toMessage } from '../messages/message-mapper.js';
+import { toMessageWithReply } from '../messages/message-mapper.js';
 import { RealtimeService } from '../realtime/realtime.service.js';
 import { LinkPreviewFetcher } from './link-preview.fetcher.js';
 
@@ -92,7 +92,7 @@ export class LinkPreviewsService {
   private async publishUpdated(row: MessageRow): Promise<void> {
     await this.realtime.publishToConversation(
       row.conversationId,
-      makeEnvelope('message.updated', toMessage(row), randomUUID()),
+      makeEnvelope('message.updated', await toMessageWithReply(this.db, row), randomUUID()),
     );
   }
 

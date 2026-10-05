@@ -1,4 +1,5 @@
 import {
+  BadRequestException,
   ConflictException,
   ForbiddenException,
   Inject,
@@ -12,21 +13,31 @@ import {
   type MessagePage,
   type SendMessageInput,
 } from '@videochat/shared';
+import { randomUUID } from 'node:crypto';
 import type { Database } from '../db/client.js';
 import { isSenderBlockedInDirectConversation } from '../db/blocks.js';
-import { isConversationMember } from '../db/conversations.js';
+import { findAttachmentsForMessage } from '../db/attachments.js';
+import { findConversationForUser, isConversationMember } from '../db/conversations.js';
 import {
   appendMessageWithStatus,
+  editMessageBody,
+  findMessage,
   listMessagesAfter,
   listMessagesPage,
   ClientMsgIdConflictError,
   SenderNotAMemberError,
+  softDeleteMessage,
 } from '../db/messages.js';
+import type { MessageRow } from '../db/schema.js';
 import { DB } from '../infra/tokens.js';
 import { AttachmentsService } from '../attachments/attachments.service.js';
 import { LinkPreviewsService } from '../link-previews/link-previews.service.js';
 import { RealtimeService } from '../realtime/realtime.service.js';
-import { toMessage } from './message-mapper.js';
+import { toMessageWithReply, toMessages } from './message-mapper.js';
+
+/** CHAT-032: kinds of message a person can edit or delete. Call entries and system messages are
+ *  everyone's record of what happened, so nobody can rewrite or remove them. */
+const EDITABLE_TYPES = new Set<MessageRow['type']>(['text', 'image', 'file']);
 
 @Injectable()
 export class MessagesService {
@@ -66,6 +77,14 @@ export class MessagesService {
       throw new ForbiddenException('This message could not be delivered');
     }
 
+    // CHAT-032: a reply must point at a live message in this same conversation.
+    if (input.replyToId) {
+      const target = await findMessage(this.db, input.replyToId);
+      if (!target || target.conversationId !== conversationId || target.deletedAt) {
+        throw new BadRequestException('The message you replied to is no longer available');
+      }
+    }
+
     // CHAT-030: verify (and, for images, strip and thumbnail) the attachment before the message
     // exists, so nobody can ever download an unprocessed upload through it.
     const attachment = input.attachmentId
@@ -80,6 +99,7 @@ export class MessagesService {
         senderId,
         body: input.body ?? null,
         clientMsgId: input.clientMsgId,
+        replyToId: input.replyToId ?? null,
         ...(attachment ? { type: attachment.kind, meta: { attachment } } : {}),
       }));
     } catch (err) {
@@ -95,7 +115,7 @@ export class MessagesService {
       throw err;
     }
     if (attachment) await this.attachments.linkToMessage(attachment.id, row.id);
-    const message = toMessage(row);
+    const message = await toMessageWithReply(this.db, row);
 
     // A retried send resolves to the same row every time; re-broadcasting it is harmless
     // (clients dedupe incoming messages by id) and simpler than tracking "already broadcast".
@@ -119,7 +139,7 @@ export class MessagesService {
       beforeSeq,
       limit: LIMITS.messageHistoryPageSize,
     });
-    return { messages: rows.map(toMessage), hasMore };
+    return { messages: await toMessages(this.db, rows), hasMore };
   }
 
   /** CHAT-017: gap sync -- messages after `afterSeq`, ascending, for a client catching up after a
@@ -131,7 +151,83 @@ export class MessagesService {
       afterSeq,
       limit: LIMITS.messageGapSyncPageSize,
     });
-    return { messages: rows.map(toMessage), hasMore };
+    return { messages: await toMessages(this.db, rows), hasMore };
+  }
+
+  /**
+   * CHAT-032: the sender edits their message's text within `LIMITS.messageEditWindowMinutes`.
+   * Everyone in the conversation sees it change live (`message.updated`), marked edited.
+   */
+  async edit(
+    conversationId: string,
+    userId: string,
+    messageId: string,
+    body: string,
+  ): Promise<Message> {
+    const row = await this.requireMessage(conversationId, userId, messageId);
+    if (row.senderId !== userId) throw new ForbiddenException('Only the sender can edit a message');
+    if (!EDITABLE_TYPES.has(row.type))
+      throw new BadRequestException('This message can’t be edited');
+    if (row.deletedAt) throw new NotFoundException('Message not found');
+    const windowMs = LIMITS.messageEditWindowMinutes * 60_000;
+    if (Date.now() - row.createdAt.getTime() > windowMs) {
+      throw new ForbiddenException(
+        `Messages can only be edited for ${LIMITS.messageEditWindowMinutes} minutes`,
+      );
+    }
+    if (row.body === body) return toMessageWithReply(this.db, row);
+    const updated = await editMessageBody(this.db, messageId, body);
+    if (!updated) throw new NotFoundException('Message not found');
+    const message = await this.publishUpdated(updated);
+    // The old text's link preview was dropped; the new text may have its own.
+    if (updated.type === 'text') void this.linkPreviews.attachToMessage(updated);
+    return message;
+  }
+
+  /**
+   * CHAT-032: "delete for everyone" -- by the sender, or by a group admin. The content (text,
+   * attachment and its stored files, link preview) is removed, leaving a "Message deleted"
+   * tombstone in its place.
+   */
+  async delete(conversationId: string, userId: string, messageId: string): Promise<Message> {
+    const row = await this.requireMessage(conversationId, userId, messageId);
+    if (!EDITABLE_TYPES.has(row.type)) {
+      throw new BadRequestException('This message can’t be deleted');
+    }
+    if (row.senderId !== userId) {
+      const conversation = await findConversationForUser(this.db, conversationId, userId);
+      const isGroupAdmin = conversation?.type === 'group' && conversation.role === 'admin';
+      if (!isGroupAdmin) {
+        throw new ForbiddenException('Only the sender or a group admin can delete a message');
+      }
+    }
+    if (row.deletedAt) return toMessageWithReply(this.db, row);
+    const deleted = await softDeleteMessage(this.db, messageId);
+    if (!deleted) return toMessageWithReply(this.db, (await findMessage(this.db, messageId))!);
+    await this.attachments.deleteRows(await findAttachmentsForMessage(this.db, messageId));
+    return this.publishUpdated(deleted);
+  }
+
+  private async publishUpdated(row: MessageRow): Promise<Message> {
+    const message = await toMessageWithReply(this.db, row);
+    await this.realtime.publishToConversation(
+      row.conversationId,
+      makeEnvelope('message.updated', message, randomUUID()),
+    );
+    return message;
+  }
+
+  private async requireMessage(
+    conversationId: string,
+    userId: string,
+    messageId: string,
+  ): Promise<MessageRow> {
+    await this.requireMember(conversationId, userId);
+    const row = await findMessage(this.db, messageId);
+    if (!row || row.conversationId !== conversationId) {
+      throw new NotFoundException('Message not found');
+    }
+    return row;
   }
 
   /** CHAT-022's "member-only access": a 404, not a 403, so a non-member can't tell a
