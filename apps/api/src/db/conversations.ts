@@ -569,7 +569,11 @@ async function loadDirectPeers(
       ),
     );
   for (const row of rows) {
-    map.set(row.conversationId, { user: row.user, lastReadSeq: row.lastReadSeq });
+    // CHAT-037: a peer with read receipts off never shows as "Seen".
+    map.set(row.conversationId, {
+      user: row.user,
+      lastReadSeq: row.user.readReceipts ? row.lastReadSeq : 0,
+    });
   }
   return map;
 }

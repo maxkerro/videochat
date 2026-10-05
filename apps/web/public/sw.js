@@ -25,6 +25,7 @@ self.addEventListener('push', (event) => {
         body: data.body || '',
         tag: data.tag || url,
         renotify: true,
+        silent: data.silent === true,
         icon: '/favicon.svg',
         data: { url },
       });

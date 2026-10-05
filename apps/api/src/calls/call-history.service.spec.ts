@@ -16,6 +16,7 @@ vi.mock('../db/messages.js', async (importOriginal) => ({
   ...(await importOriginal<typeof import('../db/messages.js')>()),
   appendMessageWithStatus: vi.fn(),
 }));
+vi.mock('../db/users.js', () => ({ findUserById: vi.fn(async () => ({ readReceipts: true })) }));
 vi.mock('../db/conversations.js', () => ({
   isConversationMember: vi.fn(),
   markConversationRead: vi.fn(),

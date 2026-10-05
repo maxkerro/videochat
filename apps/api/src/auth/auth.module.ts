@@ -20,6 +20,6 @@ import { AuthService } from './auth.service.js';
   ],
   controllers: [AuthController],
   providers: [AuthService, AccessTokenGuard],
-  exports: [AccessTokenGuard, JwtModule],
+  exports: [AccessTokenGuard, JwtModule, AuthService],
 })
 export class AuthModule {}

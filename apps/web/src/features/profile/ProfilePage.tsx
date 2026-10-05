@@ -9,6 +9,12 @@ import { useAuth, withAuthRetry } from '../auth/AuthContext';
 import styles from './ProfilePage.module.css';
 import { checkUsernameAvailable, updateProfile, uploadAvatar } from './profileApi';
 import { CallOverlay } from '../calls/CallOverlay';
+import {
+  AccountSection,
+  AppearanceSection,
+  NotificationsSection,
+  PrivacySection,
+} from '../settings/SettingsSections';
 
 type Availability = 'idle' | 'checking' | 'available' | 'taken' | 'invalid';
 
@@ -134,7 +140,7 @@ export function ProfilePage() {
     <div className={styles.page}>
       <header className={styles.header}>
         <Link to="/">← Back</Link>
-        <h1>Your profile</h1>
+        <h1>Settings</h1>
       </header>
 
       <div className={styles.avatarRow}>
@@ -228,6 +234,11 @@ export function ProfilePage() {
           </ul>
         )}
       </div>
+      {/* CHAT-037: everything else on the one settings page. */}
+      <PrivacySection />
+      <NotificationsSection />
+      <AppearanceSection />
+      <AccountSection />
       {/* CHAT-042: the only signed-in screen outside AppShell -- incoming calls and an ongoing
        *  call's bar still need to show here. */}
       <CallOverlay />

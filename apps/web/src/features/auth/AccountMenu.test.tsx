@@ -30,8 +30,8 @@ describe('AccountMenu (in the app shell)', () => {
     const { router } = renderApp('/');
     const trigger = await screen.findByRole('button', { name: 'Account: Ada Lovelace' });
     await userEvent.click(trigger);
-    await userEvent.click(screen.getByRole('menuitem', { name: 'Profile' }));
-    await vi.waitFor(() => expect(router.state.location.pathname).toBe('/profile'));
+    await userEvent.click(screen.getByRole('menuitem', { name: 'Settings' }));
+    await vi.waitFor(() => expect(router.state.location.pathname).toBe('/settings'));
   });
 
   it('logs out and navigates to /login', async () => {

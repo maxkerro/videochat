@@ -1,4 +1,4 @@
-import { createBrowserRouter, type RouteObject } from 'react-router';
+import { createBrowserRouter, Navigate, type RouteObject } from 'react-router';
 import { RequireAuth } from './features/auth/RequireAuth';
 import { ChatPane } from './features/chat/ChatPane';
 import { ProfilePage } from './features/profile/ProfilePage';
@@ -21,13 +21,15 @@ export const routes: RouteObject[] = [
     ],
   },
   {
-    path: '/profile',
+    // CHAT-037: profile and every other setting on one page.
+    path: '/settings',
     element: (
       <RequireAuth>
         <ProfilePage />
       </RequireAuth>
     ),
   },
+  { path: '/profile', element: <Navigate to="/settings" replace /> },
   { path: '/signup', element: <SignUpPage /> },
   { path: '/login', element: <LoginPage /> },
   { path: '/verify-email', element: <VerifyEmailPage /> },

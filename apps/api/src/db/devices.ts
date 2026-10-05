@@ -1,6 +1,6 @@
 import { and, eq, inArray, isNotNull, sql } from 'drizzle-orm';
 import type { DbExecutor } from './client.js';
-import { devices } from './schema.js';
+import { devices, users } from './schema.js';
 
 export interface PushDevice {
   id: string;
@@ -52,4 +52,27 @@ export async function listPushDevices(db: DbExecutor, userIds: string[]): Promis
     token: r.pushToken!,
     keys: r.pushKeys ?? null,
   }));
+}
+
+/** CHAT-037: notification settings of these users (deleted accounts never notify). */
+export async function getNotificationPrefs(
+  db: DbExecutor,
+  userIds: string[],
+): Promise<Map<string, { enabled: boolean; sound: boolean; previews: boolean }>> {
+  const map = new Map<string, { enabled: boolean; sound: boolean; previews: boolean }>();
+  if (!userIds.length) return map;
+  const rows = await db
+    .select({
+      id: users.id,
+      enabled: users.notifyEnabled,
+      sound: users.notifySound,
+      previews: users.notifyPreviews,
+      deletedAt: users.deletedAt,
+    })
+    .from(users)
+    .where(inArray(users.id, userIds));
+  for (const r of rows) {
+    map.set(r.id, { enabled: r.enabled && !r.deletedAt, sound: r.sound, previews: r.previews });
+  }
+  return map;
 }

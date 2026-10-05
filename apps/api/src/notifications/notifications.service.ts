@@ -4,7 +4,7 @@ import { Redis } from 'ioredis';
 import { isBlocked } from '../db/blocks.js';
 import type { Database } from '../db/client.js';
 import { findConversationForUser, listNotifiableMembers } from '../db/conversations.js';
-import { deletePushDevice, listPushDevices } from '../db/devices.js';
+import { deletePushDevice, getNotificationPrefs, listPushDevices } from '../db/devices.js';
 import type { CallRow, MessageRow } from '../db/schema.js';
 import { findUserById } from '../db/users.js';
 import { DB, REDIS } from '../infra/tokens.js';
@@ -130,12 +130,21 @@ export class NotificationsService implements OnModuleInit {
   }
 
   private async push(userIds: string[], payload: PushPayload): Promise<void> {
-    const devices = await listPushDevices(this.db, userIds);
+    // CHAT-037: each person's own notification settings.
+    const prefs = await getNotificationPrefs(this.db, userIds);
+    const wanted = userIds.filter((id) => prefs.get(id)?.enabled !== false);
+    const devices = await listPushDevices(this.db, wanted);
     await Promise.all(
       devices.map(async (device) => {
         const channel = this.channels.get(device.platform);
         if (!channel?.enabled) return;
-        const result = await channel.send(device, payload);
+        const pref = prefs.get(device.userId);
+        const personal: PushPayload = {
+          ...payload,
+          ...(pref && !pref.previews ? { body: 'New message' } : {}),
+          ...(pref && !pref.sound ? { silent: true } : {}),
+        };
+        const result = await channel.send(device, personal);
         if (result === 'gone') await deletePushDevice(this.db, device.token);
       }),
     );

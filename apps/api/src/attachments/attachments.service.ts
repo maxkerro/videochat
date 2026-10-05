@@ -210,6 +210,14 @@ export class AttachmentsService implements OnModuleInit, OnModuleDestroy {
     );
   }
 
+  /** Removes stored files for attachment rows already deleted from the database. */
+  async deleteFiles(rows: AttachmentRow[]): Promise<void> {
+    if (!rows.length) return;
+    await this.s3
+      .deleteObjects(rows.flatMap((r) => [r.objectKey, ...(r.thumbKey ? [r.thumbKey] : [])]))
+      .catch((err: Error) => this.logger.warn(`Couldn't delete attachment files: ${err.message}`));
+  }
+
   async sweepUnsent(now = new Date()): Promise<number> {
     try {
       const stale = await deleteStaleUnsentAttachments(

@@ -4,9 +4,11 @@ import {
   CALL_END_REASONS,
   CALL_MEDIA,
   CONVERSATION_TYPES,
+  LAST_SEEN_VISIBILITY,
   LIMITS,
   MEMBER_ROLES,
   MESSAGE_TYPES,
+  THEME_PREFERENCES,
 } from './domain.js';
 import { linkPreviewSchema } from './links.js';
 
@@ -49,10 +51,44 @@ export const publicUserSchema = z.object({
 });
 export type PublicUser = z.infer<typeof publicUserSchema>;
 
+/** CHAT-037: everything on the settings page that lives on the server (so it follows you to
+ *  every device). */
+export const userSettingsSchema = z.object({
+  /** Off: others don't see when you've read their messages, and you don't see theirs. */
+  readReceipts: z.boolean(),
+  lastSeenVisibility: z.enum(LAST_SEEN_VISIBILITY),
+  notifications: z.object({
+    enabled: z.boolean(),
+    sound: z.boolean(),
+    /** Off: notifications say "New message" instead of showing the text. */
+    previews: z.boolean(),
+  }),
+  theme: z.enum(THEME_PREFERENCES),
+});
+export type UserSettings = z.infer<typeof userSettingsSchema>;
+
+export const DEFAULT_USER_SETTINGS: UserSettings = {
+  readReceipts: true,
+  lastSeenVisibility: 'everyone',
+  notifications: { enabled: true, sound: true, previews: true },
+  theme: 'system',
+};
+
+/** PATCH /me/settings: any subset. */
+export const updateSettingsSchema = z.object({
+  readReceipts: z.boolean().optional(),
+  lastSeenVisibility: z.enum(LAST_SEEN_VISIBILITY).optional(),
+  notifications: userSettingsSchema.shape.notifications.partial().optional(),
+  theme: z.enum(THEME_PREFERENCES).optional(),
+});
+export type UpdateSettingsInput = z.infer<typeof updateSettingsSchema>;
+
 /** The signed-in user's own view of themselves: everything in PublicUser plus private fields. */
 export const meSchema = publicUserSchema.extend({
   email: emailSchema,
   emailVerified: z.boolean(),
+  /** CHAT-037. Defaults so older cached/mocked responses without it still parse. */
+  settings: userSettingsSchema.default(DEFAULT_USER_SETTINGS),
 });
 export type Me = z.infer<typeof meSchema>;
 
@@ -404,6 +440,8 @@ export const pushPayloadSchema = z.object({
   conversationId: z.uuid(),
   url: z.string(),
   tag: z.string(),
+  /** CHAT-037: the person turned notification sounds off. */
+  silent: z.boolean().optional(),
 });
 export type PushPayload = z.infer<typeof pushPayloadSchema>;
 
@@ -561,3 +599,14 @@ export const healthResponseSchema = z.object({
   checks: z.record(z.string(), dependencyStatusSchema),
 });
 export type HealthResponse = z.infer<typeof healthResponseSchema>;
+
+/** CHAT-037: change password (the current one proves it's you). */
+export const changePasswordSchema = z.object({
+  currentPassword: z.string().min(1, 'Enter your current password'),
+  newPassword: passwordSchema,
+});
+export type ChangePasswordInput = z.infer<typeof changePasswordSchema>;
+
+/** CHAT-037: delete account -- asks for the password again. */
+export const deleteAccountSchema = z.object({ password: z.string().min(1, 'Enter your password') });
+export type DeleteAccountInput = z.infer<typeof deleteAccountSchema>;

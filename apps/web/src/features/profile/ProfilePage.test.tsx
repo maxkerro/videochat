@@ -47,7 +47,7 @@ describe('ProfilePage', () => {
         'PATCH /me': () => jsonResponse({ ...baseUser, displayName: 'Ada L.' }),
       }),
     );
-    renderApp('/profile');
+    renderApp('/settings');
     const input = await screen.findByLabelText('Display name');
     await userEvent.clear(input);
     await userEvent.type(input, 'Ada L.');
@@ -63,7 +63,7 @@ describe('ProfilePage', () => {
         'GET /users/username-availability': () => jsonResponse({ available: false }),
       }),
     );
-    renderApp('/profile');
+    renderApp('/settings');
     const input = await screen.findByLabelText('Username');
     await userEvent.clear(input);
     await userEvent.type(input, 'takenname');
@@ -80,7 +80,7 @@ describe('ProfilePage', () => {
         'PATCH /me': () => jsonResponse({ ...baseUser, username: 'freename' }),
       }),
     );
-    renderApp('/profile');
+    renderApp('/settings');
     const input = await screen.findByLabelText('Username');
     await userEvent.clear(input);
     await userEvent.type(input, 'freename');
@@ -99,7 +99,7 @@ describe('ProfilePage', () => {
           jsonResponse({ ...baseUser, avatarUrl: 'https://cdn.test/a.webp' }),
       }),
     );
-    renderApp('/profile');
+    renderApp('/settings');
     await screen.findByLabelText('Display name');
     const file = new File(['x'], 'avatar.png', { type: 'image/png' });
     const fileInput = document.querySelector<HTMLInputElement>('input[type="file"]')!;
@@ -109,7 +109,7 @@ describe('ProfilePage', () => {
 
   it('rejects an oversized avatar client-side without calling the API', async () => {
     vi.stubGlobal('fetch', routedFetch({ 'POST /auth/refresh': () => jsonResponse(session()) }));
-    renderApp('/profile');
+    renderApp('/settings');
     await screen.findByLabelText('Display name');
     const big = new File([new Uint8Array(6 * 1024 * 1024)], 'big.png', { type: 'image/png' });
     const fileInput = document.querySelector<HTMLInputElement>('input[type="file"]')!;
@@ -133,7 +133,7 @@ describe('ProfilePage', () => {
           'GET /users/blocked': () => jsonResponse({ users: [] }),
         }),
       );
-      renderApp('/profile');
+      renderApp('/settings');
       expect(await screen.findByText(/haven.t blocked anyone/i)).toBeInTheDocument();
     });
 
@@ -150,7 +150,7 @@ describe('ProfilePage', () => {
           },
         }),
       );
-      renderApp('/profile');
+      renderApp('/settings');
       expect(await screen.findByText('Ben Okafor')).toBeInTheDocument();
 
       await userEvent.click(screen.getByRole('button', { name: 'Unblock' }));
@@ -158,5 +158,71 @@ describe('ProfilePage', () => {
       await waitFor(() => expect(screen.queryByText('Ben Okafor')).not.toBeInTheDocument());
       expect(await screen.findByText(/haven.t blocked anyone/i)).toBeInTheDocument();
     });
+  });
+});
+
+describe('Settings (CHAT-037)', () => {
+  const settings = {
+    readReceipts: true,
+    lastSeenVisibility: 'everyone',
+    notifications: { enabled: true, sound: true, previews: true },
+    theme: 'system',
+  };
+
+  it('saves a privacy setting the moment it changes', async () => {
+    let patched: unknown;
+    vi.stubGlobal(
+      'fetch',
+      routedFetch({
+        'POST /auth/refresh': () => jsonResponse(session({ ...baseUser, settings } as never)),
+        'GET /users/blocked': () => jsonResponse({ users: [] }),
+        'PATCH /me/settings': (_u, init) => {
+          patched = JSON.parse(String(init?.body));
+          return jsonResponse({ ...baseUser, settings: { ...settings, readReceipts: false } });
+        },
+      }),
+    );
+    renderApp('/settings');
+    const toggle = await screen.findByRole('switch', { name: /Read receipts/ });
+    expect(toggle).toBeChecked();
+    await userEvent.click(toggle);
+    await waitFor(() => expect(patched).toEqual({ readReceipts: false }));
+    expect(toggle).not.toBeChecked();
+  });
+
+  it('deletes the account only after the password, then signs out', async () => {
+    let deleteBody: unknown;
+    vi.stubGlobal(
+      'fetch',
+      routedFetch({
+        'POST /auth/refresh': () => jsonResponse(session({ ...baseUser, settings } as never)),
+        'GET /users/blocked': () => jsonResponse({ users: [] }),
+        'POST /auth/delete-account': (_u, init) => {
+          deleteBody = JSON.parse(String(init?.body));
+          return new Response(null, { status: 204 });
+        },
+        'POST /auth/logout': () => jsonResponse({ message: 'Logged out.' }),
+      }),
+    );
+    const { router } = renderApp('/settings');
+    await userEvent.click(await screen.findByRole('button', { name: 'Delete account' }));
+    const confirm = screen.getByRole('button', { name: 'Delete my account' });
+    expect(confirm).toBeDisabled();
+    await userEvent.type(screen.getByLabelText('Password'), 'my-password');
+    await userEvent.click(confirm);
+    await waitFor(() => expect(router.state.location.pathname).toBe('/login'));
+    expect(deleteBody).toEqual({ password: 'my-password' });
+  });
+
+  it('redirects the old /profile address', async () => {
+    vi.stubGlobal(
+      'fetch',
+      routedFetch({
+        'POST /auth/refresh': () => jsonResponse(session()),
+        'GET /users/blocked': () => jsonResponse({ users: [] }),
+      }),
+    );
+    const { router } = renderApp('/profile');
+    await waitFor(() => expect(router.state.location.pathname).toBe('/settings'));
   });
 });

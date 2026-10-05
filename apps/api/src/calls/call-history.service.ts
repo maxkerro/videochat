@@ -1,12 +1,12 @@
 import { Inject, Injectable, Logger, type OnModuleInit } from '@nestjs/common';
-import { makeEnvelope, type CallMessageMeta, type ConversationReadEvent } from '@videochat/shared';
-import { randomUUID } from 'node:crypto';
+import { makeEnvelope, type CallMessageMeta } from '@videochat/shared';
 import type { Database } from '../db/client.js';
 import { isConversationMember, markConversationRead } from '../db/conversations.js';
 import { appendMessageWithStatus, SenderNotAMemberError } from '../db/messages.js';
 import type { CallRow } from '../db/schema.js';
 import { DB } from '../infra/tokens.js';
 import { toMessage } from '../messages/message-mapper.js';
+import { publishReadEvent } from '../conversations/read-events.js';
 import { RealtimeService } from '../realtime/realtime.service.js';
 import { NotificationsService } from '../notifications/notifications.service.js';
 import { CallSignalingService } from './call-signaling.service.js';
@@ -120,18 +120,11 @@ export class CallHistoryService implements OnModuleInit {
         row.seq,
       );
       if (updated) {
-        await this.realtime.publishToConversation(
-          call.conversationId,
-          makeEnvelope<ConversationReadEvent>(
-            'conversation.read',
-            {
-              conversationId: call.conversationId,
-              userId: call.calleeId,
-              lastReadSeq: updated.lastReadSeq,
-            },
-            randomUUID(),
-          ),
-        );
+        await publishReadEvent(this.db, this.realtime, {
+          conversationId: call.conversationId,
+          userId: call.calleeId,
+          lastReadSeq: updated.lastReadSeq,
+        });
       }
     }
   }

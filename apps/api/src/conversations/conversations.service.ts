@@ -1,4 +1,3 @@
-import { randomUUID } from 'node:crypto';
 import {
   BadRequestException,
   ForbiddenException,
@@ -9,7 +8,6 @@ import {
 import {
   LIMITS,
   makeEnvelope,
-  type ConversationReadEvent,
   type ConversationSummary,
   type MemberSummary,
 } from '@videochat/shared';
@@ -35,6 +33,7 @@ import {
 import { appendMessage } from '../db/messages.js';
 import { findUserById } from '../db/users.js';
 import { toMessage } from '../messages/message-mapper.js';
+import { publishReadEvent } from './read-events.js';
 import { RealtimeService } from '../realtime/realtime.service.js';
 import { S3Service } from '../storage/s3.service.js';
 import { toConversationSummary } from './conversation-mapper.js';
@@ -272,7 +271,8 @@ export class ConversationsService {
         avatarUrl: await this.s3.getAvatarUrl(row.user.avatarKey),
         role: row.role,
         joinedAt: row.joinedAt.toISOString(),
-        lastReadSeq: row.lastReadSeq,
+        // CHAT-037: someone with read receipts off doesn't show up in "Seen by N".
+        lastReadSeq: row.user.readReceipts || row.user.id === userId ? row.lastReadSeq : 0,
       })),
     );
   }
@@ -299,14 +299,11 @@ export class ConversationsService {
     if (!updated) throw new NotFoundException('Conversation not found');
 
     if (updated.lastReadSeq !== row.lastReadSeq) {
-      await this.realtime.publishToConversation(
+      await publishReadEvent(this.db, this.realtime, {
         conversationId,
-        makeEnvelope<ConversationReadEvent>(
-          'conversation.read',
-          { conversationId, userId, lastReadSeq: updated.lastReadSeq },
-          randomUUID(),
-        ),
-      );
+        userId,
+        lastReadSeq: updated.lastReadSeq,
+      });
     }
 
     const avatarUrl = row.peer ? await this.s3.getAvatarUrl(row.peer.avatarKey) : null;
@@ -330,14 +327,11 @@ export class ConversationsService {
     if (!updated) throw new NotFoundException('Conversation not found');
 
     if (updated.lastReadSeq !== row.lastReadSeq) {
-      await this.realtime.publishToConversation(
+      await publishReadEvent(this.db, this.realtime, {
         conversationId,
-        makeEnvelope<ConversationReadEvent>(
-          'conversation.read',
-          { conversationId, userId, lastReadSeq: updated.lastReadSeq },
-          randomUUID(),
-        ),
-      );
+        userId,
+        lastReadSeq: updated.lastReadSeq,
+      });
     }
 
     const avatarUrl = row.peer ? await this.s3.getAvatarUrl(row.peer.avatarKey) : null;

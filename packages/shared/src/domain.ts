@@ -58,6 +58,10 @@ export const LIMITS = {
 export const LAST_SEEN_VISIBILITY = ['everyone', 'contacts', 'nobody'] as const;
 export type LastSeenVisibility = (typeof LAST_SEEN_VISIBILITY)[number];
 
+/** CHAT-037: the app's colour theme; "system" follows the OS. Synced across your devices. */
+export const THEME_PREFERENCES = ['system', 'light', 'dark'] as const;
+export type ThemePreferenceSetting = (typeof THEME_PREFERENCES)[number];
+
 /** CHAT-034: a connection that hasn't refreshed its presence for this long counts as gone. */
 export const PRESENCE_TTL_SECONDS = 60;
 

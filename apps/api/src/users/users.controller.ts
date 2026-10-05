@@ -5,18 +5,22 @@ import {
   Delete,
   Get,
   HttpCode,
+  Inject,
   Param,
   Patch,
   Post,
   Query,
+  Res,
   UploadedFile,
   UseGuards,
   UseInterceptors,
 } from '@nestjs/common';
 import { FileInterceptor } from '@nestjs/platform-express';
 import {
+  deleteAccountSchema,
   LIMITS,
   updateProfileSchema,
+  updateSettingsSchema,
   userSearchQuerySchema,
   usernameSchema,
   type BlockedUsersList,
@@ -24,17 +28,26 @@ import {
   type UsernameAvailability,
   type UserSearchResults,
 } from '@videochat/shared';
+import type { Response } from 'express';
 import { memoryStorage } from 'multer';
 import { z } from 'zod';
 import { AccessTokenGuard, CurrentUserId } from '../auth/access-token.guard.js';
 import { UuidParamPipe } from '../common/uuid-param.pipe.js';
 import { ZodValidationPipe } from '../common/zod-validation.pipe.js';
-import { SearchThrottlerGuard } from '../rate-limit/rate-limit.guards.js';
+import { clearRefreshCookie } from '../auth/refresh-cookie.js';
+import type { Env } from '../config/env.js';
+import { ENV } from '../infra/tokens.js';
+import { LoginThrottlerGuard, SearchThrottlerGuard } from '../rate-limit/rate-limit.guards.js';
+import { AccountService } from './account.service.js';
 import { UsersService } from './users.service.js';
 
 @Controller()
 export class UsersController {
-  constructor(private readonly users: UsersService) {}
+  constructor(
+    private readonly users: UsersService,
+    private readonly account: AccountService,
+    @Inject(ENV) private readonly env: Env,
+  ) {}
 
   @Get('me')
   @UseGuards(AccessTokenGuard)
@@ -129,5 +142,41 @@ export class UsersController {
       mimetype: file.mimetype,
       size: file.size,
     });
+  }
+
+  /** CHAT-037: privacy, notification and appearance settings (any subset). */
+  @Patch('me/settings')
+  @UseGuards(AccessTokenGuard)
+  updateSettings(
+    @CurrentUserId() userId: string,
+    @Body(new ZodValidationPipe(updateSettingsSchema)) body: z.infer<typeof updateSettingsSchema>,
+  ): Promise<Me> {
+    return this.account.updateSettings(userId, body);
+  }
+
+  /** CHAT-037: everything you've sent, as a JSON file. */
+  @Get('me/export')
+  @UseGuards(AccessTokenGuard)
+  async exportData(
+    @CurrentUserId() userId: string,
+    @Res({ passthrough: true }) res: Response,
+  ): Promise<unknown> {
+    const date = new Date().toISOString().slice(0, 10);
+    res.setHeader('Content-Disposition', `attachment; filename="videochat-export-${date}.json"`);
+    return this.account.exportData(userId);
+  }
+
+  /** CHAT-037: delete your account (asks for the password again). Under /auth so the refresh
+   *  cookie can be cleared on the way out. */
+  @Post('auth/delete-account')
+  @HttpCode(204)
+  @UseGuards(AccessTokenGuard, LoginThrottlerGuard)
+  async deleteAccount(
+    @CurrentUserId() userId: string,
+    @Body(new ZodValidationPipe(deleteAccountSchema)) body: z.infer<typeof deleteAccountSchema>,
+    @Res({ passthrough: true }) res: Response,
+  ): Promise<void> {
+    await this.account.deleteAccount(userId, body.password);
+    clearRefreshCookie(res, this.env);
   }
 }

@@ -5,6 +5,7 @@ import { Link, Outlet, useMatch, useNavigate } from 'react-router';
 import { Avatar, Button, Input, Menu, Modal, useToast } from '../components/ui';
 import { AccountMenu } from '../features/auth/AccountMenu';
 import { syncPushSubscription } from '../features/notifications/push';
+import { useSettingsSync } from '../features/settings/useSettingsSync';
 import { useAuth, withAuthRetry } from '../features/auth/AuthContext';
 import { ApiError } from '../lib/api';
 import {
@@ -159,6 +160,8 @@ export function AppShell() {
   const auth = useAuth();
   const queryClient = useQueryClient();
   const navigate = useNavigate();
+  // CHAT-037: settings changed on another device, and the synced theme.
+  useSettingsSync();
 
   // CHAT-035: keep this browser's push subscription (if permission was granted earlier) pointed
   // at whoever is signed in, and follow a notification click to its conversation.

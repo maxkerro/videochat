@@ -13,7 +13,11 @@ vi.mock('../db/conversations.js', () => ({
   listNotifiableMembers: vi.fn(),
   findConversationForUser: vi.fn(),
 }));
-vi.mock('../db/devices.js', () => ({ listPushDevices: vi.fn(), deletePushDevice: vi.fn() }));
+vi.mock('../db/devices.js', () => ({
+  listPushDevices: vi.fn(),
+  deletePushDevice: vi.fn(),
+  getNotificationPrefs: vi.fn(),
+}));
 vi.mock('../db/users.js', () => ({ findUserById: vi.fn(async () => ({ displayName: 'Anna' })) }));
 
 const row = {
@@ -67,6 +71,7 @@ describe('NotificationsService', () => {
       type: 'direct',
     } as never);
     vi.mocked(blocksDb.isBlocked).mockResolvedValue(false);
+    vi.mocked(devicesDb.getNotificationPrefs).mockResolvedValue(new Map());
     vi.mocked(devicesDb.listPushDevices).mockImplementation(async (_db, ids) =>
       ids.map((id) => ({
         id,
@@ -105,5 +110,17 @@ describe('NotificationsService', () => {
     channel.enabled = true;
     await service.notifyNewMessage({ ...row, type: 'system' } as MessageRow);
     expect(conversationsDb.listNotifiableMembers).not.toHaveBeenCalled();
+  });
+
+  it("honours each person's settings: off, no previews, no sound", async () => {
+    vi.mocked(devicesDb.getNotificationPrefs).mockResolvedValue(
+      new Map([
+        ['ben', { enabled: true, sound: false, previews: false }],
+        ['clara', { enabled: false, sound: true, previews: true }],
+      ]),
+    );
+    await service.notifyNewMessage(row);
+    expect(devicesDb.listPushDevices).toHaveBeenCalledWith({}, ['ben']);
+    expect(channel.send.mock.calls[0]![1]).toMatchObject({ body: 'New message', silent: true });
   });
 });

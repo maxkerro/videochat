@@ -15,5 +15,15 @@ export function toMe(user: User, avatarUrl: string | null): Me {
     ...toPublicUser(user, avatarUrl),
     email: user.email,
     emailVerified: user.emailVerifiedAt !== null,
+    settings: {
+      readReceipts: user.readReceipts,
+      lastSeenVisibility: user.lastSeenVisibility,
+      notifications: {
+        enabled: user.notifyEnabled,
+        sound: user.notifySound,
+        previews: user.notifyPreviews,
+      },
+      theme: user.theme,
+    },
   };
 }

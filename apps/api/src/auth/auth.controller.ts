@@ -1,5 +1,6 @@
 import { Body, Controller, HttpCode, Inject, Post, Req, Res, UseGuards } from '@nestjs/common';
 import {
+  changePasswordSchema,
   loginRequestSchema,
   requestPasswordResetSchema,
   resetPasswordSchema,
@@ -12,6 +13,7 @@ import type { Request, Response } from 'express';
 import { ZodValidationPipe } from '../common/zod-validation.pipe.js';
 import type { Env } from '../config/env.js';
 import { ENV } from '../infra/tokens.js';
+import { AccessTokenGuard, CurrentUserId } from './access-token.guard.js';
 import { LoginThrottlerGuard } from '../rate-limit/rate-limit.guards.js';
 import { AuthService } from './auth.service.js';
 import { REFRESH_COOKIE_NAME, clearRefreshCookie, setRefreshCookie } from './refresh-cookie.js';
@@ -88,6 +90,23 @@ export class AuthController {
     await this.auth.logout(current);
     clearRefreshCookie(res, this.env);
     return { message: 'Logged out.' };
+  }
+
+  /** CHAT-037: change password while signed in. Under /auth so the refresh cookie (scoped to
+   *  /auth) comes along and this session can be kept while every other one ends. Rate-limited
+   *  like login, since it checks a password. */
+  @Post('change-password')
+  @HttpCode(204)
+  @UseGuards(AccessTokenGuard, LoginThrottlerGuard)
+  async changePassword(
+    @CurrentUserId() userId: string,
+    @Body(new ZodValidationPipe(changePasswordSchema)) body: z.infer<typeof changePasswordSchema>,
+    @Req() req: Request,
+  ): Promise<void> {
+    const current = (req.cookies as Record<string, string | undefined> | undefined)?.[
+      REFRESH_COOKIE_NAME
+    ];
+    await this.auth.changePassword(userId, body, current);
   }
 
   @Post('request-password-reset')

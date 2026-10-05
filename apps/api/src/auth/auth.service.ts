@@ -11,6 +11,7 @@ import { JwtService } from '@nestjs/jwt';
 import {
   isEmailIdentifier,
   type AuthSession,
+  type ChangePasswordInput,
   type LoginInput,
   type ResetPasswordInput,
   type SignUpInput,
@@ -25,6 +26,7 @@ import {
   createRefreshToken,
   findRefreshTokenByHash,
   revokeAllForUser,
+  revokeAllForUserExcept,
   revokeFamily,
   revokeRefreshToken,
 } from '../db/refresh-tokens.js';
@@ -218,6 +220,36 @@ export class AuthService implements OnModuleInit {
     // Force every existing session to re-authenticate: a password reset usually means the old
     // password (and anything signed in with it) shouldn't be trusted anymore.
     await revokeAllForUser(this.db, row.userId);
+  }
+
+  /**
+   * CHAT-037: change password while signed in. The current password proves it's really you (an
+   * unlocked laptop isn't enough); every *other* session ends, this one carries on.
+   */
+  async changePassword(
+    userId: string,
+    input: ChangePasswordInput,
+    currentRefreshToken: string | undefined,
+  ): Promise<void> {
+    const user = await findUserById(this.db, userId);
+    if (!user?.passwordHash || !(await verifyPassword(user.passwordHash, input.currentPassword))) {
+      throw new BadRequestException('Your current password is incorrect');
+    }
+    await setPasswordHash(this.db, userId, await hashPassword(input.newPassword));
+    const current = currentRefreshToken
+      ? await findRefreshTokenByHash(this.db, hashToken(currentRefreshToken))
+      : undefined;
+    await revokeAllForUserExcept(
+      this.db,
+      userId,
+      current && current.userId === userId ? current.familyId : null,
+    );
+  }
+
+  /** CHAT-037: re-checks the password before an account is deleted. */
+  async verifyPasswordFor(userId: string, password: string): Promise<boolean> {
+    const user = await findUserById(this.db, userId);
+    return !!user?.passwordHash && (await verifyPassword(user.passwordHash, password));
   }
 
   private async issueSession(

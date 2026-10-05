@@ -64,6 +64,13 @@
       "when": 1791213503809,
       "tag": "0008_push",
       "breakpoints": true
+    },
+    {
+      "idx": 9,
+      "version": "7",
+      "when": 1791214413852,
+      "tag": "0009_settings",
+      "breakpoints": true
     }
   ]
 }

@@ -32,7 +32,7 @@ export function AccountMenu() {
         </button>
       }
       items={[
-        { label: 'Profile', onSelect: () => void navigate('/profile') },
+        { label: 'Settings', onSelect: () => void navigate('/settings') },
         {
           label: 'Log out',
           danger: true,

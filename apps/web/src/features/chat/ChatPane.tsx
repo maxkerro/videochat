@@ -820,6 +820,8 @@ export function ChatPane() {
   const seenInfo = useMemo(() => {
     const conversation = conversationQuery.data;
     if (!conversation || conversation.lastSeq === 0) return null;
+    // CHAT-037: with your own read receipts off, you don't see other people's either.
+    if (auth.user?.settings.readReceipts === false) return null;
     if (conversation.type === 'direct') {
       const seen =
         conversation.peerLastReadSeq !== null &&
@@ -831,7 +833,7 @@ export function ChatPane() {
     );
     if (seenBy.length === 0) return null;
     return { label: `Seen by ${seenBy.length}`, names: seenBy.map((m) => m.displayName) };
-  }, [conversationQuery.data, membersQuery.data, auth.user?.id]);
+  }, [conversationQuery.data, membersQuery.data, auth.user?.id, auth.user?.settings.readReceipts]);
 
   if (conversationQuery.isError) {
     // A 404 means the conversation genuinely doesn't exist (or isn't this person's) -- that's

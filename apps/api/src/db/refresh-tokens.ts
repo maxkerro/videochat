@@ -1,4 +1,4 @@
-import { eq, isNull, and } from 'drizzle-orm';
+import { and, eq, isNull, ne } from 'drizzle-orm';
 import type { DbExecutor } from './client.js';
 import { refreshTokens, type RefreshTokenRow } from './schema.js';
 
@@ -62,4 +62,22 @@ export async function revokeAllForUser(db: DbExecutor, userId: string): Promise<
     .update(refreshTokens)
     .set({ revokedAt: new Date() })
     .where(and(eq(refreshTokens.userId, userId), isNull(refreshTokens.revokedAt)));
+}
+
+/** CHAT-037: after a password change, every other session ends; this one (if known) stays. */
+export async function revokeAllForUserExcept(
+  db: DbExecutor,
+  userId: string,
+  keepFamilyId: string | null,
+): Promise<void> {
+  await db
+    .update(refreshTokens)
+    .set({ revokedAt: new Date() })
+    .where(
+      and(
+        eq(refreshTokens.userId, userId),
+        isNull(refreshTokens.revokedAt),
+        ...(keepFamilyId ? [ne(refreshTokens.familyId, keepFamilyId)] : []),
+      ),
+    );
 }

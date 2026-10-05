@@ -7,6 +7,7 @@ import {
   CONVERSATION_TYPES,
   DEVICE_PLATFORMS,
   LAST_SEEN_VISIBILITY,
+  THEME_PREFERENCES,
   MEMBER_ROLES,
   MESSAGE_TYPES,
   type Attachment,
@@ -44,6 +45,7 @@ export const memberRole = pgEnum('member_role', MEMBER_ROLES);
 export const messageType = pgEnum('message_type', MESSAGE_TYPES);
 export const devicePlatform = pgEnum('device_platform', DEVICE_PLATFORMS);
 export const lastSeenVisibility = pgEnum('last_seen_visibility', LAST_SEEN_VISIBILITY);
+export const themePreference = pgEnum('theme_preference', THEME_PREFERENCES);
 
 const timestamps = {
   createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
@@ -71,6 +73,14 @@ export const users = pgTable(
     lastActiveAt: timestamp('last_active_at', { withTimezone: true }),
     /** CHAT-034/037: who may see their online status and last-seen time. */
     lastSeenVisibility: lastSeenVisibility('last_seen_visibility').notNull().default('everyone'),
+    /** CHAT-037 settings. */
+    readReceipts: boolean('read_receipts').notNull().default(true),
+    notifyEnabled: boolean('notify_enabled').notNull().default(true),
+    notifySound: boolean('notify_sound').notNull().default(true),
+    notifyPreviews: boolean('notify_previews').notNull().default(true),
+    theme: themePreference('theme').notNull().default('system'),
+    /** CHAT-037: set when the account was deleted (personal data already erased). */
+    deletedAt: timestamp('deleted_at', { withTimezone: true }),
     ...timestamps,
   },
   (t) => [
