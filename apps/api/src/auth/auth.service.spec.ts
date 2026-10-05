@@ -230,13 +230,38 @@ describe('AuthService', () => {
       const { service } = makeService();
 
       await service.login({ identifier: 'Ada_L', password: 'pw' });
-      expect(usersDb.findUserByUsername).toHaveBeenCalledWith(expect.anything(), 'Ada_L');
+      expect(usersDb.findUserByUsername).toHaveBeenCalledWith(expect.anything(), 'ada_l');
       expect(usersDb.findUserByEmail).not.toHaveBeenCalled();
 
       (usersDb.findUserByEmail as Mock).mockResolvedValue(user);
       await service.login({ identifier: 'ada@test.dev', password: 'pw' });
       expect(usersDb.findUserByEmail).toHaveBeenCalledWith(expect.anything(), 'ada@test.dev');
       expect(usersDb.findUserByUsername).toHaveBeenCalledTimes(1);
+    });
+
+    it('lowercases the identifier before looking it up, for email and username alike', async () => {
+      (usersDb.findUserByEmail as Mock).mockResolvedValue(undefined);
+      (usersDb.findUserByUsername as Mock).mockResolvedValue(undefined);
+      const { service } = makeService();
+      await expect(service.login({ identifier: 'Ada@Test.DEV', password: 'x' })).rejects.toThrow(
+        INVALID_LOGIN_MESSAGE,
+      );
+      expect(usersDb.findUserByEmail).toHaveBeenCalledWith(expect.anything(), 'ada@test.dev');
+      await expect(service.login({ identifier: 'Ada_L', password: 'x' })).rejects.toThrow(
+        INVALID_LOGIN_MESSAGE,
+      );
+      expect(usersDb.findUserByUsername).toHaveBeenCalledWith(expect.anything(), 'ada_l');
+    });
+
+    it('treats an account without a password like an unknown one (dummy verify, same error)', async () => {
+      (usersDb.findUserByEmail as Mock).mockResolvedValue(makeUser({ passwordHash: null }));
+      const { service } = makeService();
+      await expect(service.login({ identifier: 'a@test.dev', password: 'x' })).rejects.toThrow(
+        INVALID_LOGIN_MESSAGE,
+      );
+      expect(verifyAgainstDummyHash).toHaveBeenCalledWith('x');
+      expect(verifyPassword).not.toHaveBeenCalled();
+      expect(usersDb.recordFailedLogin).not.toHaveBeenCalled();
     });
 
     it('rejects an unknown username with the same message as a wrong password', async () => {

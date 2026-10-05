@@ -241,6 +241,12 @@ describe('loginRequestSchema (CHAT-080)', () => {
     });
   });
 
+  it('prefers identifier when both fields are sent', () => {
+    expect(
+      loginRequestSchema.parse({ identifier: 'ada', email: 'other@example.com', password: 'pw' }),
+    ).toEqual({ identifier: 'ada', password: 'pw' });
+  });
+
   it('requires an identifier or email', () => {
     expect(loginRequestSchema.safeParse({ password: 'pw' }).success).toBe(false);
     expect(loginRequestSchema.safeParse({ identifier: '   ', password: 'pw' }).success).toBe(false);

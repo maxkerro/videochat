@@ -93,8 +93,10 @@ export type LoginInput = z.infer<typeof loginSchema>;
 /**
  * What `POST /auth/login` accepts: `{identifier, password}`, or the pre-CHAT-080 shape
  * `{email, password}` so a web tab loaded before the deploy (or an older mobile build) keeps
- * working. Normalised to {@link LoginInput}. The legacy `email` field can be dropped once no
- * client sends it.
+ * working. Normalised to {@link LoginInput}; if both are sent, `identifier` wins. Note the legacy
+ * `email` field is no longer validated as an email: it's just an identifier, so `{email: "ada"}`
+ * is a username login (harmless -- same lookup, same generic error). The legacy field can be
+ * dropped once no client sends it.
  */
 export const loginRequestSchema = z
   .object({

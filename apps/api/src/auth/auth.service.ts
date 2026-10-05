@@ -122,9 +122,14 @@ export class AuthService {
   async login(input: LoginInput): Promise<IssuedSession> {
     // CHAT-080: email or username. Everything after the lookup -- lockout (per account, so
     // switching between the two doesn't reset it), password check, verification -- is the same.
-    const user = isEmailIdentifier(input.identifier)
-      ? await findUserByEmail(this.db, input.identifier)
-      : await findUserByUsername(this.db, input.identifier);
+    // Lowercased here, and both lookups also compare lower() on both sides (matching the
+    // lower(email)/lower(username) unique indexes), so case never matters on either path. The
+    // login throttler (LoginThrottlerGuard) keys on client IP only, never the body, so the field
+    // rename doesn't affect it.
+    const identifier = input.identifier.trim().toLowerCase();
+    const user = isEmailIdentifier(identifier)
+      ? await findUserByEmail(this.db, identifier)
+      : await findUserByUsername(this.db, identifier);
     // Same generic error whether the account doesn't exist or the password is wrong: don't let a
     // login attempt reveal which emails or usernames have an account.
     const invalid = () => new UnauthorizedException(INVALID_LOGIN_MESSAGE);

@@ -38,11 +38,29 @@ let dummyHash: Promise<string> | undefined;
 
 /**
  * CHAT-080 review: spends the same Argon2 verify a real wrong password costs, for a login whose
- * email/username matched no account. Without it an unknown account answers measurably faster
- * than a known one, which undoes the "same answer either way" error message. The dummy hash is
- * made once (same parameters as real hashes) and reused; the result is always discarded.
+ * email/username matched no account. Without it an unknown account answers an Argon2-run faster
+ * than a known one, which undoes the "same answer either way" error message. Not perfectly equal:
+ * a wrong password on a real account also records the failed attempt (one DB write) -- a far
+ * smaller gap. The dummy hash is made once (same parameters as real hashes) and reused; the result
+ * is always discarded.
+ *
+ * Never throws: a failure here must not turn an unknown-account login into a 500 (an outage, and
+ * an account-existence signal of its own). A failed dummy hash isn't cached, so the next call
+ * retries it.
  */
 export async function verifyAgainstDummyHash(plain: string): Promise<void> {
-  dummyHash ??= hashPassword(`dummy-${Math.random()}`);
-  await verify(await dummyHash, plain).catch(() => false);
+  try {
+    dummyHash ??= hashPassword(`dummy-${Math.random()}`).catch((err: unknown) => {
+      dummyHash = undefined;
+      throw err;
+    });
+    await verify(await dummyHash, plain);
+  } catch {
+    // Discarded on purpose -- see above.
+  }
+}
+
+/** Test-only: forget the cached dummy hash. */
+export function resetDummyHashForTests(): void {
+  dummyHash = undefined;
 }

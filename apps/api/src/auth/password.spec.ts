@@ -1,4 +1,15 @@
-import { hashPassword, verifyAgainstDummyHash, verifyPassword } from './password.js';
+import * as argon2 from '@node-rs/argon2';
+import {
+  hashPassword,
+  resetDummyHashForTests,
+  verifyAgainstDummyHash,
+  verifyPassword,
+} from './password.js';
+
+vi.mock('@node-rs/argon2', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@node-rs/argon2')>();
+  return { ...actual, hash: vi.fn(actual.hash) };
+});
 
 describe('password hashing (Argon2id)', () => {
   it('verifies the correct plaintext against its own hash', async () => {
@@ -19,5 +30,18 @@ describe('password hashing (Argon2id)', () => {
   it('runs a throwaway verify for an unknown account without throwing (CHAT-080)', async () => {
     await expect(verifyAgainstDummyHash('anything')).resolves.toBeUndefined();
     await expect(verifyAgainstDummyHash('')).resolves.toBeUndefined();
+  });
+
+  it("never throws, and doesn't cache a failed dummy hash", async () => {
+    resetDummyHashForTests();
+    vi.mocked(argon2.hash).mockRejectedValueOnce(new Error('out of memory'));
+    await expect(verifyAgainstDummyHash('x')).resolves.toBeUndefined();
+    const callsAfterFailure = vi.mocked(argon2.hash).mock.calls.length;
+    await expect(verifyAgainstDummyHash('x')).resolves.toBeUndefined();
+    // Retried the hash instead of reusing the rejected promise...
+    expect(vi.mocked(argon2.hash).mock.calls.length).toBe(callsAfterFailure + 1);
+    // ...and cached the successful one.
+    await verifyAgainstDummyHash('y');
+    expect(vi.mocked(argon2.hash).mock.calls.length).toBe(callsAfterFailure + 1);
   });
 });
