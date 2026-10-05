@@ -16,7 +16,7 @@ import type { Database } from '../db/client.js';
 import { isSenderBlockedInDirectConversation } from '../db/blocks.js';
 import { isConversationMember } from '../db/conversations.js';
 import {
-  appendMessage,
+  appendMessageWithStatus,
   listMessagesAfter,
   listMessagesPage,
   ClientMsgIdConflictError,
@@ -24,6 +24,7 @@ import {
 } from '../db/messages.js';
 import { DB } from '../infra/tokens.js';
 import { AttachmentsService } from '../attachments/attachments.service.js';
+import { LinkPreviewsService } from '../link-previews/link-previews.service.js';
 import { RealtimeService } from '../realtime/realtime.service.js';
 import { toMessage } from './message-mapper.js';
 
@@ -33,6 +34,7 @@ export class MessagesService {
     @Inject(DB) private readonly db: Database,
     private readonly realtime: RealtimeService,
     private readonly attachments: AttachmentsService,
+    private readonly linkPreviews: LinkPreviewsService,
   ) {}
 
   /**
@@ -71,14 +73,15 @@ export class MessagesService {
       : undefined;
 
     let row;
+    let created: boolean;
     try {
-      row = await appendMessage(this.db, {
+      ({ row, created } = await appendMessageWithStatus(this.db, {
         conversationId,
         senderId,
         body: input.body ?? null,
         clientMsgId: input.clientMsgId,
         ...(attachment ? { type: attachment.kind, meta: { attachment } } : {}),
-      });
+      }));
     } catch (err) {
       if (err instanceof SenderNotAMemberError) {
         throw new NotFoundException('Conversation not found');
@@ -100,6 +103,11 @@ export class MessagesService {
       conversationId,
       makeEnvelope('message.new', message, message.id),
     );
+    // CHAT-031: fetched after the message is out, so a slow site never delays it; arrives as a
+    // `message.updated`. Only once per message (not again for a retried send).
+    if (created && !attachment && input.linkPreview !== false) {
+      void this.linkPreviews.attachToMessage(row);
+    }
     return message;
   }
 

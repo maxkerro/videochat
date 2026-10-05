@@ -1,6 +1,6 @@
 import { and, asc, desc, eq, gt, isNull, lt, sql } from 'drizzle-orm';
 import { ulid } from 'ulid';
-import type { MessageType } from '@videochat/shared';
+import type { LinkPreview, MessageType } from '@videochat/shared';
 import type { Database, DbExecutor } from './client.js';
 import { conversations, memberships, messages, type MessageRow } from './schema.js';
 
@@ -228,4 +228,37 @@ export async function listMessagesAfter(
 export function directKeyFor(userA: string, userB: string): string {
   if (userA === userB) throw new Error('A direct conversation needs two different users');
   return [userA, userB].sort().join(':');
+}
+
+/**
+ * CHAT-031: sets (or, with null, removes) a message's link preview. Only while the message still
+ * exists, isn't deleted, and still has the body the preview was made for -- an edit or delete
+ * that landed while the preview was being fetched wins.
+ */
+export async function setMessageLinkPreview(
+  db: DbExecutor,
+  messageId: string,
+  preview: LinkPreview | null,
+  expectedBody?: string,
+): Promise<MessageRow | undefined> {
+  const conditions = [eq(messages.id, messageId), isNull(messages.deletedAt)];
+  if (expectedBody !== undefined) conditions.push(eq(messages.body, expectedBody));
+  const [row] = await db
+    .update(messages)
+    .set({
+      meta: preview
+        ? sql`coalesce(${messages.meta}, '{}'::jsonb) || jsonb_build_object('linkPreview', ${JSON.stringify(preview)}::jsonb)`
+        : sql`case when ${messages.meta} is null then null else ${messages.meta} - 'linkPreview' end`,
+    })
+    .where(and(...conditions))
+    .returning();
+  return row;
+}
+
+export async function findMessage(
+  db: DbExecutor,
+  messageId: string,
+): Promise<MessageRow | undefined> {
+  const [row] = await db.select().from(messages).where(eq(messages.id, messageId)).limit(1);
+  return row;
 }

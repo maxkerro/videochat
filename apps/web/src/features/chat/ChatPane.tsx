@@ -38,10 +38,13 @@ import { AttachmentView } from '../attachments/AttachmentView';
 import { PendingUploads } from '../attachments/PendingUploads';
 import { useAttachmentUploads } from '../attachments/useAttachmentUploads';
 import { CallButtons } from '../calls/CallButtons';
+import { LinkPreviewCard } from '../linkPreviews/LinkPreviewCard';
+import { removeLinkPreview } from '../linkPreviews/linkPreviewsApi';
+import { useComposerLinkPreview } from '../linkPreviews/useComposerLinkPreview';
 import { CallHistoryEntry } from '../calls/CallHistoryEntry';
 import { useAuth, withAuthRetry } from '../auth/AuthContext';
 import { linkify } from './linkify';
-import { appendToLatestPage, type MessagesData } from './messagesCache';
+import { appendToLatestPage, replaceMessage, type MessagesData } from './messagesCache';
 import { fetchMessages, sendMessage } from './messagesApi';
 import { ReadReceiptThrottle } from './readReceipts';
 import { useRealtimeEvent, useSendTyping } from './RealtimeProvider';
@@ -73,6 +76,8 @@ interface PendingMessage {
   body: string;
   status: 'sending' | 'failed';
   failureReason?: SendFailureReason;
+  /** CHAT-031: false when the sender dismissed the link preview before sending. */
+  linkPreview?: boolean;
 }
 
 /** CHAT-021: classifies a failed send's `ApiError` status into the reasons the composer can show
@@ -260,6 +265,7 @@ export function ChatPane() {
   // CHAT-030: files picked, dropped or pasted -- each becomes its own message once uploaded.
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [dragging, setDragging] = useState(false);
+  const composerPreview = useComposerLinkPreview(draft);
   const attachmentUploads = useAttachmentUploads({
     conversationId,
     onSent: (message) => {
@@ -336,6 +342,16 @@ export function ChatPane() {
     recordSeenSeq(message.conversationId, message.seq);
     if (message.conversationId !== conversationId) return;
     if (!isOwn && !atLatest) setNewArrivals((n) => n + 1);
+  });
+
+  // CHAT-031/032: a newer version of a message already shown (link preview added or removed).
+  useRealtimeEvent((envelope: WsEnvelope) => {
+    if (envelope.type !== 'message.updated') return;
+    const parsed = messageSchema.safeParse(envelope.payload);
+    if (!parsed.success) return;
+    queryClient.setQueryData<MessagesData>(['messages', parsed.data.conversationId], (old) =>
+      replaceMessage(old, parsed.data),
+    );
   });
 
   // CHAT-019: another device/tab of the same person catching up (clears this device's own
@@ -541,12 +557,18 @@ export function ChatPane() {
     rowVirtualizer.scrollToIndex(reversedIndex, { align: 'center' });
   }, [messagesQuery.isPending, rows, reversedRows, rowVirtualizer]);
 
-  async function trySend(target: { clientMsgId: string; conversationId: string; body: string }) {
+  async function trySend(target: {
+    clientMsgId: string;
+    conversationId: string;
+    body: string;
+    linkPreview?: boolean;
+  }) {
     try {
       const message = await withAuthRetry(auth, (token) =>
         sendMessage(token, target.conversationId, {
           clientMsgId: target.clientMsgId,
           body: target.body,
+          ...(target.linkPreview === false ? { linkPreview: false } : {}),
         }),
       );
       queryClient.setQueryData<MessagesData>(['messages', target.conversationId], (old) =>
@@ -587,9 +609,14 @@ export function ChatPane() {
     const body = draft.trim();
     if (!body || !conversationId) return;
     const clientMsgId = newClientMsgId();
-    setPending((prev) => [...prev, { clientMsgId, conversationId, body, status: 'sending' }]);
+    const linkPreview = composerPreview.wantsPreview ? undefined : false;
+    setPending((prev) => [
+      ...prev,
+      { clientMsgId, conversationId, body, status: 'sending', linkPreview },
+    ]);
     setDraft('');
-    void trySend({ clientMsgId, conversationId, body });
+    composerPreview.reset();
+    void trySend({ clientMsgId, conversationId, body, linkPreview });
     scrollToLatest('auto');
   }
 
@@ -838,6 +865,26 @@ export function ChatPane() {
                               <span className={styles.caption}>{linkify(row.message.body)}</span>
                             ) : null}
                           </span>
+                          {row.message.linkPreview && (
+                            <LinkPreviewCard
+                              preview={row.message.linkPreview}
+                              onRemove={
+                                row.message.senderId === auth.user?.id
+                                  ? () => {
+                                      const m = row.message;
+                                      void withAuthRetry(auth, (token) =>
+                                        removeLinkPreview(token, m.conversationId, m.id),
+                                      ).catch(() =>
+                                        toast({
+                                          title: 'Couldn’t remove the preview',
+                                          tone: 'danger',
+                                        }),
+                                      );
+                                    }
+                                  : undefined
+                              }
+                            />
+                          )}
                           {!row.grouped && (
                             <time className={styles.time}>{timeFor(row.message.createdAt)}</time>
                           )}
@@ -890,6 +937,16 @@ export function ChatPane() {
         onCancel={attachmentUploads.cancel}
         onRetry={attachmentUploads.retry}
       />
+
+      {composerPreview.preview && (
+        <div className={styles.composerPreview}>
+          <LinkPreviewCard
+            preview={composerPreview.preview}
+            onRemove={composerPreview.dismiss}
+            removeLabel="Don’t include a link preview"
+          />
+        </div>
+      )}
 
       <form className={styles.composer} onSubmit={handleSubmit}>
         <input

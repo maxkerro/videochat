@@ -283,3 +283,8 @@
   font-weight: 600;
   pointer-events: none;
 }
+
+/* CHAT-031: the link preview for what's being typed, dismissable before sending. */
+.composerPreview {
+  padding: var(--space-2) var(--space-4) 0;
+}

@@ -5,6 +5,7 @@ import * as conversationsDb from '../db/conversations.js';
 import * as messagesDb from '../db/messages.js';
 import { SenderNotAMemberError } from '../db/messages.js';
 import type { AttachmentsService } from '../attachments/attachments.service.js';
+import type { LinkPreviewsService } from '../link-previews/link-previews.service.js';
 import type { RealtimeService } from '../realtime/realtime.service.js';
 import { MessagesService } from './messages.service.js';
 
@@ -14,6 +15,7 @@ vi.mock('../db/messages.js', async () => {
   const actual = await vi.importActual<typeof import('../db/messages.js')>('../db/messages.js');
   return {
     appendMessage: vi.fn(),
+    appendMessageWithStatus: vi.fn(),
     listMessagesPage: vi.fn(),
     listMessagesAfter: vi.fn(),
     SenderNotAMemberError: actual.SenderNotAMemberError,
@@ -42,6 +44,7 @@ function makeMessageRow(overrides: Partial<Record<string, unknown>> = {}) {
 describe('MessagesService', () => {
   let realtime: { publishToConversation: ReturnType<typeof vi.fn> };
   let service: MessagesService;
+  let linkPreviews: { attachToMessage: ReturnType<typeof vi.fn> };
   let attachments: {
     prepareForMessage: ReturnType<typeof vi.fn>;
     linkToMessage: ReturnType<typeof vi.fn>;
@@ -53,16 +56,46 @@ describe('MessagesService', () => {
       prepareForMessage: vi.fn(),
       linkToMessage: vi.fn().mockResolvedValue(undefined),
     };
+    linkPreviews = { attachToMessage: vi.fn().mockResolvedValue(undefined) };
+    // The service uses appendMessageWithStatus; tests stub appendMessage's result and assert on it.
+    vi.mocked(messagesDb.appendMessageWithStatus).mockImplementation(async (db, input) => ({
+      row: await messagesDb.appendMessage(db, input),
+      created: true,
+    }));
     realtime = { publishToConversation: vi.fn().mockResolvedValue(undefined) };
     vi.mocked(blocksDb.isSenderBlockedInDirectConversation).mockResolvedValue(false);
     service = new MessagesService(
       {} as Database,
       realtime as unknown as RealtimeService,
       attachments as unknown as AttachmentsService,
+      linkPreviews as unknown as LinkPreviewsService,
     );
   });
 
   describe('send', () => {
+    it('CHAT-031: asks for a link preview after a new text message, unless turned off', async () => {
+      vi.mocked(conversationsDb.isConversationMember).mockResolvedValue(true);
+      vi.mocked(messagesDb.appendMessage).mockResolvedValue(makeMessageRow());
+      await service.send('conv-1', 'user-1', { clientMsgId: 'c-1', body: 'see https://a.dev' });
+      expect(linkPreviews.attachToMessage).toHaveBeenCalledTimes(1);
+      await service.send('conv-1', 'user-1', {
+        clientMsgId: 'c-2',
+        body: 'see https://a.dev',
+        linkPreview: false,
+      });
+      expect(linkPreviews.attachToMessage).toHaveBeenCalledTimes(1);
+    });
+
+    it('CHAT-031: does not fetch again for a retried send', async () => {
+      vi.mocked(conversationsDb.isConversationMember).mockResolvedValue(true);
+      vi.mocked(messagesDb.appendMessageWithStatus).mockResolvedValue({
+        row: makeMessageRow() as never,
+        created: false,
+      });
+      await service.send('conv-1', 'user-1', { clientMsgId: 'c-1', body: 'https://a.dev' });
+      expect(linkPreviews.attachToMessage).not.toHaveBeenCalled();
+    });
+
     it('CHAT-030: sends a prepared attachment as an image message and links it', async () => {
       vi.mocked(conversationsDb.isConversationMember).mockResolvedValue(true);
       const attachment = {

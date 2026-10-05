@@ -25,3 +25,20 @@ export function appendToLatestPage(
   };
   return { ...data, pages };
 }
+
+/** CHAT-031/032: swaps in a newer version of a message already in the cache (a link preview
+ *  arriving, an edit, a delete), wherever it's loaded. A message that isn't loaded is left
+ *  alone -- it'll arrive fresh when that page is fetched. */
+export function replaceMessage(
+  data: MessagesData | undefined,
+  message: Message,
+): MessagesData | undefined {
+  if (!data) return data;
+  let changed = false;
+  const pages = data.pages.map((page) => {
+    if (!page.messages.some((m) => m.id === message.id)) return page;
+    changed = true;
+    return { ...page, messages: page.messages.map((m) => (m.id === message.id ? message : m)) };
+  });
+  return changed ? { ...data, pages } : data;
+}

@@ -8,6 +8,7 @@ import {
   MEMBER_ROLES,
   MESSAGE_TYPES,
 } from './domain.js';
+import { linkPreviewSchema } from './links.js';
 
 /**
  * CHAT-044: what a `type: 'call'` message records about the call it summarises. One message is
@@ -306,6 +307,9 @@ export const messageSchema = z.object({
   call: callMessageMetaSchema.optional(),
   /** CHAT-030: present only on `image`/`file` messages (and gone once the message is deleted). */
   attachment: attachmentSchema.optional(),
+  /** CHAT-031: added shortly after sending (via `message.updated`) for a text message with a URL,
+   *  unless the sender turned it off. */
+  linkPreview: linkPreviewSchema.optional(),
 });
 export type Message = z.infer<typeof messageSchema>;
 
@@ -360,6 +364,8 @@ export const sendMessageSchema = z
     /** CHAT-030: an attachment uploaded by this sender to this conversation (see
      *  `createAttachmentUploadSchema`). One per message; send several files as several messages. */
     attachmentId: z.uuid().optional(),
+    /** CHAT-031: false when the sender dismissed the preview before sending. */
+    linkPreview: z.boolean().optional(),
   })
   .refine((v) => v.body !== undefined || v.attachmentId !== undefined, {
     message: 'Write a message or attach a file',

@@ -17,6 +17,7 @@ import { createPool } from '../src/db/client.js';
 import { resetDatabase, runMigrations } from '../src/db/migrate.js';
 import { MailService } from '../src/mail/mail.service.js';
 import { S3Service } from '../src/storage/s3.service.js';
+import { LinkPreviewFetcher } from '../src/link-previews/link-preview.fetcher.js';
 
 class FakeMailService {
   verifyTokens: string[] = [];
@@ -78,6 +79,22 @@ export class FakeS3Service {
   }
 }
 
+/** No outbound HTTP in tests: any URL on `preview.test` gets a fixed preview, others none. */
+export class FakeLinkPreviewFetcher {
+  calls: string[] = [];
+  fetchPreview(url: string) {
+    this.calls.push(url);
+    if (!new URL(url).hostname.endsWith('preview.test')) return Promise.resolve(null);
+    return Promise.resolve({
+      url,
+      title: 'Preview title',
+      description: 'Preview description',
+      siteName: 'Preview Site',
+      imageUrl: 'https://preview.test/og.png',
+    });
+  }
+}
+
 export interface E2eUser {
   id: string;
   session: AuthSession;
@@ -100,6 +117,8 @@ export async function startE2eApp(prefix: string) {
     .useClass(FakeMailService)
     .overrideProvider(S3Service)
     .useClass(FakeS3Service)
+    .overrideProvider(LinkPreviewFetcher)
+    .useClass(FakeLinkPreviewFetcher)
     .compile();
   const app: INestApplication = moduleRef.createNestApplication({ bufferLogs: true });
   configureApp(app);

@@ -10,6 +10,7 @@ import {
   MESSAGE_TYPES,
   type Attachment,
   type CallMessageMeta,
+  type LinkPreview,
 } from '@videochat/shared';
 import { sql } from 'drizzle-orm';
 import {
@@ -220,7 +221,11 @@ export const messages = pgTable(
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
     /** Structured data for non-text message types. CHAT-044: `{ call: CallMessageMeta }` on a
      *  `call` message. Null for ordinary text. */
-    meta: jsonb('meta').$type<{ call?: CallMessageMeta; attachment?: Attachment }>(),
+    meta: jsonb('meta').$type<{
+      call?: CallMessageMeta;
+      attachment?: Attachment;
+      linkPreview?: LinkPreview;
+    }>(),
   },
   (t) => [
     // Guarantees ordering integrity and also serves history paging

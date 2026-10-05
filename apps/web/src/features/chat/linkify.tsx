@@ -1,14 +1,5 @@
+import { trimTrailingPunctuation, URL_PATTERN } from '@videochat/shared';
 import type { ReactNode } from 'react';
-
-const URL_PATTERN = /\bhttps?:\/\/[^\s<>"']+/gi;
-
-/** Trailing punctuation is more often sentence punctuation than part of the URL
- *  ("see https://example.com." shouldn't link the period). */
-function trimTrailingPunctuation(url: string): { url: string; trailing: string } {
-  const match = /[).,!?;:'"]+$/.exec(url);
-  if (!match) return { url, trailing: '' };
-  return { url: url.slice(0, match.index), trailing: match[0] };
-}
 
 /**
  * CHAT-014: message bodies are always plain text and must never be rendered as HTML. This turns

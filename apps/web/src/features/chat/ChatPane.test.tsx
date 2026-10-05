@@ -696,6 +696,79 @@ describe('ChatPane', () => {
     });
   });
 
+  describe('CHAT-031 link previews', () => {
+    const preview = {
+      url: 'https://example.com/post',
+      title: 'A great post',
+      description: 'All about it',
+      siteName: 'Example',
+      imageUrl: null,
+    };
+
+    it('adds a preview to a shown message when message.updated arrives', async () => {
+      vi.stubGlobal(
+        'fetch',
+        routedFetch({
+          'POST /auth/refresh': () => jsonResponse(session()),
+          [`GET /conversations/${conversationId}`]: () => jsonResponse(conversation()),
+          [`GET /conversations/${conversationId}/messages`]: () =>
+            jsonResponse({
+              messages: [message({ body: 'see https://example.com/post' })],
+              hasMore: false,
+            }),
+        }),
+      );
+      renderApp(`/c/${conversationId}`);
+      await screen.findByText('https://example.com/post');
+      await waitFor(() => expect(FakeWebSocket.instances).toHaveLength(1));
+      const socket = FakeWebSocket.instances[0]!;
+      socket.emit('open');
+      const updated = {
+        ...message({ body: 'see https://example.com/post' }),
+        linkPreview: preview,
+      };
+      socket.emit('message', {
+        data: JSON.stringify(makeEnvelope('message.updated', updated, 'evt-1')),
+      });
+      expect(await screen.findByRole('link', { name: 'A great post' })).toBeInTheDocument();
+      // Ben's message: Anna can't remove its preview.
+      expect(screen.queryByRole('button', { name: 'Remove link preview' })).not.toBeInTheDocument();
+    });
+
+    it('shows a preview while typing and sends linkPreview: false once dismissed', async () => {
+      let sentBody: Record<string, unknown> | undefined;
+      vi.stubGlobal(
+        'fetch',
+        routedFetch({
+          'POST /auth/refresh': () => jsonResponse(session()),
+          [`GET /conversations/${conversationId}`]: () => jsonResponse(conversation()),
+          [`GET /conversations/${conversationId}/messages`]: () =>
+            jsonResponse({ messages: [], hasMore: false }),
+          'GET /link-preview': () => jsonResponse({ preview }),
+          [`POST /conversations/${conversationId}/messages`]: (_url, init) => {
+            sentBody = JSON.parse(String(init?.body)) as Record<string, unknown>;
+            return jsonResponse(
+              message({
+                id: '01ARZ3NDEKTSV4RRFFQ69G5FB0',
+                senderId: baseUser.id,
+                body: 'https://example.com/post',
+              }),
+            );
+          },
+        }),
+      );
+      renderApp(`/c/${conversationId}`);
+      await userEvent.type(await screen.findByLabelText('Message'), 'https://example.com/post');
+      expect(
+        await screen.findByRole('link', { name: 'A great post' }, { timeout: 3000 }),
+      ).toBeInTheDocument();
+      await userEvent.click(screen.getByRole('button', { name: 'Don’t include a link preview' }));
+      expect(screen.queryByRole('link', { name: 'A great post' })).not.toBeInTheDocument();
+      await userEvent.click(screen.getByRole('button', { name: 'Send message' }));
+      await waitFor(() => expect(sentBody).toMatchObject({ linkPreview: false }));
+    });
+  });
+
   describe('CHAT-018 groups', () => {
     const groupId = '77777777-7777-4777-8777-777777777777';
 

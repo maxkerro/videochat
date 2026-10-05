@@ -23,5 +23,8 @@ export function toMessage(row: MessageRow): Message {
     ...((row.type === 'image' || row.type === 'file') && row.meta?.attachment && !row.deletedAt
       ? { attachment: row.meta.attachment }
       : {}),
+    ...(row.type === 'text' && row.meta?.linkPreview && !row.deletedAt
+      ? { linkPreview: row.meta.linkPreview }
+      : {}),
   };
 }
