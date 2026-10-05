@@ -7,6 +7,7 @@ import {
   createRefreshToken,
   findRefreshTokenByHash,
   revokeAllForUser,
+  revokeAllForUserExcept,
   revokeFamily,
   revokeRefreshToken,
 } from '../src/db/refresh-tokens.js';
@@ -157,6 +158,27 @@ describe.skipIf(!hasInfra)('auth data layer (CHAT-010, CHAT-011)', () => {
       await revokeAllForUser(db, u.id);
       expect((await findRefreshTokenByHash(db, 'j'.repeat(64)))?.revokedAt).not.toBeNull();
       expect((await findRefreshTokenByHash(db, 'k'.repeat(64)))?.revokedAt).not.toBeNull();
+    });
+
+    it('revokeAllForUserExcept keeps one family, or ends all of them with null', async () => {
+      const u = await makeUser('ingrid');
+      const keep = randomUUID();
+      for (const [familyId, hash] of [
+        [keep, 'l'],
+        [randomUUID(), 'm'],
+      ] as const) {
+        await createRefreshToken(db, {
+          userId: u.id,
+          familyId,
+          tokenHash: hash.repeat(64),
+          expiresAt: new Date(Date.now() + 60_000),
+        });
+      }
+      await revokeAllForUserExcept(db, u.id, keep);
+      expect((await findRefreshTokenByHash(db, 'l'.repeat(64)))?.revokedAt).toBeNull();
+      expect((await findRefreshTokenByHash(db, 'm'.repeat(64)))?.revokedAt).not.toBeNull();
+      await revokeAllForUserExcept(db, u.id, null);
+      expect((await findRefreshTokenByHash(db, 'l'.repeat(64)))?.revokedAt).not.toBeNull();
     });
   });
 

@@ -24,5 +24,10 @@ export function buildRateLimiters(env: Env): ThrottlerOptions[] {
       limit: env.RATE_LIMIT_MESSAGES_MAX,
       ttl: env.RATE_LIMIT_MESSAGES_WINDOW_SEC * 1000,
     },
+    {
+      name: 'export',
+      limit: env.RATE_LIMIT_EXPORT_MAX,
+      ttl: env.RATE_LIMIT_EXPORT_WINDOW_SEC * 1000,
+    },
   ];
 }

@@ -5,7 +5,9 @@ import { AttachmentsService } from '../attachments/attachments.service.js';
 import { AuthService } from '../auth/auth.service.js';
 import { TokenStateService } from '../auth/token-state.service.js';
 import { appendMessage } from '../db/messages.js';
-import { toMessage } from '../messages/message-mapper.js';
+import { toMessage, toMessages } from '../messages/message-mapper.js';
+import type { MessageRow } from '../db/schema.js';
+import { PresenceService } from '../realtime/presence.service.js';
 import {
   eraseAccount,
   listActiveConversationIds,
@@ -21,6 +23,9 @@ import { RealtimeService } from '../realtime/realtime.service.js';
 import { S3Service } from '../storage/s3.service.js';
 import { toMe } from './user-mapper.js';
 
+/** Per conversation, how many of a deleted account's latest messages are re-sent as tombstones. */
+const ERASED_ANNOUNCE_LIMIT = 100;
+
 /** CHAT-037: settings, data export and account deletion. */
 @Injectable()
 export class AccountService {
@@ -31,14 +36,21 @@ export class AccountService {
     private readonly auth: AuthService,
     private readonly attachments: AttachmentsService,
     private readonly tokenState: TokenStateService,
+    private readonly presence: PresenceService,
   ) {}
 
   /** AC "changes save immediately and apply on all devices": the new settings go to every one
    *  of the person's connected devices as `me.updated`. */
   async updateSettings(userId: string, input: UpdateSettingsInput): Promise<Me> {
+    const before = input.lastSeenVisibility ? await findUserById(this.db, userId) : undefined;
     const user = await updateUserSettings(this.db, userId, input);
     const me = toMe(user, await this.s3.getAvatarUrl(user.avatarKey));
     await this.realtime.publishToUser(userId, makeEnvelope('me.updated', me, randomUUID()));
+    // Hiding (or showing) your last seen takes effect for your contacts live, not on their next
+    // refetch.
+    if (before && before.lastSeenVisibility !== user.lastSeenVisibility) {
+      await this.presence.visibilityChanged(userId);
+    }
     return me;
   }
 
@@ -58,7 +70,7 @@ export class AccountService {
     if (!user) throw new NotFoundException('User not found');
 
     const left: Array<{ conversationId: string; promotedUserId: string | null }> = [];
-    const files = await this.db.transaction(async (tx) => {
+    const { files, erased } = await this.db.transaction(async (tx) => {
       for (const conversationId of await listActiveConversationIds(tx, userId)) {
         // leaveConversation opens its own (nested -> savepoint) transaction.
         const result = await leaveConversation(tx as unknown as Database, conversationId, userId);
@@ -78,6 +90,7 @@ export class AccountService {
         .deleteObjects([`${user.avatarKey}/64.webp`, `${user.avatarKey}/256.webp`])
         .catch(() => undefined);
     }
+    await this.announceErased(erased);
     // Not their name: the notice outlives the account, and the point is that it's erased.
     for (const { conversationId, promotedUserId } of left) {
       await this.postSystemMessage(conversationId, 'A member deleted their account');
@@ -85,6 +98,30 @@ export class AccountService {
         const promoted = await findUserById(this.db, promotedUserId);
         if (promoted)
           await this.postSystemMessage(conversationId, `${promoted.displayName} is now an admin`);
+      }
+    }
+  }
+
+  /**
+   * Open clients replace each erased message with its "Message deleted" tombstone live
+   * (`message.updated`, as a normal delete does). Only the most recent ones per conversation --
+   * what anyone can have on screen; older history is loaded fresh, already erased.
+   */
+  private async announceErased(erased: MessageRow[]): Promise<void> {
+    const byConversation = new Map<string, MessageRow[]>();
+    for (const row of erased) {
+      byConversation.set(row.conversationId, [
+        ...(byConversation.get(row.conversationId) ?? []),
+        row,
+      ]);
+    }
+    for (const [conversationId, rows] of byConversation) {
+      const recent = rows.sort((a, b) => b.seq - a.seq).slice(0, ERASED_ANNOUNCE_LIMIT);
+      for (const message of await toMessages(this.db, recent)) {
+        await this.realtime.publishToConversation(
+          conversationId,
+          makeEnvelope('message.updated', message, randomUUID()),
+        );
       }
     }
   }
@@ -128,6 +165,8 @@ export class AccountService {
         type: c.type,
         title: c.title,
         joinedAt: new Date(c.joined_at).toISOString(),
+        // Conversations you've left are included: your messages in them are in the export too.
+        leftAt: c.left_at ? new Date(c.left_at).toISOString() : null,
         otherMembers: c.members,
       })),
       messages: messages.map((m) => ({

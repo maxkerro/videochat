@@ -137,6 +137,9 @@ const envSchema = z.object({
    *  ("more than 20 messages in 10 seconds"). */
   RATE_LIMIT_MESSAGES_MAX: z.coerce.number().int().positive().default(20),
   RATE_LIMIT_MESSAGES_WINDOW_SEC: z.coerce.number().int().positive().default(10),
+  /** CHAT-037 data export (a full read of everything someone sent), per authenticated user. */
+  RATE_LIMIT_EXPORT_MAX: z.coerce.number().int().positive().default(5),
+  RATE_LIMIT_EXPORT_WINDOW_SEC: z.coerce.number().int().positive().default(3600),
 });
 
 const envSchemaWithProductionChecks = envSchema.superRefine((data, ctx) => {

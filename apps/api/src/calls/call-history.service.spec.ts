@@ -16,7 +16,10 @@ vi.mock('../db/messages.js', async (importOriginal) => ({
   ...(await importOriginal<typeof import('../db/messages.js')>()),
   appendMessageWithStatus: vi.fn(),
 }));
-vi.mock('../db/users.js', () => ({ findUserById: vi.fn(async () => ({ readReceipts: true })) }));
+vi.mock('../db/users.js', () => ({
+  findUserById: vi.fn(async () => ({ readReceipts: true })),
+  listReadReceiptMemberIds: vi.fn(async () => ['caller', 'callee']),
+}));
 vi.mock('../db/conversations.js', () => ({
   isConversationMember: vi.fn(),
   markConversationRead: vi.fn(),
@@ -79,7 +82,10 @@ describe('call history wording (CHAT-044)', () => {
 });
 
 describe('CallHistoryService.record (CHAT-044)', () => {
-  let realtime: { publishToConversation: ReturnType<typeof vi.fn> };
+  let realtime: {
+    publishToConversation: ReturnType<typeof vi.fn>;
+    publishToUser: ReturnType<typeof vi.fn>;
+  };
   let service: CallHistoryService;
   const row = (overrides: Partial<MessageRow> = {}) =>
     ({
@@ -103,7 +109,10 @@ describe('CallHistoryService.record (CHAT-044)', () => {
   beforeEach(() => {
     vi.resetAllMocks();
     notifications.notifyMissedCall.mockResolvedValue(undefined);
-    realtime = { publishToConversation: vi.fn().mockResolvedValue(undefined) };
+    realtime = {
+      publishToConversation: vi.fn().mockResolvedValue(undefined),
+      publishToUser: vi.fn().mockResolvedValue(undefined),
+    };
     service = new CallHistoryService(
       {} as Database,
       realtime as unknown as RealtimeService,
@@ -114,7 +123,7 @@ describe('CallHistoryService.record (CHAT-044)', () => {
   });
 
   const published = (type: string) =>
-    realtime.publishToConversation.mock.calls.filter(
+    [...realtime.publishToConversation.mock.calls, ...realtime.publishToUser.mock.calls].filter(
       ([, env]) => (env as { type: string }).type === type,
     );
 
@@ -140,7 +149,8 @@ describe('CallHistoryService.record (CHAT-044)', () => {
     vi.mocked(markConversationRead).mockResolvedValue({ lastReadSeq: 7 } as never);
     await service.record(call({ endReason: 'completed' }));
     expect(markConversationRead).toHaveBeenCalledWith({}, 'conv', 'callee', 7);
-    expect(published('conversation.read')).toHaveLength(1);
+    // One per member with read receipts on (the callee's own devices included).
+    expect(published('conversation.read').map(([to]) => to)).toEqual(['callee', 'caller']);
   });
 
   it('skips the read event when the callee is no longer a member', async () => {

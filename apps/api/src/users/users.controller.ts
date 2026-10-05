@@ -37,7 +37,11 @@ import { ZodValidationPipe } from '../common/zod-validation.pipe.js';
 import { clearRefreshCookie } from '../auth/refresh-cookie.js';
 import type { Env } from '../config/env.js';
 import { ENV } from '../infra/tokens.js';
-import { LoginThrottlerGuard, SearchThrottlerGuard } from '../rate-limit/rate-limit.guards.js';
+import {
+  ExportThrottlerGuard,
+  LoginThrottlerGuard,
+  SearchThrottlerGuard,
+} from '../rate-limit/rate-limit.guards.js';
 import { AccountService } from './account.service.js';
 import { UsersService } from './users.service.js';
 
@@ -156,7 +160,7 @@ export class UsersController {
 
   /** CHAT-037: everything you've sent, as a JSON file. */
   @Get('me/export')
-  @UseGuards(AccessTokenGuard)
+  @UseGuards(AccessTokenGuard, ExportThrottlerGuard)
   async exportData(
     @CurrentUserId() userId: string,
     @Res({ passthrough: true }) res: Response,

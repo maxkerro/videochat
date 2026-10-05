@@ -23,11 +23,16 @@ const VISIBILITY_LABELS: Record<LastSeenVisibility, string> = {
 };
 const THEME_LABELS = { system: 'Match my device', light: 'Light', dark: 'Dark' } as const;
 
+/** Bumped by every save, across all sections: only the newest save's response is applied, so two
+ *  quick toggles resolving out of order can't put the older state back. */
+let latestSave = 0;
+
 /** Saves a settings change at once (AC "changes save immediately"), optimistically. */
 function useSaveSettings() {
   const auth = useAuth();
   const { toast } = useToast();
   return async (input: UpdateSettingsInput) => {
+    const save = ++latestSave;
     const previous = auth.user;
     if (previous) {
       auth.setUser({
@@ -40,16 +45,19 @@ function useSaveSettings() {
       });
     }
     try {
-      auth.setUser(await withAuthRetry(auth, (t) => updateSettings(t, input)));
+      const saved = await withAuthRetry(auth, (t) => updateSettings(t, input));
+      // A newer save is in flight: its response (which includes this change) wins.
+      if (save === latestSave) auth.setUser(saved);
     } catch {
-      // Back to what the server actually has -- not the snapshot from before this change, which
-      // could undo a different setting that was saved in the meantime.
-      try {
-        auth.setUser(await withAuthRetry(auth, (t) => fetchMe(t)));
-      } catch {
-        if (previous) auth.setUser(previous);
-      }
       toast({ title: 'Couldn’t save that setting', tone: 'danger' });
+      // Back to what the server actually has -- not a snapshot from before this change, which
+      // could undo a different setting saved in the meantime. Re-read after the newest save.
+      try {
+        const current = await withAuthRetry(auth, (t) => fetchMe(t));
+        if (save === latestSave) auth.setUser(current);
+      } catch {
+        if (previous && save === latestSave) auth.setUser(previous);
+      }
     }
   };
 }
@@ -258,14 +266,16 @@ export function AccountSection() {
     setDeleteError(null);
     try {
       await withAuthRetry(auth, (t) => deleteAccount(t, deletePassword));
-      setDeleteOpen(false);
-      await auth.logout();
-      void navigate('/login');
     } catch (error) {
       setDeleteError(error instanceof ApiError ? error.message : 'Couldn’t delete your account');
-    } finally {
       setDeleting(false);
+      return;
     }
+    // Deleted. Signing out is local cleanup from here: nothing in it can report the deletion
+    // as failed.
+    setDeleteOpen(false);
+    await auth.logout().catch(() => undefined);
+    void navigate('/login');
   }
 
   return (

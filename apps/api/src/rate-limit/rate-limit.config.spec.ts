@@ -10,6 +10,8 @@ function fakeEnv(overrides: Partial<Env> = {}): Env {
     RATE_LIMIT_SEARCH_WINDOW_SEC: 10,
     RATE_LIMIT_MESSAGES_MAX: 20,
     RATE_LIMIT_MESSAGES_WINDOW_SEC: 10,
+    RATE_LIMIT_EXPORT_MAX: 5,
+    RATE_LIMIT_EXPORT_WINDOW_SEC: 3600,
     ...overrides,
   } as Env;
 }
@@ -21,6 +23,7 @@ describe('buildRateLimiters', () => {
       { name: 'login', limit: 10, ttl: 60_000 },
       { name: 'search', limit: 30, ttl: 10_000 },
       { name: 'messages', limit: 20, ttl: 10_000 },
+      { name: 'export', limit: 5, ttl: 3_600_000 },
     ]);
   });
 

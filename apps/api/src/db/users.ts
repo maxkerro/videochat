@@ -1,7 +1,7 @@
 import { sql, eq, and, isNull, ne, notInArray } from 'drizzle-orm';
 import { LIMITS } from '@videochat/shared';
 import type { DbExecutor } from './client.js';
-import { users, type NewUser, type User } from './schema.js';
+import { memberships, users, type NewUser, type User } from './schema.js';
 
 export interface CreateUserInput {
   email: string;
@@ -167,4 +167,23 @@ export async function recordFailedLogin(db: DbExecutor, id: string): Promise<Use
 
 export async function resetFailedLogins(db: DbExecutor, id: string): Promise<void> {
   await db.update(users).set({ failedLoginAttempts: 0, lockedUntil: null }).where(eq(users.id, id));
+}
+
+/** CHAT-037: a conversation's current members who have read receipts on (and so may see others'). */
+export async function listReadReceiptMemberIds(
+  db: DbExecutor,
+  conversationId: string,
+): Promise<string[]> {
+  const rows = await db
+    .select({ userId: memberships.userId })
+    .from(memberships)
+    .innerJoin(users, eq(users.id, memberships.userId))
+    .where(
+      and(
+        eq(memberships.conversationId, conversationId),
+        isNull(memberships.leftAt),
+        eq(users.readReceipts, true),
+      ),
+    );
+  return rows.map((r) => r.userId);
 }

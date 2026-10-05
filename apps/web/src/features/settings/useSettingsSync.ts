@@ -1,5 +1,6 @@
 import { meSchema, type WsEnvelope } from '@videochat/shared';
-import { useEffect } from 'react';
+import { useQueryClient } from '@tanstack/react-query';
+import { useEffect, useRef } from 'react';
 import { useTheme } from '../../theme/ThemeProvider';
 import { useAuth } from '../auth/AuthContext';
 import { useRealtimeEvent } from '../chat/RealtimeProvider';
@@ -17,6 +18,18 @@ export function useSettingsSync(): void {
     const parsed = meSchema.safeParse(envelope.payload);
     if (parsed.success) setUser(parsed.data);
   });
+
+  // Last seen is reciprocal: changing your own setting changes whose presence you may see, so
+  // refetch it (from any device's change, including this one's).
+  const queryClient = useQueryClient();
+  const visibility = user?.settings.lastSeenVisibility;
+  const previousVisibility = useRef(visibility);
+  useEffect(() => {
+    if (previousVisibility.current && visibility && previousVisibility.current !== visibility) {
+      void queryClient.invalidateQueries({ queryKey: ['presence'] });
+    }
+    previousVisibility.current = visibility;
+  }, [visibility, queryClient]);
 
   const serverTheme = user?.settings.theme;
   useEffect(() => {

@@ -213,6 +213,44 @@ export class PresenceService implements OnModuleInit, OnModuleDestroy {
 
   /** The owner of an offline transition: record last seen, tell contacts, then re-announce online
    *  if a reconnect raced us (its "online" may have reached contacts before our "offline"). */
+  /**
+   * CHAT-037: `userId` changed their last-seen setting. Each contact gets what they may now see:
+   * the current state, or -- for those who just lost sight of it -- "offline, no last seen", which
+   * is exactly how a hidden person looks to them.
+   */
+  async visibilityChanged(userId: string, now = Date.now()): Promise<void> {
+    try {
+      const [contacts, settings, live] = await Promise.all([
+        listPresenceContacts(this.db, userId),
+        getPresenceSettings(this.db, [userId]),
+        this.redis.zcount(connsKey(userId), now, '+inf'),
+      ]);
+      const subject = settings.get(userId);
+      const subjectVisibility = subject?.visibility ?? 'everyone';
+      const online = live > 0;
+      const visible: Presence = {
+        userId,
+        online,
+        lastSeenAt: online || !subject?.lastActiveAt ? null : subject.lastActiveAt.toISOString(),
+      };
+      const hidden: Presence = { userId, online: false, lastSeenAt: null };
+      await Promise.all(
+        contacts.map((c) =>
+          this.realtime.publishToUser(
+            c.userId,
+            makeEnvelope(
+              'presence.changed',
+              canSeePresence(subjectVisibility, c.visibility, c.sharesDirect) ? visible : hidden,
+              randomUUID(),
+            ),
+          ),
+        ),
+      );
+    } catch (err) {
+      this.logger.warn(`Presence visibility update failed: ${(err as Error).message}`);
+    }
+  }
+
   private async announceOffline(userId: string, at: Date): Promise<void> {
     await setLastActive(this.db, userId, at);
     await this.announce(userId, { userId, online: false, lastSeenAt: at.toISOString() });

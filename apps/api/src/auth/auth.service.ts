@@ -243,18 +243,22 @@ export class AuthService implements OnModuleInit {
     if (!user?.passwordHash || !(await verifyPassword(user.passwordHash, input.currentPassword))) {
       throw new BadRequestException('Your current password is incorrect');
     }
-    await setPasswordHash(this.db, userId, await hashPassword(input.newPassword), {
-      passwordChanged: true,
-    });
-    this.tokenState.invalidate(userId);
+    const passwordHash = await hashPassword(input.newPassword);
     const current = currentRefreshToken
       ? await findRefreshTokenByHash(this.db, hashToken(currentRefreshToken))
       : undefined;
-    await revokeAllForUserExcept(
-      this.db,
-      userId,
-      current && current.userId === userId ? current.familyId : null,
-    );
+    // Both or neither: a new password with the old sessions still alive (or the reverse) is
+    // never left behind by a failure in between.
+    await this.db.transaction(async (tx) => {
+      await setPasswordHash(tx, userId, passwordHash, { passwordChanged: true });
+      await revokeAllForUserExcept(
+        tx,
+        userId,
+        current && current.userId === userId ? current.familyId : null,
+      );
+    });
+    // Other devices' access tokens stop working at once (they predate passwordChangedAt).
+    this.tokenState.invalidate(userId);
     // Other devices' live connections end too; this tab reconnects with a fresh token.
     await publishSessionEnded(this.redis, userId, 'password-changed').catch(() => undefined);
   }

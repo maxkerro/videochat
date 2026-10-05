@@ -360,5 +360,91 @@ describe.skipIf(!hasInfra)('settings and account (CHAT-037)', () => {
       expect(forClara[ben.id]).toBe(0);
       expect(forClara[clara.id]).toBe(sent.body.seq);
     });
+
+    it("with your own receipts off you don't get others' read events live either", async () => {
+      const [anna, ben] = [await signUp(), await signUp()];
+      const conversationId = await direct(anna, ben);
+      await request(server())
+        .post(`/conversations/${conversationId}/messages`)
+        .set(bearer(anna.token))
+        .send({ clientMsgId: randomUUID(), body: 'hi' })
+        .expect(201);
+      await request(server())
+        .patch('/me/settings')
+        .set(bearer(anna.token))
+        .send({ readReceipts: false })
+        .expect(200);
+      const annaSocket = await connect(anna);
+      const benSocket = await connect(ben);
+      await request(server())
+        .post(`/conversations/${conversationId}/read`)
+        .set(bearer(ben.token))
+        .send({ seq: 1 })
+        .expect(201);
+      // Ben's own devices still sync; Anna, with hers off, hears nothing of his.
+      await benSocket.waitFor('conversation.read', (p) => p.userId === ben.id);
+      await annaSocket.expectNone('conversation.read', (p) => p.userId === ben.id, 400);
+    });
+
+    it("erased messages turn into tombstones live on other members' screens", async () => {
+      const [anna, ben] = [await signUp(), await signUp()];
+      const conversationId = await direct(anna, ben);
+      const sent = await request(server())
+        .post(`/conversations/${conversationId}/messages`)
+        .set(bearer(anna.token))
+        .send({ clientMsgId: randomUUID(), body: 'secret' })
+        .expect(201);
+      const benSocket = await connect(ben);
+      await request(server())
+        .post('/auth/delete-account')
+        .set(bearer(anna.token))
+        .send({ password: PASSWORD })
+        .expect(204);
+      const updated = await benSocket.waitFor(
+        'message.updated',
+        (p) => p.id === sent.body.id && p.deletedAt !== null,
+      );
+      expect(updated.payload).toMatchObject({ body: null });
+    });
+
+    it('hiding your last seen takes effect for contacts live', async () => {
+      const [anna, ben] = [await signUp(), await signUp()];
+      await direct(anna, ben);
+      const benSocket = await connect(ben);
+      await connect(anna);
+      await benSocket.waitFor('presence.changed', (p) => p.userId === anna.id && p.online === true);
+      await request(server())
+        .patch('/me/settings')
+        .set(bearer(anna.token))
+        .send({ lastSeenVisibility: 'nobody' })
+        .expect(200);
+      await benSocket.waitFor(
+        'presence.changed',
+        (p) => p.userId === anna.id && p.online === false && p.lastSeenAt === null,
+      );
+    });
+
+    it("the export includes conversations you've left, alongside your messages from them", async () => {
+      const [anna, ben, clara] = [await signUp(), await signUp(), await signUp()];
+      const group = await request(server())
+        .post('/conversations/group')
+        .set(bearer(anna.token))
+        .send({ title: 'G', memberIds: [ben.id, clara.id] })
+        .expect(201);
+      await request(server())
+        .post(`/conversations/${group.body.id as string}/messages`)
+        .set(bearer(ben.token))
+        .send({ clientMsgId: randomUUID(), body: 'bye all' })
+        .expect(201);
+      await request(server())
+        .post(`/conversations/${group.body.id as string}/leave`)
+        .set(bearer(ben.token))
+        .expect((r) => expect(r.status).toBeLessThan(300));
+      const res = await request(server()).get('/me/export').set(bearer(ben.token)).expect(200);
+      expect(res.body.conversations).toEqual([
+        expect.objectContaining({ id: group.body.id, leftAt: expect.any(String) }),
+      ]);
+      expect(res.body.messages.map((m: { body: string }) => m.body)).toEqual(['bye all']);
+    });
   });
 });

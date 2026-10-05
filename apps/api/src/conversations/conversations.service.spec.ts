@@ -28,7 +28,7 @@ vi.mock('../db/conversations.js', () => ({
   renameConversation: vi.fn(),
 }));
 vi.mock('../db/messages.js', () => ({ appendMessage: vi.fn() }));
-vi.mock('../db/users.js', () => ({ findUserById: vi.fn() }));
+vi.mock('../db/users.js', () => ({ findUserById: vi.fn(), listReadReceiptMemberIds: vi.fn() }));
 
 function makeUser(overrides: Partial<Record<string, unknown>> = {}) {
   return {
@@ -97,6 +97,7 @@ describe('ConversationsService (CHAT-018)', () => {
     addConversationForUser: ReturnType<typeof vi.fn>;
     removeConversationForUser: ReturnType<typeof vi.fn>;
     publishToConversation: ReturnType<typeof vi.fn>;
+    publishToUser: ReturnType<typeof vi.fn>;
   };
   let s3: { getAvatarUrl: ReturnType<typeof vi.fn> };
   let service: ConversationsService;
@@ -107,7 +108,9 @@ describe('ConversationsService (CHAT-018)', () => {
       addConversationForUser: vi.fn(),
       removeConversationForUser: vi.fn(),
       publishToConversation: vi.fn().mockResolvedValue(undefined),
+      publishToUser: vi.fn().mockResolvedValue(undefined),
     };
+    vi.mocked(usersDb.listReadReceiptMemberIds).mockResolvedValue(['user-1', 'user-2']);
     s3 = { getAvatarUrl: vi.fn().mockResolvedValue(null) };
     vi.mocked(messagesDb.appendMessage).mockResolvedValue(makeMessageRow());
     vi.mocked(blocksDb.hasBlockEitherDirection).mockResolvedValue(false);
@@ -538,13 +541,16 @@ describe('ConversationsService (CHAT-018)', () => {
 
       expect(conversationsDb.markConversationRead).toHaveBeenCalledWith({}, 'conv-1', 'user-1', 5);
       expect(result.lastReadSeq).toBe(5);
-      expect(realtime.publishToConversation).toHaveBeenCalledWith(
-        'conv-1',
-        expect.objectContaining({
-          type: 'conversation.read',
-          payload: { conversationId: 'conv-1', userId: 'user-1', lastReadSeq: 5 },
-        }),
-      );
+      // To every member with read receipts on (receipts are reciprocal), one by one.
+      for (const id of ['user-1', 'user-2']) {
+        expect(realtime.publishToUser).toHaveBeenCalledWith(
+          id,
+          expect.objectContaining({
+            type: 'conversation.read',
+            payload: { conversationId: 'conv-1', userId: 'user-1', lastReadSeq: 5 },
+          }),
+        );
+      }
     });
 
     it('does not broadcast when the seq does not actually advance anything', async () => {
@@ -597,13 +603,16 @@ describe('ConversationsService (CHAT-018)', () => {
         4,
       );
       expect(result.lastReadSeq).toBe(4);
-      expect(realtime.publishToConversation).toHaveBeenCalledWith(
-        'conv-1',
-        expect.objectContaining({
-          type: 'conversation.read',
-          payload: { conversationId: 'conv-1', userId: 'user-1', lastReadSeq: 4 },
-        }),
-      );
+      // To every member with read receipts on (receipts are reciprocal), one by one.
+      for (const id of ['user-1', 'user-2']) {
+        expect(realtime.publishToUser).toHaveBeenCalledWith(
+          id,
+          expect.objectContaining({
+            type: 'conversation.read',
+            payload: { conversationId: 'conv-1', userId: 'user-1', lastReadSeq: 4 },
+          }),
+        );
+      }
     });
 
     it('rejects a conversation with no messages yet', async () => {

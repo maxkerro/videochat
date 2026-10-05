@@ -76,3 +76,13 @@ export class MessageThrottlerGuard extends UserThrottlerGuard {
     return "You're sending messages too fast. Slow down and try again in a few seconds.";
   }
 }
+
+/** CHAT-037: data export, per signed-in user -- it reads everything the person ever sent. */
+@Injectable()
+export class ExportThrottlerGuard extends UserThrottlerGuard {
+  protected readonly limiterName = 'export';
+
+  protected override async getErrorMessage(): Promise<string> {
+    return 'You’ve exported your data several times recently. Please try again later.';
+  }
+}

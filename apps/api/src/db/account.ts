@@ -14,6 +14,7 @@ import {
   users,
   type AttachmentRow,
   type User,
+  type MessageRow,
 } from './schema.js';
 
 /** CHAT-037: applies a partial settings change. */
@@ -55,10 +56,13 @@ export async function listActiveConversationIds(db: DbExecutor, userId: string):
  * - the user row keeps only its id: email/username/name replaced, avatar and password cleared.
  * Returns the attachment rows whose stored files the caller must delete.
  */
-export async function eraseAccount(db: DbExecutor, userId: string): Promise<AttachmentRow[]> {
+export async function eraseAccount(
+  db: DbExecutor,
+  userId: string,
+): Promise<{ files: AttachmentRow[]; erased: MessageRow[] }> {
   // Only what they wrote or shared. Call entries are other people's record too (and carry no
   // content of theirs), so they stay.
-  await db
+  const erased = await db
     .update(messages)
     .set({ body: null, meta: null, deletedAt: sql`now()` })
     .where(
@@ -67,7 +71,8 @@ export async function eraseAccount(db: DbExecutor, userId: string): Promise<Atta
         isNull(messages.deletedAt),
         inArray(messages.type, ['text', 'image', 'file']),
       ),
-    );
+    )
+    .returning();
   const files = await db.delete(attachments).where(eq(attachments.uploaderId, userId)).returning();
   await db.delete(reactions).where(eq(reactions.userId, userId));
   await db.delete(devices).where(eq(devices.userId, userId));
@@ -94,7 +99,7 @@ export async function eraseAccount(db: DbExecutor, userId: string): Promise<Atta
       deletedAt: sql`now()`,
     })
     .where(eq(users.id, userId));
-  return files;
+  return { files, erased };
 }
 
 export interface ExportedMessage {
@@ -139,17 +144,18 @@ export async function listConversationsForExport(db: DbExecutor, userId: string)
     type: string;
     title: string | null;
     joined_at: Date;
+    left_at: Date | null;
     members: string[];
   }>(sql`
-    select c.id, c.type, c.title, me.joined_at,
+    select c.id, c.type, c.title, me.joined_at, me.left_at,
            coalesce(array_agg(u.display_name order by u.display_name)
              filter (where u.id is not null and u.id <> ${userId}), '{}') as members
     from ${memberships} me
     join ${conversations} c on c.id = me.conversation_id
     left join ${memberships} other on other.conversation_id = c.id and other.left_at is null
     left join ${users} u on u.id = other.user_id
-    where me.user_id = ${userId} and me.left_at is null
-    group by c.id, c.type, c.title, me.joined_at
+    where me.user_id = ${userId}
+    group by c.id, c.type, c.title, me.joined_at, me.left_at
     order by me.joined_at
   `);
   return result.rows;
