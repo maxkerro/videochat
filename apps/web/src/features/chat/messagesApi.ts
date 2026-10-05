@@ -1,5 +1,7 @@
 import {
   messagePageSchema,
+  messageReactionsSchema,
+  type MessageReactions,
   messageSchema,
   sendMessageSchema,
   type Message,
@@ -76,4 +78,19 @@ export function deleteMessage(
   return apiDelete(`/conversations/${conversationId}/messages/${messageId}`, messageSchema, {
     headers: authHeader(accessToken),
   });
+}
+
+/** CHAT-033: add a reaction, or remove it if you'd already reacted with that emoji. */
+export function toggleReaction(
+  accessToken: string,
+  conversationId: string,
+  messageId: string,
+  emoji: string,
+): Promise<MessageReactions> {
+  return apiPost(
+    `/conversations/${conversationId}/messages/${messageId}/reactions`,
+    messageReactionsSchema,
+    { emoji },
+    { headers: authHeader(accessToken) },
+  );
 }

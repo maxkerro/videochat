@@ -1,4 +1,4 @@
-import { LIMITS, type Message, type ReplyPreview } from '@videochat/shared';
+import { LIMITS, QUICK_REACTIONS, type Message, type ReplyPreview } from '@videochat/shared';
 import { useEffect, useRef, useState, type KeyboardEvent } from 'react';
 import { Button, Menu } from '../../components/ui';
 import { cx } from '../../lib/cx';
@@ -57,6 +57,8 @@ export interface MessageBubbleProps {
   onDelete: (message: Message) => void;
   onJumpTo: (reply: ReplyPreview) => void;
   onRemovePreview: (message: Message) => void;
+  onToggleReaction: (message: Message, emoji: string) => void;
+  onOpenPicker: (message: Message) => void;
 }
 
 /** One message in the list: reply quote, attachment, text, link preview, and its actions menu
@@ -72,6 +74,7 @@ export function MessageBubble(props: MessageBubbleProps) {
     ? []
     : [
         { label: 'Reply', onSelect: () => props.onReply(message) },
+        { label: 'Add reaction…', onSelect: () => props.onOpenPicker(message) },
         ...(canEdit ? [{ label: 'Edit', onSelect: () => props.onStartEdit(message) }] : []),
         ...(canDelete
           ? [
@@ -129,10 +132,69 @@ export function MessageBubble(props: MessageBubbleProps) {
           onRemove={isOwn ? () => props.onRemovePreview(message) : undefined}
         />
       )}
+      {!deleted && message.reactions && message.reactions.length > 0 && (
+        <div className={styles.reactions} role="group" aria-label="Reactions">
+          {message.reactions.map((r) => {
+            const mine = !!myUserId && r.userIds.includes(myUserId);
+            const names = r.userIds.map((id) => nameFor(id)).join(', ');
+            return (
+              <button
+                key={r.emoji}
+                type="button"
+                className={styles.reaction}
+                aria-pressed={mine}
+                aria-label={`${r.emoji} ${r.count}: ${names}. ${mine ? 'Remove your reaction' : 'React too'}`}
+                title={names}
+                onClick={() => props.onToggleReaction(message, r.emoji)}
+              >
+                <span aria-hidden="true">{r.emoji}</span>
+                <span className={styles.reactionCount} aria-hidden="true">
+                  {r.count}
+                </span>
+              </button>
+            );
+          })}
+        </div>
+      )}
       {(!grouped || message.editedAt || actions.length > 0) && (
         <div className={styles.meta}>
           {!grouped && <time className={styles.time}>{time}</time>}
           {message.editedAt && !deleted && <span className={styles.time}>(edited)</span>}
+          {actions.length > 0 && !editing && message.type !== 'system' && (
+            <Menu
+              align={isOwn ? 'end' : 'start'}
+              trigger={
+                <button type="button" className={styles.actions} aria-label="React">
+                  <svg width="16" height="16" viewBox="0 0 24 24" aria-hidden="true">
+                    <circle
+                      cx="12"
+                      cy="12"
+                      r="9"
+                      fill="none"
+                      stroke="currentColor"
+                      strokeWidth="1.8"
+                    />
+                    <path
+                      d="M8.5 14.5a4.5 4.5 0 0 0 7 0"
+                      fill="none"
+                      stroke="currentColor"
+                      strokeWidth="1.8"
+                      strokeLinecap="round"
+                    />
+                    <circle cx="9" cy="10" r="1.2" fill="currentColor" />
+                    <circle cx="15" cy="10" r="1.2" fill="currentColor" />
+                  </svg>
+                </button>
+              }
+              items={[
+                ...QUICK_REACTIONS.map((emoji) => ({
+                  label: emoji,
+                  onSelect: () => props.onToggleReaction(message, emoji),
+                })),
+                { label: 'More reactions…', onSelect: () => props.onOpenPicker(message) },
+              ]}
+            />
+          )}
           {actions.length > 0 && !editing && (
             <Menu
               align={isOwn ? 'end' : 'start'}

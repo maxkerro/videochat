@@ -1,6 +1,7 @@
-import { LIMITS, type Message, type ReplyPreview } from '@videochat/shared';
+import { LIMITS, type Message, type Reaction, type ReplyPreview } from '@videochat/shared';
 import type { DbExecutor } from '../db/client.js';
 import { findMessagesByIds } from '../db/messages.js';
+import { listReactions } from '../db/reactions.js';
 import type { MessageRow } from '../db/schema.js';
 
 /** CHAT-032: what a reply shows of its original -- nothing of the content once it's deleted. */
@@ -37,13 +38,21 @@ export function toReplyPreview(target: MessageRow): ReplyPreview {
  */
 export async function toMessages(db: DbExecutor, rows: MessageRow[]): Promise<Message[]> {
   const ids = [...new Set(rows.map((r) => r.replyToId).filter((id): id is string => !!id))];
-  const targets = new Map((await findMessagesByIds(db, ids)).map((t) => [t.id, t]));
+  const [targetRows, reactions] = await Promise.all([
+    findMessagesByIds(db, ids),
+    listReactions(
+      db,
+      rows.filter((r) => !r.deletedAt).map((r) => r.id),
+    ),
+  ]);
+  const targets = new Map(targetRows.map((t) => [t.id, t]));
   return rows.map((row) => {
     const target = row.replyToId ? targets.get(row.replyToId) : undefined;
     // Same conversation only -- the send path checks this, and so does the read path.
     return toMessage(
       row,
       target && target.conversationId === row.conversationId ? target : undefined,
+      reactions.get(row.id),
     );
   });
 }
@@ -52,7 +61,11 @@ export async function toMessageWithReply(db: DbExecutor, row: MessageRow): Promi
   return (await toMessages(db, [row]))[0]!;
 }
 
-export function toMessage(row: MessageRow, replyTarget?: MessageRow): Message {
+export function toMessage(
+  row: MessageRow,
+  replyTarget?: MessageRow,
+  reactions?: Reaction[],
+): Message {
   return {
     id: row.id,
     conversationId: row.conversationId,
@@ -76,5 +89,6 @@ export function toMessage(row: MessageRow, replyTarget?: MessageRow): Message {
       ? { linkPreview: row.meta.linkPreview }
       : {}),
     ...(replyTarget && !row.deletedAt ? { replyTo: toReplyPreview(replyTarget) } : {}),
+    ...(reactions?.length && !row.deletedAt ? { reactions } : {}),
   };
 }

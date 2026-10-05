@@ -5,10 +5,11 @@ import { LinkPreviewsModule } from '../link-previews/link-previews.module.js';
 import { RealtimeModule } from '../realtime/realtime.module.js';
 import { MessagesController } from './messages.controller.js';
 import { MessagesService } from './messages.service.js';
+import { ReactionsService } from './reactions.service.js';
 
 @Module({
   imports: [AuthModule, RealtimeModule, AttachmentsModule, LinkPreviewsModule],
   controllers: [MessagesController],
-  providers: [MessagesService],
+  providers: [MessagesService, ReactionsService],
 })
 export class MessagesModule {}

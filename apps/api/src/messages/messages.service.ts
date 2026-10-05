@@ -17,6 +17,7 @@ import { randomUUID } from 'node:crypto';
 import type { Database } from '../db/client.js';
 import { isSenderBlockedInDirectConversation } from '../db/blocks.js';
 import { findAttachmentsForMessage } from '../db/attachments.js';
+import { deleteReactionsForMessage } from '../db/reactions.js';
 import { findConversationForUser, isConversationMember } from '../db/conversations.js';
 import {
   appendMessageWithStatus,
@@ -205,6 +206,7 @@ export class MessagesService {
     const deleted = await softDeleteMessage(this.db, messageId);
     if (!deleted) return toMessageWithReply(this.db, (await findMessage(this.db, messageId))!);
     await this.attachments.deleteRows(await findAttachmentsForMessage(this.db, messageId));
+    await deleteReactionsForMessage(this.db, messageId);
     return this.publishUpdated(deleted);
   }
 

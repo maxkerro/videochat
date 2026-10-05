@@ -3,6 +3,7 @@ import {
   Controller,
   Delete,
   Get,
+  HttpCode,
   Param,
   Patch,
   Post,
@@ -11,6 +12,8 @@ import {
 } from '@nestjs/common';
 import {
   editMessageSchema,
+  toggleReactionSchema,
+  type MessageReactions,
   messagesPageQuerySchema,
   sendMessageSchema,
   type Message,
@@ -23,11 +26,15 @@ import { UuidParamPipe } from '../common/uuid-param.pipe.js';
 import { ZodValidationPipe } from '../common/zod-validation.pipe.js';
 import { MessageThrottlerGuard } from '../rate-limit/rate-limit.guards.js';
 import { MessagesService } from './messages.service.js';
+import { ReactionsService } from './reactions.service.js';
 
 @Controller('conversations/:conversationId/messages')
 @UseGuards(AccessTokenGuard)
 export class MessagesController {
-  constructor(private readonly messages: MessagesService) {}
+  constructor(
+    private readonly messages: MessagesService,
+    private readonly reactions: ReactionsService,
+  ) {}
 
   @Get()
   list(
@@ -78,5 +85,18 @@ export class MessagesController {
     @CurrentUserId() userId: string,
   ): Promise<Message> {
     return this.messages.delete(conversationId, userId, messageId);
+  }
+
+  /** CHAT-033: add a reaction, or remove it if you already reacted with that emoji. */
+  @Post(':messageId/reactions')
+  @HttpCode(200)
+  @UseGuards(MessageThrottlerGuard)
+  toggleReaction(
+    @Param('conversationId', UuidParamPipe) conversationId: string,
+    @Param('messageId', UlidParamPipe) messageId: string,
+    @CurrentUserId() userId: string,
+    @Body(new ZodValidationPipe(toggleReactionSchema)) body: z.infer<typeof toggleReactionSchema>,
+  ): Promise<MessageReactions> {
+    return this.reactions.toggle(conversationId, userId, messageId, body.emoji);
   }
 }

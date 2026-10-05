@@ -49,7 +49,12 @@ export const LIMITS = {
   messageEditWindowMinutes: 15,
   /** CHAT-032: how much of the original a reply quote carries. */
   replySnippetLength: 200,
+  /** CHAT-033: distinct emoji one message can collect. */
+  reactionsPerMessageMax: 20,
 } as const;
+
+/** CHAT-033: the quick reactions offered first; any other emoji comes from the full picker. */
+export const QUICK_REACTIONS = ['👍', '❤️', '😂', '😮', '😢', '🙏'] as const;
 
 /** CHAT-030: images get a thumbnail and open in the lightbox; anything else is a download card. */
 export const ATTACHMENT_KINDS = ['image', 'file'] as const;

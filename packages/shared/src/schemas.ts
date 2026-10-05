@@ -310,6 +310,45 @@ export const replyPreviewSchema = z.object({
 });
 export type ReplyPreview = z.infer<typeof replyPreviewSchema>;
 
+/** CHAT-033: a single emoji (with any skin-tone / ZWJ / variation selectors), nothing else. */
+export const emojiSchema = z
+  .string()
+  .min(1)
+  .max(32)
+  .regex(
+    /^(?:\p{Extended_Pictographic}|\p{Regional_Indicator}|\u200d|\ufe0f|\u20e3|\p{Emoji_Modifier}|[#*0-9])+$/u,
+    'Not an emoji',
+  )
+  .refine((v) => /\p{Extended_Pictographic}|\p{Regional_Indicator}/u.test(v), 'Not an emoji')
+  // One emoji, not several in a row (a flag or a ZWJ family still counts as one).
+  .refine(
+    (v) =>
+      typeof Intl === 'undefined' ||
+      typeof Intl.Segmenter !== 'function' ||
+      [...new Intl.Segmenter(undefined, { granularity: 'grapheme' }).segment(v)].length === 1,
+    'One emoji at a time',
+  );
+
+/** CHAT-033: one emoji's reactions on a message -- who, so "you reacted" and the hover list need
+ *  no extra request (groups are capped at 100 members). */
+export const reactionSchema = z.object({
+  emoji: emojiSchema,
+  count: z.number().int().positive(),
+  userIds: z.array(z.uuid()),
+});
+export type Reaction = z.infer<typeof reactionSchema>;
+
+export const toggleReactionSchema = z.object({ emoji: emojiSchema });
+export type ToggleReactionInput = z.infer<typeof toggleReactionSchema>;
+
+/** CHAT-033: payload of the `message.reactions` realtime event (and the toggle's response). */
+export const messageReactionsSchema = z.object({
+  conversationId: z.uuid(),
+  messageId: ulidSchema,
+  reactions: z.array(reactionSchema),
+});
+export type MessageReactions = z.infer<typeof messageReactionsSchema>;
+
 export const messageSchema = z.object({
   id: ulidSchema,
   conversationId: z.uuid(),
@@ -331,6 +370,8 @@ export const messageSchema = z.object({
   linkPreview: linkPreviewSchema.optional(),
   /** CHAT-032: the message this one replies to (when `replyToId` is set and it still exists). */
   replyTo: replyPreviewSchema.optional(),
+  /** CHAT-033: grouped by emoji, in the order each was first used. Omitted when there are none. */
+  reactions: z.array(reactionSchema).optional(),
 });
 export type Message = z.infer<typeof messageSchema>;
 

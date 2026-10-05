@@ -400,3 +400,58 @@
     transition: none;
   }
 }
+
+/* CHAT-033: reactions. */
+.reactions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-1);
+}
+.reaction {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  height: 26px;
+  padding: 0 var(--space-2);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-full);
+  background: var(--color-surface);
+  color: var(--color-text);
+  font-size: var(--text-sm);
+  cursor: pointer;
+}
+.reaction[aria-pressed='true'] {
+  border-color: var(--color-accent);
+  background: var(--color-accent-soft);
+}
+.reaction:hover {
+  border-color: var(--color-border-strong);
+}
+.reactionCount {
+  font-size: var(--text-xs);
+  font-variant-numeric: tabular-nums;
+}
+.emojiGrid {
+  display: grid;
+  grid-template-columns: repeat(8, 1fr);
+  gap: var(--space-1);
+}
+.emojiButton {
+  display: grid;
+  place-items: center;
+  aspect-ratio: 1;
+  border: 0;
+  border-radius: var(--radius-md);
+  background: transparent;
+  font-size: 1.4rem;
+  cursor: pointer;
+}
+.emojiButton:hover,
+.emojiButton:focus-visible {
+  background: var(--color-surface-sunken);
+}
+@media (max-width: 420px) {
+  .emojiGrid {
+    grid-template-columns: repeat(6, 1fr);
+  }
+}

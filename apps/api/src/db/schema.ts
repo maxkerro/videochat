@@ -332,6 +332,25 @@ export const calls = pgTable(
   ],
 );
 
+/** CHAT-033: one person's emoji on one message. Toggling = insert or delete this row. */
+export const reactions = pgTable(
+  'reactions',
+  {
+    messageId: char('message_id', { length: 26 })
+      .notNull()
+      .references(() => messages.id, { onDelete: 'cascade' }),
+    userId: uuid('user_id')
+      .notNull()
+      .references(() => users.id, { onDelete: 'cascade' }),
+    emoji: text('emoji').notNull(),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [
+    primaryKey({ columns: [t.messageId, t.userId, t.emoji] }),
+    check('reactions_emoji_length_ck', sql`char_length(${t.emoji}) between 1 and 32`),
+  ],
+);
+
 export const attachmentKind = pgEnum('attachment_kind', ATTACHMENT_KINDS);
 
 /**
@@ -386,3 +405,4 @@ export type NewMessageRow = typeof messages.$inferInsert;
 export type BlockRow = typeof blocks.$inferSelect;
 export type CallRow = typeof calls.$inferSelect;
 export type AttachmentRow = typeof attachments.$inferSelect;
+export type ReactionRow = typeof reactions.$inferSelect;

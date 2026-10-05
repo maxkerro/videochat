@@ -3,6 +3,7 @@ import type { Database } from '../db/client.js';
 import * as blocksDb from '../db/blocks.js';
 import * as attachmentsDb from '../db/attachments.js';
 import * as conversationsDb from '../db/conversations.js';
+import * as reactionsDb from '../db/reactions.js';
 import * as messagesDb from '../db/messages.js';
 import { SenderNotAMemberError } from '../db/messages.js';
 import type { AttachmentsService } from '../attachments/attachments.service.js';
@@ -16,6 +17,10 @@ vi.mock('../db/conversations.js', () => ({
   findConversationForUser: vi.fn(),
 }));
 vi.mock('../db/attachments.js', () => ({ findAttachmentsForMessage: vi.fn() }));
+vi.mock('../db/reactions.js', () => ({
+  listReactions: vi.fn(),
+  deleteReactionsForMessage: vi.fn(),
+}));
 vi.mock('../db/messages.js', async () => {
   const actual = await vi.importActual<typeof import('../db/messages.js')>('../db/messages.js');
   return {
@@ -69,6 +74,7 @@ describe('MessagesService', () => {
     };
     linkPreviews = { attachToMessage: vi.fn().mockResolvedValue(undefined) };
     vi.mocked(messagesDb.findMessagesByIds).mockResolvedValue([]);
+    vi.mocked(reactionsDb.listReactions).mockResolvedValue(new Map());
     // The service uses appendMessageWithStatus; tests stub appendMessage's result and assert on it.
     vi.mocked(messagesDb.appendMessageWithStatus).mockImplementation(async (db, input) => ({
       row: await messagesDb.appendMessage(db, input),
@@ -355,6 +361,7 @@ describe('MessagesService', () => {
       expect(tombstone).toMatchObject({ body: null });
       expect(tombstone.deletedAt).not.toBeNull();
       expect(attachments.deleteRows).toHaveBeenCalledWith([{ id: 'a' }]);
+      expect(reactionsDb.deleteReactionsForMessage).toHaveBeenCalledWith({}, 'm');
       expect(realtime.publishToConversation).toHaveBeenCalled();
     });
 

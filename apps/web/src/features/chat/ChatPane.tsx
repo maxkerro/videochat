@@ -2,6 +2,7 @@ import { useInfiniteQuery, useMutation, useQuery, useQueryClient } from '@tansta
 import { useVirtualizer } from '@tanstack/react-virtual';
 import {
   conversationReadEventSchema,
+  messageReactionsSchema,
   LIMITS,
   messageSchema,
   typingEventSchema,
@@ -39,14 +40,26 @@ import { PendingUploads } from '../attachments/PendingUploads';
 import { useAttachmentUploads } from '../attachments/useAttachmentUploads';
 import { CallButtons } from '../calls/CallButtons';
 import { LinkPreviewCard } from '../linkPreviews/LinkPreviewCard';
+import { EmojiPicker } from './EmojiPicker';
 import { MessageBubble, replyQuoteText } from './MessageBubble';
 import { removeLinkPreview } from '../linkPreviews/linkPreviewsApi';
 import { useComposerLinkPreview } from '../linkPreviews/useComposerLinkPreview';
 import { CallHistoryEntry } from '../calls/CallHistoryEntry';
 import { useAuth, withAuthRetry } from '../auth/AuthContext';
 import { linkify } from './linkify';
-import { appendToLatestPage, replaceMessage, type MessagesData } from './messagesCache';
-import { deleteMessage, editMessage, fetchMessages, sendMessage } from './messagesApi';
+import {
+  appendToLatestPage,
+  replaceMessage,
+  setMessageReactions,
+  type MessagesData,
+} from './messagesCache';
+import {
+  deleteMessage,
+  editMessage,
+  fetchMessages,
+  sendMessage,
+  toggleReaction,
+} from './messagesApi';
 import { ReadReceiptThrottle } from './readReceipts';
 import { useRealtimeEvent, useSendTyping } from './RealtimeProvider';
 import { TypingThrottle } from './typingThrottle';
@@ -231,6 +244,7 @@ export function ChatPane() {
   const [editingId, setEditingId] = useState<string | null>(null);
   const [deleteTarget, setDeleteTarget] = useState<Message | null>(null);
   const [highlightId, setHighlightId] = useState<string | null>(null);
+  const [pickerTarget, setPickerTarget] = useState<Message | null>(null);
 
   // `ChatPane` stays mounted across a conversation switch, so an in-progress draft would
   // otherwise follow the person into the next conversation and could get sent to the wrong
@@ -363,6 +377,17 @@ export function ChatPane() {
     if (!parsed.success) return;
     queryClient.setQueryData<MessagesData>(['messages', parsed.data.conversationId], (old) =>
       replaceMessage(old, parsed.data),
+    );
+  });
+
+  // CHAT-033: someone (maybe us, on another device) reacted.
+  useRealtimeEvent((envelope: WsEnvelope) => {
+    if (envelope.type !== 'message.reactions') return;
+    const parsed = messageReactionsSchema.safeParse(envelope.payload);
+    if (!parsed.success) return;
+    const { conversationId: convId, messageId, reactions } = parsed.data;
+    queryClient.setQueryData<MessagesData>(['messages', convId], (old) =>
+      setMessageReactions(old, messageId, reactions),
     );
   });
 
@@ -711,6 +736,23 @@ export function ChatPane() {
     }
   }
 
+  function react(message: Message, emoji: string) {
+    void withAuthRetry(auth, (token) =>
+      toggleReaction(token, message.conversationId, message.id, emoji),
+    )
+      .then((result) =>
+        queryClient.setQueryData<MessagesData>(['messages', result.conversationId], (old) =>
+          setMessageReactions(old, result.messageId, result.reactions),
+        ),
+      )
+      .catch((error: unknown) =>
+        toast({
+          title: error instanceof ApiError ? error.message : 'Couldn’t add that reaction',
+          tone: 'danger',
+        }),
+      );
+  }
+
   function removePreview(message: Message) {
     void withAuthRetry(auth, (token) =>
       removeLinkPreview(token, message.conversationId, message.id),
@@ -970,6 +1012,8 @@ export function ChatPane() {
                           onDelete={setDeleteTarget}
                           onJumpTo={(reply) => void jumpTo(reply)}
                           onRemovePreview={removePreview}
+                          onToggleReaction={react}
+                          onOpenPicker={setPickerTarget}
                         />
                       )}
                     {row.kind === 'pending' && (
@@ -1128,6 +1172,12 @@ export function ChatPane() {
           Send
         </Button>
       </form>
+
+      <EmojiPicker
+        open={pickerTarget !== null}
+        onOpenChange={(open) => !open && setPickerTarget(null)}
+        onPick={(emoji) => pickerTarget && react(pickerTarget, emoji)}
+      />
 
       <Modal
         open={deleteTarget !== null}

@@ -1,5 +1,5 @@
 import type { InfiniteData } from '@tanstack/react-query';
-import type { Message, MessagePage } from '@videochat/shared';
+import type { Message, MessagePage, Reaction } from '@videochat/shared';
 
 export type MessagesData = InfiniteData<MessagePage, number | undefined>;
 
@@ -39,6 +39,29 @@ export function replaceMessage(
     if (!page.messages.some((m) => m.id === message.id)) return page;
     changed = true;
     return { ...page, messages: page.messages.map((m) => (m.id === message.id ? message : m)) };
+  });
+  return changed ? { ...data, pages } : data;
+}
+
+/** CHAT-033: applies a message's new reaction set, wherever it's loaded. */
+export function setMessageReactions(
+  data: MessagesData | undefined,
+  messageId: string,
+  reactions: Reaction[],
+): MessagesData | undefined {
+  if (!data) return data;
+  let changed = false;
+  const pages = data.pages.map((page) => {
+    if (!page.messages.some((m) => m.id === messageId)) return page;
+    changed = true;
+    return {
+      ...page,
+      messages: page.messages.map((m) => {
+        if (m.id !== messageId) return m;
+        const { reactions: _old, ...rest } = m;
+        return reactions.length ? { ...rest, reactions } : rest;
+      }),
+    };
   });
   return changed ? { ...data, pages } : data;
 }

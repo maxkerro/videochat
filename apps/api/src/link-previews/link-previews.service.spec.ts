@@ -11,6 +11,7 @@ vi.mock('../db/messages.js', () => ({
   findMessage: vi.fn(),
   findMessagesByIds: vi.fn(async () => []),
 }));
+vi.mock('../db/reactions.js', () => ({ listReactions: vi.fn(async () => new Map()) }));
 vi.mock('../db/conversations.js', () => ({ isConversationMember: vi.fn(async () => true) }));
 
 const preview = {

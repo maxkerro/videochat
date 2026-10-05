@@ -9,6 +9,7 @@ import {
   messagesPageQuerySchema,
   renameConversationSchema,
   callStatsSchema,
+  emojiSchema,
   isEmailIdentifier,
   loginRequestSchema,
   sendMessageSchema,
@@ -255,5 +256,14 @@ describe('loginRequestSchema (CHAT-080)', () => {
   it('tells emails from usernames by the @', () => {
     expect(isEmailIdentifier('ada@example.com')).toBe(true);
     expect(isEmailIdentifier('ada_l')).toBe(false);
+  });
+});
+
+describe('emojiSchema (CHAT-033)', () => {
+  it.each(['👍', '❤️', '👍🏽', '👨‍👩‍👧', '🇩🇪'])('accepts %s', (e) => {
+    expect(emojiSchema.safeParse(e).success).toBe(true);
+  });
+  it.each(['a', '1', '👍 ', '<b>', '😀😀', ''])('refuses %j', (e) => {
+    expect(emojiSchema.safeParse(e).success).toBe(false);
   });
 });

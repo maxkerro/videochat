@@ -880,6 +880,76 @@ describe('ChatPane', () => {
     });
   });
 
+  describe('CHAT-033 reactions', () => {
+    it('reacts from the quick menu, shows the chip, and applies a live update from others', async () => {
+      const posted: string[] = [];
+      const target = message({ body: 'nice' });
+      vi.stubGlobal(
+        'fetch',
+        routedFetch({
+          'POST /auth/refresh': () => jsonResponse(session()),
+          [`GET /conversations/${conversationId}`]: () => jsonResponse(conversation()),
+          [`GET /conversations/${conversationId}/messages`]: () =>
+            jsonResponse({ messages: [target], hasMore: false }),
+          [`POST /conversations/${conversationId}/messages/${target.id}/reactions`]: (_u, init) => {
+            const { emoji } = JSON.parse(String(init?.body)) as { emoji: string };
+            posted.push(emoji);
+            return jsonResponse({
+              conversationId,
+              messageId: target.id,
+              reactions: [{ emoji, count: 1, userIds: [baseUser.id] }],
+            });
+          },
+        }),
+      );
+      renderApp(`/c/${conversationId}`);
+      await screen.findByText('nice');
+      await userEvent.click(screen.getByRole('button', { name: 'React' }));
+      await userEvent.click(await screen.findByRole('menuitem', { name: '👍' }));
+      const chip = await screen.findByRole('button', { name: /^👍 1: You/ });
+      expect(chip).toHaveAttribute('aria-pressed', 'true');
+      expect(posted).toEqual(['👍']);
+
+      await waitFor(() => expect(FakeWebSocket.instances).toHaveLength(1));
+      const socket = FakeWebSocket.instances[0]!;
+      socket.emit('open');
+      socket.emit('message', {
+        data: JSON.stringify(
+          makeEnvelope(
+            'message.reactions',
+            {
+              conversationId,
+              messageId: target.id,
+              reactions: [{ emoji: '👍', count: 2, userIds: [baseUser.id, peer.id] }],
+            },
+            'e1',
+          ),
+        ),
+      });
+      expect(
+        await screen.findByRole('button', { name: /^👍 2: You, Ben Okafor/ }),
+      ).toBeInTheDocument();
+    });
+
+    it('opens the full picker from the actions menu (keyboard path)', async () => {
+      vi.stubGlobal(
+        'fetch',
+        routedFetch({
+          'POST /auth/refresh': () => jsonResponse(session()),
+          [`GET /conversations/${conversationId}`]: () => jsonResponse(conversation()),
+          [`GET /conversations/${conversationId}/messages`]: () =>
+            jsonResponse({ messages: [message({ body: 'pick' })], hasMore: false }),
+        }),
+      );
+      renderApp(`/c/${conversationId}`);
+      await screen.findByText('pick');
+      await userEvent.click(screen.getByRole('button', { name: 'Message actions' }));
+      await userEvent.click(await screen.findByRole('menuitem', { name: 'Add reaction…' }));
+      expect(await screen.findByRole('dialog', { name: 'Add a reaction' })).toBeInTheDocument();
+      expect(screen.getByRole('button', { name: 'React with rocket' })).toBeInTheDocument();
+    });
+  });
+
   describe('CHAT-018 groups', () => {
     const groupId = '77777777-7777-4777-8777-777777777777';
 

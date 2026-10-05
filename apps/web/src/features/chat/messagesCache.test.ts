@@ -1,5 +1,5 @@
 import type { Message } from '@videochat/shared';
-import { replaceMessage, type MessagesData } from './messagesCache';
+import { replaceMessage, setMessageReactions, type MessagesData } from './messagesCache';
 
 function msg(id: string, body: string): Message {
   return {
@@ -35,5 +35,19 @@ describe('replaceMessage', () => {
   it('leaves the cache untouched for a message that is not loaded', () => {
     expect(replaceMessage(data, msg('C'.repeat(26), 'x'))).toBe(data);
     expect(replaceMessage(undefined, msg('C'.repeat(26), 'x'))).toBeUndefined();
+  });
+});
+
+describe('setMessageReactions', () => {
+  const data: MessagesData = {
+    pages: [{ messages: [msg('A'.repeat(26), 'x')], hasMore: false }],
+    pageParams: [undefined],
+  };
+  it("sets and clears a message's reactions", () => {
+    const r = [{ emoji: '👍', count: 1, userIds: ['11111111-1111-4111-8111-111111111111'] }];
+    const withR = setMessageReactions(data, 'A'.repeat(26), r)!;
+    expect(withR.pages[0]!.messages[0]!.reactions).toEqual(r);
+    const cleared = setMessageReactions(withR, 'A'.repeat(26), [])!;
+    expect(cleared.pages[0]!.messages[0]).not.toHaveProperty('reactions');
   });
 });
