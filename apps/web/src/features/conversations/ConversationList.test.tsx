@@ -2,6 +2,7 @@ import { screen, waitFor, within } from '@testing-library/react';
 import { makeEnvelope } from '@videochat/shared';
 import { jsonResponse } from '../../test/mockFetch';
 import { renderApp } from '../../test/renderApp';
+import { previewFor } from './ConversationList';
 
 const baseUser = {
   id: '11111111-1111-4111-8111-111111111111',
@@ -280,5 +281,38 @@ describe('ConversationList', () => {
     expect(links[0]).toHaveTextContent('Clara Novak');
     expect(links[1]).toHaveTextContent('Ben Okafor');
     expect(within(links[1]!).queryByLabelText(/unread/)).not.toBeInTheDocument();
+  });
+});
+
+describe('previewFor (CHAT-030 attachments)', () => {
+  const me = '11111111-1111-4111-8111-111111111111';
+  const base = {
+    id: '33333333-3333-4333-8333-333333333333',
+    type: 'direct' as const,
+    title: null,
+    lastSeq: 1,
+    lastMessageAt: null,
+    role: 'member' as const,
+    lastReadSeq: 1,
+    peer: null,
+    peerLastReadSeq: null,
+  };
+
+  it('previews a photo, a file and a captioned attachment', () => {
+    const photo = {
+      type: 'image' as const,
+      senderId: 'x',
+      body: null,
+      attachment: { kind: 'image' as const, filename: 'a.jpg' },
+    };
+    expect(previewFor({ ...base, lastMessage: photo }, me)).toBe('Photo');
+    expect(previewFor({ ...base, lastMessage: { ...photo, senderId: me } }, me)).toBe('You: Photo');
+    const file = {
+      type: 'file' as const,
+      senderId: 'x',
+      body: 'numbers',
+      attachment: { kind: 'file' as const, filename: 'q3.pdf' },
+    };
+    expect(previewFor({ ...base, lastMessage: file }, me)).toBe('q3.pdf · numbers');
   });
 });

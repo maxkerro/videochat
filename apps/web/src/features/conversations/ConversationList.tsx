@@ -27,6 +27,12 @@ export function previewFor(
   const last = conversation.lastMessage;
   if (!last) return '';
   if (last.call) return callHistoryText(last.call, myUserId);
+  if (last.attachment) {
+    // CHAT-030: "Photo" / the file's name, with the caption if there is one.
+    const what = last.attachment.kind === 'image' ? 'Photo' : last.attachment.filename;
+    const text = last.body ? `${what} · ${last.body}` : what;
+    return last.senderId === myUserId ? `You: ${text}` : text;
+  }
   if (last.body === null) return 'Message deleted';
   if (last.type === 'system') return last.body;
   return last.senderId === myUserId ? `You: ${last.body}` : last.body;
@@ -103,6 +109,14 @@ export function ConversationList() {
           senderId: message.senderId,
           body: message.body,
           ...(message.call ? { call: message.call } : {}),
+          ...(message.attachment
+            ? {
+                attachment: {
+                  kind: message.attachment.kind,
+                  filename: message.attachment.filename,
+                },
+              }
+            : {}),
         },
         // Sending counts as having read your own message (mirrors appendMessage's own
         // bookkeeping server-side), so your own outgoing messages never show up as unread here.
