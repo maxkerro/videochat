@@ -27,6 +27,7 @@ vi.mock('./password.js', () => ({
   hashPassword: vi.fn(async (p: string) => `hashed:${p}`),
   verifyPassword: vi.fn(),
   verifyAgainstDummyHash: vi.fn().mockResolvedValue(undefined),
+  warmDummyHash: vi.fn().mockResolvedValue(undefined),
 }));
 
 import * as authTokensDb from '../db/auth-tokens.js';

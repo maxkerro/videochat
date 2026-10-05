@@ -4,6 +4,7 @@ import {
   ForbiddenException,
   Inject,
   Injectable,
+  type OnModuleInit,
   UnauthorizedException,
 } from '@nestjs/common';
 import { JwtService } from '@nestjs/jwt';
@@ -38,7 +39,7 @@ import {
   resetFailedLogins,
   setPasswordHash,
 } from '../db/users.js';
-import { hashPassword, verifyAgainstDummyHash, verifyPassword } from './password.js';
+import { hashPassword, verifyAgainstDummyHash, verifyPassword, warmDummyHash } from './password.js';
 import { generateOpaqueToken, hashToken } from './tokens.js';
 import { MailService } from '../mail/mail.service.js';
 import { S3Service } from '../storage/s3.service.js';
@@ -56,7 +57,7 @@ export interface IssuedSession {
 export const INVALID_LOGIN_MESSAGE = 'Incorrect email/username or password';
 
 @Injectable()
-export class AuthService {
+export class AuthService implements OnModuleInit {
   constructor(
     @Inject(DB) private readonly db: Database,
     @Inject(ENV) private readonly env: Env,
@@ -64,6 +65,10 @@ export class AuthService {
     private readonly mail: MailService,
     private readonly s3: S3Service,
   ) {}
+
+  onModuleInit(): Promise<void> {
+    return warmDummyHash();
+  }
 
   async signUp(input: SignUpInput): Promise<void> {
     if (await findUserByEmail(this.db, input.email)) {
@@ -138,6 +143,10 @@ export class AuthService {
       throw invalid();
     }
 
+    // Known trade-off (CHAT-081): with username login, anyone who has seen a username in a chat
+    // can lock that account by failing on purpose, and the per-IP throttler doesn't stop that
+    // when spread across IPs. Accepted for now -- the lock is short (LIMITS.loginLockoutMinutes)
+    // -- with softer options (progressive delay, lock bypass after an email step) tracked there.
     if (user.lockedUntil && user.lockedUntil.getTime() > Date.now()) {
       throw new ForbiddenException('Too many failed attempts. Try again in a few minutes.');
     }

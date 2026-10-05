@@ -3,6 +3,7 @@ import {
   hashPassword,
   resetDummyHashForTests,
   verifyAgainstDummyHash,
+  warmDummyHash,
   verifyPassword,
 } from './password.js';
 
@@ -43,5 +44,27 @@ describe('password hashing (Argon2id)', () => {
     // ...and cached the successful one.
     await verifyAgainstDummyHash('y');
     expect(vi.mocked(argon2.hash).mock.calls.length).toBe(callsAfterFailure + 1);
+  });
+
+  it('shares one in-flight dummy hash between concurrent calls, and recovers after it fails', async () => {
+    resetDummyHashForTests();
+    const before = vi.mocked(argon2.hash).mock.calls.length;
+    vi.mocked(argon2.hash).mockRejectedValueOnce(new Error('transient'));
+    // Both calls await the same failing promise; neither throws, and only one hash was attempted.
+    await expect(
+      Promise.all([verifyAgainstDummyHash('a'), verifyAgainstDummyHash('b')]),
+    ).resolves.toEqual([undefined, undefined]);
+    expect(vi.mocked(argon2.hash).mock.calls.length).toBe(before + 1);
+    // The failure wasn't cached: the next pair builds one fresh hash and shares it.
+    await Promise.all([verifyAgainstDummyHash('c'), verifyAgainstDummyHash('d')]);
+    expect(vi.mocked(argon2.hash).mock.calls.length).toBe(before + 2);
+  });
+
+  it('warms the dummy hash so the first unknown-account login reuses it', async () => {
+    resetDummyHashForTests();
+    await warmDummyHash();
+    const afterWarm = vi.mocked(argon2.hash).mock.calls.length;
+    await verifyAgainstDummyHash('x');
+    expect(vi.mocked(argon2.hash).mock.calls.length).toBe(afterWarm);
   });
 });

@@ -41,23 +41,35 @@ let dummyHash: Promise<string> | undefined;
  * email/username matched no account. Without it an unknown account answers an Argon2-run faster
  * than a known one, which undoes the "same answer either way" error message. Not perfectly equal:
  * a wrong password on a real account also records the failed attempt (one DB write) -- a far
- * smaller gap. The dummy hash is made once (same parameters as real hashes) and reused; the result
- * is always discarded.
+ * smaller gap. A *locked* account also answers before any Argon2 work, with its own 403 -- that
+ * reveals the account exists (deliberately: the user needs to know why they can't log in), and
+ * predates CHAT-080. The dummy hash is made once (same parameters as real hashes; warmed at
+ * startup by {@link warmDummyHash}) and reused; the result is always discarded.
  *
  * Never throws: a failure here must not turn an unknown-account login into a 500 (an outage, and
  * an account-existence signal of its own). A failed dummy hash isn't cached, so the next call
  * retries it.
  */
+function getDummyHash(): Promise<string> {
+  dummyHash ??= hashPassword(`dummy-${Math.random()}`).catch((err: unknown) => {
+    dummyHash = undefined;
+    throw err;
+  });
+  return dummyHash;
+}
+
 export async function verifyAgainstDummyHash(plain: string): Promise<void> {
   try {
-    dummyHash ??= hashPassword(`dummy-${Math.random()}`).catch((err: unknown) => {
-      dummyHash = undefined;
-      throw err;
-    });
-    await verify(await dummyHash, plain);
+    await verify(await getDummyHash(), plain);
   } catch {
     // Discarded on purpose -- see above.
   }
+}
+
+/** Builds the dummy hash at startup, so the first unknown-account login isn't the one that pays
+ *  for creating it (a one-off timing difference). Never throws; a failure is retried lazily. */
+export async function warmDummyHash(): Promise<void> {
+  await getDummyHash().catch(() => undefined);
 }
 
 /** Test-only: forget the cached dummy hash. */
