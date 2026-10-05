@@ -950,6 +950,37 @@ describe('ChatPane', () => {
     });
   });
 
+  describe('CHAT-034 presence', () => {
+    it('shows the peer as online and follows presence.changed', async () => {
+      vi.stubGlobal(
+        'fetch',
+        routedFetch({
+          'POST /auth/refresh': () => jsonResponse(session()),
+          [`GET /conversations/${conversationId}`]: () => jsonResponse(conversation()),
+          [`GET /conversations/${conversationId}/messages`]: () =>
+            jsonResponse({ messages: [], hasMore: false }),
+          'GET /presence': () =>
+            jsonResponse([{ userId: peer.id, online: true, lastSeenAt: null }]),
+        }),
+      );
+      renderApp(`/c/${conversationId}`);
+      expect(await screen.findByText('Online')).toBeInTheDocument();
+      await waitFor(() => expect(FakeWebSocket.instances).toHaveLength(1));
+      const socket = FakeWebSocket.instances[0]!;
+      socket.emit('open');
+      socket.emit('message', {
+        data: JSON.stringify(
+          makeEnvelope(
+            'presence.changed',
+            { userId: peer.id, online: false, lastSeenAt: new Date().toISOString() },
+            'p1',
+          ),
+        ),
+      });
+      expect(await screen.findByText('Last seen just now')).toBeInTheDocument();
+    });
+  });
+
   describe('CHAT-018 groups', () => {
     const groupId = '77777777-7777-4777-8777-777777777777';
 

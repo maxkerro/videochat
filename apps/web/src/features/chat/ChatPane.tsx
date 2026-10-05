@@ -44,6 +44,7 @@ import { EmojiPicker } from './EmojiPicker';
 import { MessageBubble, replyQuoteText } from './MessageBubble';
 import { removeLinkPreview } from '../linkPreviews/linkPreviewsApi';
 import { useComposerLinkPreview } from '../linkPreviews/useComposerLinkPreview';
+import { presenceLabel, usePresence } from '../presence/presence';
 import { CallHistoryEntry } from '../calls/CallHistoryEntry';
 import { useAuth, withAuthRetry } from '../auth/AuthContext';
 import { linkify } from './linkify';
@@ -302,6 +303,9 @@ export function ChatPane() {
     onRejected: (reason) => toast({ title: reason, tone: 'danger' }),
   });
   const peer = conversationQuery.data?.peer;
+  // CHAT-034: "Online" / "Last seen ..." under a direct conversation's title.
+  const presenceIds = useMemo(() => (peer ? [peer.id] : []), [peer]);
+  const peerPresence = usePresence(presenceIds).get(peer?.id ?? '');
   const blockedUsersQuery = useQuery({
     queryKey: ['blocked-users'],
     queryFn: () => withAuthRetry(auth, fetchBlockedUsers),
@@ -875,9 +879,12 @@ export function ChatPane() {
             />
           </svg>
         </Link>
-        <Avatar name={title} src={conversation?.peer?.avatarUrl} />
+        <Avatar name={title} src={conversation?.peer?.avatarUrl} online={peerPresence?.online} />
         <div className={styles.headerText}>
           <h1 className={styles.title}>{title}</h1>
+          {conversation?.type === 'direct' && presenceLabel(peerPresence) && (
+            <span className={styles.subtitle}>{presenceLabel(peerPresence)}</span>
+          )}
           {seenInfo && (
             <span
               className={styles.seen}

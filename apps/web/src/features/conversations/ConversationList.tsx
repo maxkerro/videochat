@@ -6,11 +6,12 @@ import {
   type Message,
   type WsEnvelope,
 } from '@videochat/shared';
-import { useState } from 'react';
+import { useMemo, useState } from 'react';
 import { NavLink } from 'react-router';
 import { Avatar, Input, Menu } from '../../components/ui';
 import { useAuth, withAuthRetry } from '../auth/AuthContext';
 import { useRealtimeEvent } from '../chat/RealtimeProvider';
+import { usePresence } from '../presence/presence';
 import { cx } from '../../lib/cx';
 import { fetchConversations, markConversationUnread } from './conversationsApi';
 import styles from './ConversationList.module.css';
@@ -79,6 +80,13 @@ export function ConversationList() {
     queryFn: () => withAuthRetry(auth, fetchConversations),
     enabled: auth.status === 'authenticated',
   });
+
+  // CHAT-034: online dots for direct conversations' peers.
+  const peerIds = useMemo(
+    () => conversations.flatMap((c) => (c.type === 'direct' && c.peer ? [c.peer.id] : [])),
+    [conversations],
+  );
+  const presence = usePresence(peerIds);
 
   // CHAT-015: keeps the inbox live -- a new message (ours or a peer's) moves its conversation to
   // the top and updates the unread badge immediately, without waiting on a refetch.
@@ -238,7 +246,11 @@ export function ConversationList() {
                     to={`/c/${c.id}`}
                     className={({ isActive }) => cx(styles.item, isActive && styles.active)}
                   >
-                    <Avatar name={titleFor(c)} src={c.peer?.avatarUrl} />
+                    <Avatar
+                      name={titleFor(c)}
+                      src={c.peer?.avatarUrl}
+                      online={c.peer ? presence.get(c.peer.id)?.online : false}
+                    />
                     <span className={styles.text}>
                       <span className={styles.row}>
                         <span className={styles.title}>{titleFor(c)}</span>

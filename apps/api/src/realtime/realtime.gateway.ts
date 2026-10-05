@@ -24,6 +24,7 @@ import { isSenderBlockedInDirectConversation } from '../db/blocks.js';
 import { isConversationMember, listConversationIdsForUser } from '../db/conversations.js';
 import { findUserById } from '../db/users.js';
 import { DB } from '../infra/tokens.js';
+import { PresenceService } from './presence.service.js';
 import { RealtimeService, type RealtimeSocket } from './realtime.service.js';
 
 /**
@@ -64,10 +65,12 @@ export class RealtimeGateway
     private readonly jwt: JwtService,
     private readonly realtime: RealtimeService,
     @Inject(DB) private readonly db: Database,
+    private readonly presence: PresenceService,
   ) {}
 
   afterInit(server: Server): void {
     this.heartbeatTimer = setInterval(() => {
+      const live: Array<{ userId: string; connectionId: string }> = [];
       for (const raw of server.clients) {
         const client = raw as RealtimeSocket;
         if (client.isAlive === false) {
@@ -76,7 +79,12 @@ export class RealtimeGateway
         }
         client.isAlive = false;
         client.ping();
+        if (client.userId && client.connectionId) {
+          live.push({ userId: client.userId, connectionId: client.connectionId });
+        }
       }
+      // CHAT-034: keeps every live connection's presence entry from lapsing.
+      void this.presence.refresh(live);
     }, HEARTBEAT_INTERVAL_MS);
   }
 
@@ -111,6 +119,7 @@ export class RealtimeGateway
     // DB round trip on every keystroke-driven event would be wasteful for something this frequent.
     client.displayName = user?.displayName;
     this.realtime.register(client, userId, conversationIds);
+    void this.presence.connected(userId, client.connectionId);
 
     // The client's WebSocket fires `open` as soon as the handshake completes, which is before
     // this handler's DB query and registration above finish -- there's no way to delay `open`
@@ -128,6 +137,9 @@ export class RealtimeGateway
 
   handleDisconnect(client: RealtimeSocket): void {
     this.realtime.unregister(client);
+    if (client.userId && client.connectionId) {
+      void this.presence.disconnected(client.userId, client.connectionId);
+    }
     // Only sockets that finished authenticating can be in a call.
     if (client.userId) void this.realtime.notifyDisconnected(client);
   }

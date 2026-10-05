@@ -53,6 +53,14 @@ export const LIMITS = {
   reactionsPerMessageMax: 20,
 } as const;
 
+/** CHAT-034/037: who can see when you're online and when you were last active. "contacts" =
+ *  people you have a direct conversation with. */
+export const LAST_SEEN_VISIBILITY = ['everyone', 'contacts', 'nobody'] as const;
+export type LastSeenVisibility = (typeof LAST_SEEN_VISIBILITY)[number];
+
+/** CHAT-034: a connection that hasn't refreshed its presence for this long counts as gone. */
+export const PRESENCE_TTL_SECONDS = 60;
+
 /** CHAT-033: the quick reactions offered first; any other emoji comes from the full picker. */
 export const QUICK_REACTIONS = ['👍', '❤️', '😂', '😮', '😢', '🙏'] as const;
 

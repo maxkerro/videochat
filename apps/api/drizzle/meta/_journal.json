@@ -50,6 +50,13 @@
       "when": 1791212594379,
       "tag": "0006_reactions",
       "breakpoints": true
+    },
+    {
+      "idx": 7,
+      "version": "7",
+      "when": 1791212953534,
+      "tag": "0007_presence",
+      "breakpoints": true
     }
   ]
 }

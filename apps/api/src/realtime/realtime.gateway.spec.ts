@@ -1,6 +1,7 @@
 import type { JwtService } from '@nestjs/jwt';
 import { makeEnvelope } from '@videochat/shared';
 import type { Database } from '../db/client.js';
+import type { PresenceService } from './presence.service.js';
 import * as blocksDb from '../db/blocks.js';
 import * as conversationsDb from '../db/conversations.js';
 import * as usersDb from '../db/users.js';
@@ -64,6 +65,11 @@ describe('RealtimeGateway', () => {
       jwt as unknown as JwtService,
       realtime as unknown as RealtimeService,
       {} as Database,
+      {
+        connected: vi.fn().mockResolvedValue(undefined),
+        disconnected: vi.fn().mockResolvedValue(undefined),
+        refresh: vi.fn().mockResolvedValue(undefined),
+      } as unknown as PresenceService,
     );
   });
 

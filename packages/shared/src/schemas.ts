@@ -349,6 +349,31 @@ export const messageReactionsSchema = z.object({
 });
 export type MessageReactions = z.infer<typeof messageReactionsSchema>;
 
+/** CHAT-034: someone's presence as the viewer is allowed to see it. */
+export const presenceSchema = z.object({
+  userId: z.uuid(),
+  online: z.boolean(),
+  /** When they were last connected; null while online, or if never seen. */
+  lastSeenAt: z.iso.datetime().nullable(),
+});
+export type Presence = z.infer<typeof presenceSchema>;
+export const presenceListSchema = z.array(presenceSchema);
+
+/** GET /presence?userIds=a,b,c -- up to 100 ids. */
+export const presenceQuerySchema = z.object({
+  userIds: z
+    .string()
+    .transform((v) => [
+      ...new Set(
+        v
+          .split(',')
+          .map((s) => s.trim())
+          .filter(Boolean),
+      ),
+    ])
+    .pipe(z.array(z.uuid()).min(1).max(100)),
+});
+
 export const messageSchema = z.object({
   id: ulidSchema,
   conversationId: z.uuid(),

@@ -32,6 +32,8 @@ function makeUser(overrides: Partial<User> = {}): User {
     emailVerifiedAt: new Date(),
     failedLoginAttempts: 0,
     lockedUntil: null,
+    lastActiveAt: null,
+    lastSeenVisibility: 'everyone' as const,
     createdAt: new Date(),
     updatedAt: new Date(),
     ...overrides,

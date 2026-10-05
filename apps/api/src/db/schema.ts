@@ -6,6 +6,7 @@ import {
   CALL_STATUSES,
   CONVERSATION_TYPES,
   DEVICE_PLATFORMS,
+  LAST_SEEN_VISIBILITY,
   MEMBER_ROLES,
   MESSAGE_TYPES,
   type Attachment,
@@ -42,6 +43,7 @@ export const conversationType = pgEnum('conversation_type', CONVERSATION_TYPES);
 export const memberRole = pgEnum('member_role', MEMBER_ROLES);
 export const messageType = pgEnum('message_type', MESSAGE_TYPES);
 export const devicePlatform = pgEnum('device_platform', DEVICE_PLATFORMS);
+export const lastSeenVisibility = pgEnum('last_seen_visibility', LAST_SEEN_VISIBILITY);
 
 const timestamps = {
   createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
@@ -65,6 +67,10 @@ export const users = pgTable(
     failedLoginAttempts: bigint('failed_login_attempts', { mode: 'number' }).notNull().default(0),
     /** Set after too many failed attempts; login is refused until this passes. */
     lockedUntil: timestamp('locked_until', { withTimezone: true }),
+    /** CHAT-034: when their last realtime connection went away. Null if never connected. */
+    lastActiveAt: timestamp('last_active_at', { withTimezone: true }),
+    /** CHAT-034/037: who may see their online status and last-seen time. */
+    lastSeenVisibility: lastSeenVisibility('last_seen_visibility').notNull().default('everyone'),
     ...timestamps,
   },
   (t) => [
