@@ -8,6 +8,7 @@ import * as messagesDb from '../db/messages.js';
 import { SenderNotAMemberError } from '../db/messages.js';
 import type { AttachmentsService } from '../attachments/attachments.service.js';
 import type { LinkPreviewsService } from '../link-previews/link-previews.service.js';
+import type { NotificationsService } from '../notifications/notifications.service.js';
 import type { RealtimeService } from '../realtime/realtime.service.js';
 import { MessagesService } from './messages.service.js';
 
@@ -87,6 +88,7 @@ describe('MessagesService', () => {
       realtime as unknown as RealtimeService,
       attachments as unknown as AttachmentsService,
       linkPreviews as unknown as LinkPreviewsService,
+      { notifyNewMessage: vi.fn().mockResolvedValue(undefined) } as unknown as NotificationsService,
     );
   });
 

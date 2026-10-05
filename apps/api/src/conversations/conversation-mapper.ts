@@ -25,6 +25,7 @@ export function toConversationSummary(
     lastMessageAt: row.lastMessageAt ? row.lastMessageAt.toISOString() : null,
     role: row.role,
     lastReadSeq: row.lastReadSeq,
+    muted: !!row.mutedUntil && row.mutedUntil.getTime() > Date.now(),
     peer,
     peerLastReadSeq,
     lastMessage: toLastMessagePreview('lastMessage' in row ? row.lastMessage : undefined),

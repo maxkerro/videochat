@@ -143,6 +143,8 @@ export const devices = pgTable(
       .references(() => users.id, { onDelete: 'cascade' }),
     platform: devicePlatform('platform').notNull(),
     pushToken: text('push_token'),
+    /** CHAT-035: a web push subscription's encryption keys (`push_token` holds its endpoint). */
+    pushKeys: jsonb('push_keys').$type<{ p256dh: string; auth: string }>(),
     userAgent: text('user_agent'),
     lastSeenAt: timestamp('last_seen_at', { withTimezone: true }).notNull().defaultNow(),
     ...timestamps,

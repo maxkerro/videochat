@@ -55,6 +55,7 @@ describe('inbox preview (CHAT-044 / CHAT-015)', () => {
     lastReadSeq: 1,
     peer: null,
     peerLastReadSeq: 0,
+    muted: false,
   };
 
   it('shows a missed call in the preview', () => {

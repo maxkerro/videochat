@@ -18,6 +18,7 @@ import { resetDatabase, runMigrations } from '../src/db/migrate.js';
 import { MailService } from '../src/mail/mail.service.js';
 import { S3Service } from '../src/storage/s3.service.js';
 import { LinkPreviewFetcher } from '../src/link-previews/link-preview.fetcher.js';
+import { WebPushChannel } from '../src/notifications/web-push.channel.js';
 
 class FakeMailService {
   verifyTokens: string[] = [];
@@ -95,6 +96,25 @@ export class FakeLinkPreviewFetcher {
   }
 }
 
+/** Records pushes instead of sending them; an endpoint containing "gone" acts expired. */
+export class FakePushChannel {
+  readonly platform = 'web' as const;
+  readonly enabled = true;
+  readonly publicKey = 'BFakeVapidPublicKey';
+  sent: Array<{
+    endpoint: string;
+    payload: { title: string; body: string; conversationId: string };
+  }> = [];
+  send(
+    device: { token: string },
+    payload: { title: string; body: string; conversationId: string },
+  ) {
+    if (device.token.includes('gone')) return Promise.resolve('gone' as const);
+    this.sent.push({ endpoint: device.token, payload });
+    return Promise.resolve('sent' as const);
+  }
+}
+
 export interface E2eUser {
   id: string;
   session: AuthSession;
@@ -119,12 +139,15 @@ export async function startE2eApp(prefix: string) {
     .useClass(FakeS3Service)
     .overrideProvider(LinkPreviewFetcher)
     .useClass(FakeLinkPreviewFetcher)
+    .overrideProvider(WebPushChannel)
+    .useClass(FakePushChannel)
     .compile();
   const app: INestApplication = moduleRef.createNestApplication({ bufferLogs: true });
   configureApp(app);
   await app.listen(0, '127.0.0.1');
   const mail = moduleRef.get(MailService) as unknown as FakeMailService;
   const s3 = moduleRef.get(S3Service) as unknown as FakeS3Service;
+  const push = moduleRef.get(WebPushChannel) as unknown as FakePushChannel;
   const server = () => app.getHttpServer();
 
   let counter = 0;
@@ -165,7 +188,7 @@ export async function startE2eApp(prefix: string) {
     await app.close();
   }
 
-  return { app, server, signUp, connect, close, s3 };
+  return { app, server, signUp, connect, close, s3, push };
 }
 
 /**

@@ -16,6 +16,7 @@ import {
   useState,
   type ReactNode,
 } from 'react';
+import { removePushSubscription } from '../notifications/push';
 import { apiPost, ApiError } from '../../lib/api';
 import { messageResponseSchema } from './authApi';
 
@@ -90,6 +91,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   );
 
   const logout = useCallback(async () => {
+    // CHAT-035: stop this browser receiving the signed-out person's notifications.
+    if (session?.accessToken) await removePushSubscription(session.accessToken);
     try {
       await apiPost('/auth/logout', messageResponseSchema);
     } catch {
@@ -100,7 +103,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       setSession(null);
       queryClient.clear();
     }
-  }, [queryClient]);
+  }, [queryClient, session?.accessToken]);
 
   const setUser = useCallback((user: Me) => {
     setSession((prev) => (prev ? { ...prev, user } : prev));

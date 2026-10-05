@@ -1,9 +1,10 @@
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { LIMITS, type PublicUser } from '@videochat/shared';
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { Link, Outlet, useMatch, useNavigate } from 'react-router';
 import { Avatar, Button, Input, Menu, Modal, useToast } from '../components/ui';
 import { AccountMenu } from '../features/auth/AccountMenu';
+import { syncPushSubscription } from '../features/notifications/push';
 import { useAuth, withAuthRetry } from '../features/auth/AuthContext';
 import { ApiError } from '../lib/api';
 import {
@@ -158,6 +159,27 @@ export function AppShell() {
   const auth = useAuth();
   const queryClient = useQueryClient();
   const navigate = useNavigate();
+
+  // CHAT-035: keep this browser's push subscription (if permission was granted earlier) pointed
+  // at whoever is signed in, and follow a notification click to its conversation.
+  useEffect(() => {
+    if (auth.status === 'authenticated' && auth.accessToken) {
+      void syncPushSubscription(auth.accessToken);
+    }
+    // Only on sign-in, not on every token refresh.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [auth.status]);
+  useEffect(() => {
+    if (!('serviceWorker' in navigator)) return;
+    const onMessage = (event: MessageEvent) => {
+      const data = event.data as { type?: string; url?: string } | null;
+      if (data?.type === 'navigate' && typeof data.url === 'string' && data.url.startsWith('/')) {
+        navigate(data.url);
+      }
+    };
+    navigator.serviceWorker.addEventListener('message', onMessage);
+    return () => navigator.serviceWorker.removeEventListener('message', onMessage);
+  }, [navigate]);
 
   async function handleStart(userId: string) {
     try {

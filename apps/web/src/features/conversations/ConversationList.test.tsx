@@ -296,6 +296,7 @@ describe('previewFor (CHAT-030 attachments)', () => {
     lastReadSeq: 1,
     peer: null,
     peerLastReadSeq: null,
+    muted: false,
   };
 
   it('previews a photo, a file and a captioned attachment', () => {

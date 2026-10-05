@@ -115,6 +115,14 @@ const envSchema = z.object({
    *  client always gives up first and the server never ends a call the client still shows. */
   CALL_RECONNECT_GRACE_SEC: z.coerce.number().int().positive().default(20),
 
+  // --- Web push (CHAT-035) ---
+  /** VAPID keys identifying this server to browser push services. Generate a pair once with
+   *  `npx web-push generate-vapid-keys`. Unset = push notifications off (in-app still works). */
+  VAPID_PUBLIC_KEY: z.string().default(''),
+  VAPID_PRIVATE_KEY: z.string().default(''),
+  /** Contact for push services, `mailto:` or an https URL. */
+  VAPID_SUBJECT: z.string().default('mailto:admin@videochat.local'),
+
   /** Login attempts, tracked per client IP (there's no authenticated user yet at this endpoint).
    *  Distinct from CHAT-010's per-account lockout after 5 *failed* attempts -- this limits the
    *  *rate* of attempts against the endpoint itself, successful or not, and by IP rather than by

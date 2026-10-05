@@ -15,6 +15,8 @@ import { isUniqueViolation } from './pg-errors.js';
 export interface ConversationWithMembership extends Conversation {
   role: Membership['role'];
   lastReadSeq: Membership['lastReadSeq'];
+  /** CHAT-035: notifications are off until then (null = not muted). */
+  mutedUntil?: Membership['mutedUntil'];
 }
 
 /** True if `userId` is a current (not left) member of `conversationId`. Used to gate every
@@ -99,6 +101,7 @@ async function findDirectConversationByKey(
       conversation: conversations,
       role: memberships.role,
       lastReadSeq: memberships.lastReadSeq,
+      mutedUntil: memberships.mutedUntil,
     })
     .from(conversations)
     .innerJoin(
@@ -108,7 +111,12 @@ async function findDirectConversationByKey(
     .where(eq(conversations.directKey, directKey))
     .limit(1);
   if (!row) return undefined;
-  return { ...row.conversation, role: row.role, lastReadSeq: row.lastReadSeq };
+  return {
+    ...row.conversation,
+    role: row.role,
+    lastReadSeq: row.lastReadSeq,
+    mutedUntil: row.mutedUntil,
+  };
 }
 
 export interface ConversationListRow extends ConversationWithMembership {
@@ -152,6 +160,7 @@ export async function findConversationForUser(
       conversation: conversations,
       role: memberships.role,
       lastReadSeq: memberships.lastReadSeq,
+      mutedUntil: memberships.mutedUntil,
     })
     .from(memberships)
     .innerJoin(conversations, eq(conversations.id, memberships.conversationId))
@@ -174,6 +183,7 @@ export async function findConversationForUser(
     ...row.conversation,
     role: row.role,
     lastReadSeq: row.lastReadSeq,
+    mutedUntil: row.mutedUntil,
     peer: peerEntry?.user,
     peerLastReadSeq: peerEntry?.lastReadSeq,
     lastMessage,
@@ -192,6 +202,7 @@ export async function listConversationsForUser(
       conversation: conversations,
       role: memberships.role,
       lastReadSeq: memberships.lastReadSeq,
+      mutedUntil: memberships.mutedUntil,
     })
     .from(memberships)
     .innerJoin(conversations, eq(conversations.id, memberships.conversationId))
@@ -216,6 +227,7 @@ export async function listConversationsForUser(
       ...r.conversation,
       role: r.role,
       lastReadSeq: r.lastReadSeq,
+      mutedUntil: r.mutedUntil,
       peer: peerEntry?.user,
       peerLastReadSeq: peerEntry?.lastReadSeq,
       lastMessage: lastMessages.get(r.conversation.id),
@@ -451,6 +463,7 @@ export async function listActiveMembers(
       role: memberships.role,
       joinedAt: memberships.joinedAt,
       lastReadSeq: memberships.lastReadSeq,
+      mutedUntil: memberships.mutedUntil,
     })
     .from(memberships)
     .innerJoin(users, eq(users.id, memberships.userId))
@@ -545,6 +558,7 @@ async function loadDirectPeers(
       conversationId: memberships.conversationId,
       user: users,
       lastReadSeq: memberships.lastReadSeq,
+      mutedUntil: memberships.mutedUntil,
     })
     .from(memberships)
     .innerJoin(users, eq(users.id, memberships.userId))
@@ -558,4 +572,47 @@ async function loadDirectPeers(
     map.set(row.conversationId, { user: row.user, lastReadSeq: row.lastReadSeq });
   }
   return map;
+}
+
+/** CHAT-035: mutes (until `until`; far future = indefinitely) or unmutes (null) for one member. */
+export async function setConversationMuted(
+  db: DbExecutor,
+  conversationId: string,
+  userId: string,
+  until: Date | null,
+): Promise<boolean> {
+  const rows = await db
+    .update(memberships)
+    .set({ mutedUntil: until })
+    .where(
+      and(
+        eq(memberships.conversationId, conversationId),
+        eq(memberships.userId, userId),
+        isNull(memberships.leftAt),
+      ),
+    )
+    .returning({ userId: memberships.userId });
+  return rows.length > 0;
+}
+
+/** CHAT-035: who to notify about a new message -- active members other than the sender who
+ *  haven't muted the conversation. */
+export async function listNotifiableMembers(
+  db: DbExecutor,
+  conversationId: string,
+  excludeUserId: string | null,
+  now: Date = new Date(),
+): Promise<string[]> {
+  const rows = await db
+    .select({ userId: memberships.userId })
+    .from(memberships)
+    .where(
+      and(
+        eq(memberships.conversationId, conversationId),
+        isNull(memberships.leftAt),
+        sql`(${memberships.mutedUntil} is null or ${memberships.mutedUntil} <= ${now})`,
+        ...(excludeUserId ? [sql`${memberships.userId} <> ${excludeUserId}`] : []),
+      ),
+    );
+  return rows.map((r) => r.userId);
 }

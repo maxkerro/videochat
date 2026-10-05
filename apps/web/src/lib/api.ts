@@ -74,7 +74,7 @@ export async function apiGet<S extends z.ZodType>(
 
 /** POST/PATCH/DELETE with a JSON body, validated the same way as {@link apiGet}. */
 async function apiSend<S extends z.ZodType>(
-  method: 'POST' | 'PATCH' | 'DELETE',
+  method: 'POST' | 'PUT' | 'PATCH' | 'DELETE',
   path: string,
   schema: S,
   body?: unknown,
@@ -100,6 +100,13 @@ export const apiPost = <S extends z.ZodType>(
   body?: unknown,
   init?: RequestInit & { acceptStatuses?: number[] },
 ): Promise<z.infer<S>> => apiSend('POST', path, schema, body, init);
+
+export const apiPut = <S extends z.ZodType>(
+  path: string,
+  schema: S,
+  body?: unknown,
+  init?: RequestInit & { acceptStatuses?: number[] },
+): Promise<z.infer<S>> => apiSend('PUT', path, schema, body, init);
 
 export const apiPatch = <S extends z.ZodType>(
   path: string,

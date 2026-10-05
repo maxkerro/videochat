@@ -117,3 +117,10 @@
 .previewMissed {
   color: var(--color-danger);
 }
+
+/* CHAT-035: a muted conversation. */
+.mutedIcon {
+  margin-left: var(--space-1);
+  vertical-align: -1px;
+  color: var(--color-text-muted);
+}

@@ -70,6 +70,14 @@ services:
         sync: false
       - key: CLOUDFLARE_TURN_API_TOKEN
         sync: false
+      # CHAT-035: web push. Generate once with `npx web-push generate-vapid-keys`; leave unset
+      # to keep push off (in-app notifications still work). See docs/DEPLOYMENT.md.
+      - key: VAPID_PUBLIC_KEY
+        sync: false
+      - key: VAPID_PRIVATE_KEY
+        sync: false
+      - key: VAPID_SUBJECT
+        sync: false
 
   - type: web
     name: videochat-web

@@ -1,8 +1,9 @@
-import { Body, Controller, Delete, Get, Param, Patch, Post, UseGuards } from '@nestjs/common';
+import { Body, Controller, Delete, Get, Param, Patch, Post, Put, UseGuards } from '@nestjs/common';
 import {
   addMembersSchema,
   createGroupConversationSchema,
   markConversationReadSchema,
+  muteConversationSchema,
   renameConversationSchema,
   startDirectConversationSchema,
   type ConversationSummary,
@@ -120,5 +121,16 @@ export class ConversationsController {
     @CurrentUserId() userId: string,
   ): Promise<ConversationSummary> {
     return this.conversations.markUnread(conversationId, userId);
+  }
+
+  /** CHAT-035: per-conversation mute -- muted conversations never notify. */
+  @Put(':conversationId/mute')
+  setMuted(
+    @Param('conversationId', UuidParamPipe) conversationId: string,
+    @CurrentUserId() userId: string,
+    @Body(new ZodValidationPipe(muteConversationSchema))
+    body: z.infer<typeof muteConversationSchema>,
+  ): Promise<ConversationSummary> {
+    return this.conversations.setMuted(conversationId, userId, body.muted);
   }
 }

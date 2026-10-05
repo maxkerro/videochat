@@ -12,8 +12,13 @@ import { Avatar, Input, Menu } from '../../components/ui';
 import { useAuth, withAuthRetry } from '../auth/AuthContext';
 import { useRealtimeEvent } from '../chat/RealtimeProvider';
 import { usePresence } from '../presence/presence';
+import { useUnreadBadge } from '../notifications/unreadBadge';
 import { cx } from '../../lib/cx';
-import { fetchConversations, markConversationUnread } from './conversationsApi';
+import {
+  fetchConversations,
+  markConversationUnread,
+  setConversationMuted,
+} from './conversationsApi';
 import styles from './ConversationList.module.css';
 import { callHistoryText, isMissedByMe } from '../calls/callHistory';
 
@@ -87,6 +92,8 @@ export function ConversationList() {
     [conversations],
   );
   const presence = usePresence(peerIds);
+  // CHAT-035: unread count in the tab title and on the favicon.
+  useUnreadBadge(conversations);
 
   // CHAT-015: keeps the inbox live -- a new message (ours or a peer's) moves its conversation to
   // the top and updates the unread badge immediately, without waiting on a refetch.
@@ -179,6 +186,16 @@ export function ConversationList() {
   // e.g. a message arrived between the click and the response). A failure rolls the cache back to
   // its pre-mutation snapshot, matching the optimistic-update pattern react-query itself
   // documents.
+  // CHAT-035: per-conversation mute.
+  const muteMutation = useMutation({
+    mutationFn: ({ id, muted }: { id: string; muted: boolean }) =>
+      withAuthRetry(auth, (token) => setConversationMuted(token, id, muted)),
+    onSuccess: (summary) =>
+      queryClient.setQueryData<ConversationSummary[]>(['conversations'], (list) =>
+        list?.map((c) => (c.id === summary.id ? { ...c, muted: summary.muted } : c)),
+      ),
+  });
+
   const markUnread = useMutation({
     mutationFn: (conversationId: string) =>
       withAuthRetry(auth, (token) => markConversationUnread(token, conversationId)),
@@ -253,7 +270,27 @@ export function ConversationList() {
                     />
                     <span className={styles.text}>
                       <span className={styles.row}>
-                        <span className={styles.title}>{titleFor(c)}</span>
+                        <span className={styles.title}>
+                          {titleFor(c)}
+                          {c.muted && (
+                            <svg
+                              className={styles.mutedIcon}
+                              width="12"
+                              height="12"
+                              viewBox="0 0 24 24"
+                              role="img"
+                              aria-label="Muted"
+                            >
+                              <path
+                                d="M6 8a6 6 0 0 1 9.3-5M18 8c0 7 3 9 3 9H9M13.7 21a2 2 0 0 1-3.4 0M3 3l18 18"
+                                fill="none"
+                                stroke="currentColor"
+                                strokeWidth="2"
+                                strokeLinecap="round"
+                              />
+                            </svg>
+                          )}
+                        </span>
                         <time className={styles.time}>{timeFor(c)}</time>
                       </span>
                       {(unread > 0 || c.lastMessage) && (
@@ -293,6 +330,10 @@ export function ConversationList() {
                         label: 'Mark as unread',
                         onSelect: () => markUnread.mutate(c.id),
                         disabled: c.lastSeq === 0,
+                      },
+                      {
+                        label: c.muted ? 'Unmute notifications' : 'Mute notifications',
+                        onSelect: () => muteMutation.mutate({ id: c.id, muted: !c.muted }),
                       },
                     ]}
                   />

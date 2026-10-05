@@ -8,6 +8,7 @@ import type { CallRow } from '../db/schema.js';
 import { DB } from '../infra/tokens.js';
 import { toMessage } from '../messages/message-mapper.js';
 import { RealtimeService } from '../realtime/realtime.service.js';
+import { NotificationsService } from '../notifications/notifications.service.js';
 import { CallSignalingService } from './call-signaling.service.js';
 
 /** How a call's end reason reads in the conversation history. */
@@ -71,6 +72,7 @@ export class CallHistoryService implements OnModuleInit {
     @Inject(DB) private readonly db: Database,
     private readonly realtime: RealtimeService,
     private readonly signaling: CallSignalingService,
+    private readonly notifications: NotificationsService,
   ) {}
 
   onModuleInit(): void {
@@ -106,6 +108,9 @@ export class CallHistoryService implements OnModuleInit {
       call.conversationId,
       makeEnvelope('message.new', message, message.id),
     );
+
+    // CHAT-035: a missed call is worth a push (the callee wasn't there to see it ring).
+    if (outcome === 'missed') void this.notifications.notifyMissedCall(call);
 
     if (outcome !== 'missed') {
       const updated = await markConversationRead(

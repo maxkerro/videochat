@@ -45,6 +45,8 @@ import { MessageBubble, replyQuoteText } from './MessageBubble';
 import { removeLinkPreview } from '../linkPreviews/linkPreviewsApi';
 import { useComposerLinkPreview } from '../linkPreviews/useComposerLinkPreview';
 import { presenceLabel, usePresence } from '../presence/presence';
+import { askForPushAfterFirstSend } from '../notifications/push';
+import { useViewingReporter } from '../notifications/useViewingReporter';
 import { CallHistoryEntry } from '../calls/CallHistoryEntry';
 import { useAuth, withAuthRetry } from '../auth/AuthContext';
 import { linkify } from './linkify';
@@ -303,6 +305,8 @@ export function ChatPane() {
     onRejected: (reason) => toast({ title: reason, tone: 'danger' }),
   });
   const peer = conversationQuery.data?.peer;
+  // CHAT-035: no pushes for the conversation on screen.
+  useViewingReporter(conversationId);
   // CHAT-034: "Online" / "Last seen ..." under a direct conversation's title.
   const presenceIds = useMemo(() => (peer ? [peer.id] : []), [peer]);
   const peerPresence = usePresence(presenceIds).get(peer?.id ?? '');
@@ -666,6 +670,8 @@ export function ChatPane() {
     setReplyTo(null);
     composerPreview.reset();
     void trySend({ clientMsgId, conversationId, body, linkPreview, replyToId });
+    // CHAT-035 AC: notification permission is asked after the first sent message, not on load.
+    if (auth.accessToken) void askForPushAfterFirstSend(auth.accessToken);
     scrollToLatest('auto');
   }
 

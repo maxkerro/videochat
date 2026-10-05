@@ -19,7 +19,7 @@ import {
   type UserSearchResults,
 } from '@videochat/shared';
 import { z } from 'zod';
-import { apiDelete, apiGet, apiPatch, apiPost } from '../../lib/api';
+import { apiDelete, apiGet, apiPatch, apiPost, apiPut } from '../../lib/api';
 
 function authHeader(accessToken: string) {
   return { Authorization: `Bearer ${accessToken}` };
@@ -136,4 +136,20 @@ export function markConversationUnread(
   return apiPost(`/conversations/${conversationId}/unread`, conversationSummarySchema, undefined, {
     headers: authHeader(accessToken),
   });
+}
+
+/** CHAT-035: mute (no notifications) or unmute a conversation. */
+export function setConversationMuted(
+  accessToken: string,
+  conversationId: string,
+  muted: boolean,
+): Promise<ConversationSummary> {
+  return apiPut(
+    `/conversations/${conversationId}/mute`,
+    conversationSummarySchema,
+    { muted },
+    {
+      headers: authHeader(accessToken),
+    },
+  );
 }

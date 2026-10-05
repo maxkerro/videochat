@@ -103,3 +103,27 @@ b2 bucket update --cors-rules '[
 S3-compatible `PUT` used here -- use the CLI.) Local MinIO allows all origins by default.
 
 Unsent uploads (a slot requested but no message sent) are removed with their objects after 24 h.
+
+## Push notifications (CHAT-035)
+
+Browsers deliver push through their vendor's push service, which needs this server's **VAPID**
+key pair. Generate one once (keep the private key secret; changing it later invalidates every
+existing subscription):
+
+```sh
+npx web-push generate-vapid-keys
+```
+
+Then set on `videochat-api` in Render: `VAPID_PUBLIC_KEY`, `VAPID_PRIVATE_KEY`, and
+`VAPID_SUBJECT` (`mailto:you@example.com`). Without them the app still works; push is simply off
+and the web app never asks for notification permission.
+
+How it behaves:
+
+- The browser asks for permission after the person's first sent message, never on page load.
+- No push for a conversation open in a visible, focused tab; muted conversations never notify.
+- Missed calls are pushed too. Clicking a notification focuses the app on that conversation.
+- Notifications are disabled per browser by the person (site settings) or per conversation
+  (the conversation menu's "Mute notifications").
+
+The service worker is served from `/sw.js` (apps/web/public).

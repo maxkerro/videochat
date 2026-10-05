@@ -213,6 +213,8 @@ export const conversationSummarySchema = z.object({
    *  instead (see `memberSummarySchema.lastReadSeq`). Defaults to `null` so older cached/mocked
    *  responses without this field still parse. */
   peerLastReadSeq: z.number().int().nonnegative().nullable().default(null),
+  /** CHAT-035: notifications for this conversation are off. */
+  muted: z.boolean().default(false),
   /** CHAT-044 (and CHAT-015's "last message preview"): the newest message, for the inbox
    *  preview line. Null for a conversation with no messages yet; defaults to null so older
    *  cached/mocked responses without this field still parse. */
@@ -373,6 +375,37 @@ export const presenceQuerySchema = z.object({
     ])
     .pipe(z.array(z.uuid()).min(1).max(100)),
 });
+
+/** CHAT-035: turn notifications for a conversation off (indefinitely) or back on. */
+export const muteConversationSchema = z.object({ muted: z.boolean() });
+
+/** CHAT-035: a browser's Web Push subscription (PushSubscription.toJSON()). */
+export const pushSubscriptionSchema = z.object({
+  endpoint: z.url({ protocol: /^https$/ }).max(2048),
+  keys: z.object({
+    p256dh: z.string().min(1).max(256),
+    auth: z.string().min(1).max(64),
+  }),
+});
+export type PushSubscriptionInput = z.infer<typeof pushSubscriptionSchema>;
+export const pushUnsubscribeSchema = z.object({ endpoint: z.string().max(2048) });
+
+/** CHAT-035: null when the server has no VAPID keys (push switched off). */
+export const vapidKeySchema = z.object({ publicKey: z.string().nullable() });
+
+/** CHAT-035: `client.viewing` -- which conversation this tab shows while visible and focused
+ *  (null otherwise), so no push is sent for what you're already looking at. */
+export const clientViewingSchema = z.object({ conversationId: z.uuid().nullable() });
+
+/** CHAT-035: what a push notification carries; the service worker turns it into a notification. */
+export const pushPayloadSchema = z.object({
+  title: z.string(),
+  body: z.string(),
+  conversationId: z.uuid(),
+  url: z.string(),
+  tag: z.string(),
+});
+export type PushPayload = z.infer<typeof pushPayloadSchema>;
 
 export const messageSchema = z.object({
   id: ulidSchema,

@@ -3,6 +3,7 @@ import { APP_FILTER } from '@nestjs/core';
 import { SentryGlobalFilter, SentryModule } from '@sentry/nestjs/setup';
 import { AttachmentsModule } from './attachments/attachments.module.js';
 import { LinkPreviewsModule } from './link-previews/link-previews.module.js';
+import { NotificationsModule } from './notifications/notifications.module.js';
 import { AuthModule } from './auth/auth.module.js';
 import { CallsModule } from './calls/calls.module.js';
 import { ConversationsModule } from './conversations/conversations.module.js';
@@ -31,6 +32,7 @@ import { UsersModule } from './users/users.module.js';
     RealtimeModule,
     AttachmentsModule,
     LinkPreviewsModule,
+    NotificationsModule,
     MessagesModule,
     CallsModule,
   ],

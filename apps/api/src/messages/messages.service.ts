@@ -33,6 +33,7 @@ import type { MessageRow } from '../db/schema.js';
 import { DB } from '../infra/tokens.js';
 import { AttachmentsService } from '../attachments/attachments.service.js';
 import { LinkPreviewsService } from '../link-previews/link-previews.service.js';
+import { NotificationsService } from '../notifications/notifications.service.js';
 import { RealtimeService } from '../realtime/realtime.service.js';
 import { toMessageWithReply, toMessages } from './message-mapper.js';
 
@@ -47,6 +48,7 @@ export class MessagesService {
     private readonly realtime: RealtimeService,
     private readonly attachments: AttachmentsService,
     private readonly linkPreviews: LinkPreviewsService,
+    private readonly notifications: NotificationsService,
   ) {}
 
   /**
@@ -129,6 +131,8 @@ export class MessagesService {
     if (created && !attachment && input.linkPreview !== false) {
       void this.linkPreviews.attachToMessage(row);
     }
+    // CHAT-035: push to members who aren't looking at this conversation (once per message).
+    if (created) void this.notifications.notifyNewMessage(row);
     return message;
   }
 

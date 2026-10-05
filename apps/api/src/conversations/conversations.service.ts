@@ -28,6 +28,7 @@ import {
   listConversationsForUser,
   markConversationRead,
   markConversationUnread,
+  setConversationMuted,
   renameConversation,
   type ConversationListRow,
 } from '../db/conversations.js';
@@ -45,6 +46,9 @@ function formatNameList(names: string[]): string {
   if (names.length === 2) return `${names[0]} and ${names[1]}`;
   return `${names.slice(0, -1).join(', ')} and ${names[names.length - 1]}`;
 }
+
+/** CHAT-035: "muted" with no end date. */
+const MUTED_INDEFINITELY = new Date('9999-12-31T00:00:00Z');
 
 @Injectable()
 export class ConversationsService {
@@ -338,6 +342,22 @@ export class ConversationsService {
 
     const avatarUrl = row.peer ? await this.s3.getAvatarUrl(row.peer.avatarKey) : null;
     return toConversationSummary({ ...row, lastReadSeq: updated.lastReadSeq }, avatarUrl);
+  }
+
+  /** CHAT-035: mute (indefinitely) or unmute a conversation for the caller. */
+  async setMuted(
+    conversationId: string,
+    userId: string,
+    muted: boolean,
+  ): Promise<ConversationSummary> {
+    const until = muted ? MUTED_INDEFINITELY : null;
+    if (!(await setConversationMuted(this.db, conversationId, userId, until))) {
+      throw new NotFoundException('Conversation not found');
+    }
+    const row = await findConversationForUser(this.db, conversationId, userId);
+    if (!row) throw new NotFoundException('Conversation not found');
+    const avatarUrl = row.peer ? await this.s3.getAvatarUrl(row.peer.avatarKey) : null;
+    return toConversationSummary(row, avatarUrl);
   }
 
   private async announcePromotionIfAny(

@@ -981,6 +981,39 @@ describe('ChatPane', () => {
     });
   });
 
+  describe('CHAT-035 notifications', () => {
+    it('tells the server which conversation is on screen', async () => {
+      vi.stubGlobal(
+        'fetch',
+        routedFetch({
+          'POST /auth/refresh': () => jsonResponse(session()),
+          [`GET /conversations/${conversationId}`]: () => jsonResponse(conversation()),
+          [`GET /conversations/${conversationId}/messages`]: () =>
+            jsonResponse({ messages: [], hasMore: false }),
+        }),
+      );
+      const hasFocus = vi.spyOn(document, 'hasFocus').mockReturnValue(true);
+      try {
+        renderApp(`/c/${conversationId}`);
+        await screen.findByLabelText('Message');
+        await waitFor(() => expect(FakeWebSocket.instances).toHaveLength(1));
+        const socket = FakeWebSocket.instances[0]!;
+        socket.emit('open');
+        await waitFor(() =>
+          expect(
+            socket.sent
+              .map((d) => JSON.parse(d) as { type: string; payload: { conversationId?: string } })
+              .some(
+                (e) => e.type === 'client.viewing' && e.payload.conversationId === conversationId,
+              ),
+          ).toBe(true),
+        );
+      } finally {
+        hasFocus.mockRestore();
+      }
+    });
+  });
+
   describe('CHAT-018 groups', () => {
     const groupId = '77777777-7777-4777-8777-777777777777';
 

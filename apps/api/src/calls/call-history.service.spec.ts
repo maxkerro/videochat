@@ -3,6 +3,7 @@ import { isConversationMember, markConversationRead } from '../db/conversations.
 import { appendMessageWithStatus, SenderNotAMemberError } from '../db/messages.js';
 import type { CallRow, MessageRow } from '../db/schema.js';
 import type { RealtimeService } from '../realtime/realtime.service.js';
+import type { NotificationsService } from '../notifications/notifications.service.js';
 import type { CallSignalingService } from './call-signaling.service.js';
 import {
   CallHistoryService,
@@ -96,13 +97,17 @@ describe('CallHistoryService.record (CHAT-044)', () => {
       ...overrides,
     }) as MessageRow;
 
+  const notifications = { notifyMissedCall: vi.fn() };
+
   beforeEach(() => {
     vi.resetAllMocks();
+    notifications.notifyMissedCall.mockResolvedValue(undefined);
     realtime = { publishToConversation: vi.fn().mockResolvedValue(undefined) };
     service = new CallHistoryService(
       {} as Database,
       realtime as unknown as RealtimeService,
       { onCallEnded: vi.fn() } as unknown as CallSignalingService,
+      notifications as unknown as NotificationsService,
     );
     vi.mocked(appendMessageWithStatus).mockResolvedValue({ row: row(), created: true });
   });
@@ -127,6 +132,7 @@ describe('CallHistoryService.record (CHAT-044)', () => {
     );
     expect(published('message.new')).toHaveLength(1);
     expect(markConversationRead).not.toHaveBeenCalled();
+    expect(notifications.notifyMissedCall).toHaveBeenCalled();
   });
 
   it('marks an answered call read for the callee and tells their devices', async () => {
