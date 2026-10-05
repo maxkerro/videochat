@@ -26,12 +26,13 @@ vi.mock('../db/auth-tokens.js', () => ({
 vi.mock('./password.js', () => ({
   hashPassword: vi.fn(async (p: string) => `hashed:${p}`),
   verifyPassword: vi.fn(),
+  verifyAgainstDummyHash: vi.fn().mockResolvedValue(undefined),
 }));
 
 import * as authTokensDb from '../db/auth-tokens.js';
 import * as refreshTokensDb from '../db/refresh-tokens.js';
 import * as usersDb from '../db/users.js';
-import { hashPassword, verifyPassword } from './password.js';
+import { hashPassword, verifyAgainstDummyHash, verifyPassword } from './password.js';
 import { AuthService, INVALID_LOGIN_MESSAGE } from './auth.service.js';
 import type { Env } from '../config/env.js';
 import type { User } from '../db/schema.js';
@@ -243,7 +244,8 @@ describe('AuthService', () => {
       const { service } = makeService();
       await expect(service.login({ identifier: 'nobody', password: 'x' })).rejects.toThrow(
         INVALID_LOGIN_MESSAGE,
-      );
+      ); // Pays for an Argon2 verify anyway, so a miss isn't faster than a wrong password.
+      expect(verifyAgainstDummyHash).toHaveBeenCalledWith('x');
     });
 
     it('applies the per-account lockout to a username login too', async () => {

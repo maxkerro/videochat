@@ -1,6 +1,6 @@
 import type { INestApplication } from '@nestjs/common';
 import { Test } from '@nestjs/testing';
-import { authSessionSchema } from '@videochat/shared';
+import { authSessionSchema, LIMITS } from '@videochat/shared';
 import request from 'supertest';
 import { configureApp } from '../src/app.factory.js';
 import { AppModule } from '../src/app.module.js';
@@ -182,16 +182,30 @@ describe.skipIf(!hasInfra)('auth HTTP flow (CHAT-010)', () => {
 
     it('counts failures across username and email toward the same lockout', async () => {
       const user = await signUpAndVerify();
-      for (let i = 0; i < 5; i++) {
+      for (let i = 0; i < LIMITS.loginAttemptsBeforeLockout; i++) {
         await request(server())
           .post('/auth/login')
           .send({ identifier: i % 2 ? user.email : user.username, password: 'wrong' })
           .expect(401);
       }
-      await request(server())
+      const locked = await request(server())
         .post('/auth/login')
         .send({ identifier: user.username, password: user.password })
         .expect(403);
+      expect(locked.body.message).toMatch(/Too many failed attempts/);
+    });
+
+    it('matches an email identifier case-insensitively, new body and legacy body alike', async () => {
+      const user = await signUpAndVerify();
+      const shouted = `  ${user.email.toUpperCase()} `;
+      await request(server())
+        .post('/auth/login')
+        .send({ identifier: shouted, password: user.password })
+        .expect(200);
+      await request(server())
+        .post('/auth/login')
+        .send({ email: shouted, password: user.password })
+        .expect(200);
     });
 
     it('rejects a body with neither identifier nor email', async () => {

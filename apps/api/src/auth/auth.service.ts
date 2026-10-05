@@ -38,7 +38,7 @@ import {
   resetFailedLogins,
   setPasswordHash,
 } from '../db/users.js';
-import { hashPassword, verifyPassword } from './password.js';
+import { hashPassword, verifyAgainstDummyHash, verifyPassword } from './password.js';
 import { generateOpaqueToken, hashToken } from './tokens.js';
 import { MailService } from '../mail/mail.service.js';
 import { S3Service } from '../storage/s3.service.js';
@@ -128,7 +128,10 @@ export class AuthService {
     // Same generic error whether the account doesn't exist or the password is wrong: don't let a
     // login attempt reveal which emails or usernames have an account.
     const invalid = () => new UnauthorizedException(INVALID_LOGIN_MESSAGE);
-    if (!user || !user.passwordHash) throw invalid();
+    if (!user || !user.passwordHash) {
+      await verifyAgainstDummyHash(input.password); // keep timing in line with a wrong password
+      throw invalid();
+    }
 
     if (user.lockedUntil && user.lockedUntil.getTime() > Date.now()) {
       throw new ForbiddenException('Too many failed attempts. Try again in a few minutes.');

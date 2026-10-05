@@ -68,8 +68,9 @@ export function LoginPage() {
       {unverified && (
         <p className={styles.formError} role="alert">
           Verify your email before logging in.{' '}
-          {/* Resending needs the address; after a username login we don't have it (and
-              mustn't reveal it), so point at the email login instead. */}
+          {/* The resend endpoint takes an email address, and after a username login this form
+              doesn't have one. (A "resend for the account I just proved I own" endpoint would
+              remove this branch; not needed yet.) */}
           {isEmailIdentifier(form.identifier) ? (
             <Button
               variant="ghost"

@@ -33,3 +33,16 @@ export function hashPassword(plain: string): Promise<string> {
 export function verifyPassword(hashed: string, plain: string): Promise<boolean> {
   return verify(hashed, plain);
 }
+
+let dummyHash: Promise<string> | undefined;
+
+/**
+ * CHAT-080 review: spends the same Argon2 verify a real wrong password costs, for a login whose
+ * email/username matched no account. Without it an unknown account answers measurably faster
+ * than a known one, which undoes the "same answer either way" error message. The dummy hash is
+ * made once (same parameters as real hashes) and reused; the result is always discarded.
+ */
+export async function verifyAgainstDummyHash(plain: string): Promise<void> {
+  dummyHash ??= hashPassword(`dummy-${Math.random()}`);
+  await verify(await dummyHash, plain).catch(() => false);
+}

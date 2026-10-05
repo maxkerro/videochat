@@ -1,4 +1,4 @@
-import { hashPassword, verifyPassword } from './password.js';
+import { hashPassword, verifyAgainstDummyHash, verifyPassword } from './password.js';
 
 describe('password hashing (Argon2id)', () => {
   it('verifies the correct plaintext against its own hash', async () => {
@@ -14,5 +14,10 @@ describe('password hashing (Argon2id)', () => {
   it('produces a different hash each time (random salt)', async () => {
     const [a, b] = await Promise.all([hashPassword('same input'), hashPassword('same input')]);
     expect(a).not.toBe(b);
+  });
+
+  it('runs a throwaway verify for an unknown account without throwing (CHAT-080)', async () => {
+    await expect(verifyAgainstDummyHash('anything')).resolves.toBeUndefined();
+    await expect(verifyAgainstDummyHash('')).resolves.toBeUndefined();
   });
 });
