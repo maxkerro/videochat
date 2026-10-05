@@ -23,20 +23,56 @@ const SWEEP_INTERVAL_MS = 15_000;
 const ONLINE_KEY = 'presence:online';
 const connsKey = (userId: string) => `presence:conns:${userId}`;
 
+/** Whether someone with `visibility` shares their presence with a person they do / don't have a
+ *  direct conversation with. */
+function shares(visibility: LastSeenVisibility, sharesDirect: boolean): boolean {
+  return visibility === 'everyone' || (visibility === 'contacts' && sharesDirect);
+}
+
 /**
- * CHAT-034 visibility rule: `subject`'s presence is visible to `viewer` when the subject allows
- * it (everyone, or contacts = a shared direct conversation) and the viewer doesn't hide their own
- * (AC: "users who hide last seen also can't see others' last seen").
+ * CHAT-034 visibility rule, reciprocal: `viewer` sees `subject`'s presence only when each would
+ * share their own with the other. So the subject must allow it (everyone, or contacts = a shared
+ * direct conversation), and a viewer who hides their own presence from someone can't see that
+ * person's either -- "nobody" sees no one, "contacts" sees only contacts (AC: "users who hide last
+ * seen also can't see others' last seen", applied per level, as WhatsApp does). Blocks hide it
+ * both ways before this rule runs (`listPresenceContacts`).
  */
 export function canSeePresence(
   subjectVisibility: LastSeenVisibility,
   viewerVisibility: LastSeenVisibility,
   sharesDirect: boolean,
 ): boolean {
-  if (viewerVisibility === 'nobody') return false;
-  if (subjectVisibility === 'everyone') return true;
-  return subjectVisibility === 'contacts' && sharesDirect;
+  return shares(subjectVisibility, sharesDirect) && shares(viewerVisibility, sharesDirect);
 }
+
+/**
+ * Atomically drops one connection and, if that leaves the user with no live one, takes them out
+ * of `presence:online`. Returns 1 when this call made the user go offline. One script, so a
+ * reconnect (whose `connected` MULTI is atomic too) lands wholly before or after it -- never
+ * between "count is zero" and "remove from online".
+ * KEYS: conns, online. ARGV: connectionId, now, userId.
+ */
+const RELEASE_SCRIPT = `
+redis.call('ZREM', KEYS[1], ARGV[1])
+if redis.call('ZCOUNT', KEYS[1], ARGV[2], '+inf') > 0 then return 0 end
+return redis.call('ZREM', KEYS[2], ARGV[3])
+`;
+
+/**
+ * The sweep's counterpart: if the user has no live connection, clears the lapsed ones and takes
+ * them out of `presence:online`, returning their latest expiry (their online score) so last-seen
+ * can be the last refresh rather than the sweep time. Returns false if they're still live or
+ * someone else already took them offline.
+ * KEYS: conns, online. ARGV: now, userId.
+ */
+const SWEEP_SCRIPT = `
+if redis.call('ZCOUNT', KEYS[1], ARGV[1], '+inf') > 0 then return false end
+redis.call('ZREMRANGEBYSCORE', KEYS[1], '-inf', ARGV[1])
+local score = redis.call('ZSCORE', KEYS[2], ARGV[2])
+if not score then return false end
+redis.call('ZREM', KEYS[2], ARGV[2])
+return score
+`;
 
 /**
  * CHAT-034: online / last seen, shared across API nodes through Redis.
@@ -48,9 +84,13 @@ export function canSeePresence(
  *   sweep finds users whose connections all lapsed without a clean close (a crashed node, a
  *   laptop lid closed), so they go offline within 60 s too.
  *
- * Whoever removes a user from `presence:online` (ZREM returns 1 for exactly one caller) owns the
- * offline transition: records last-seen and tells their contacts. Online transitions are
- * announced by the node whose connect found no live connection before it.
+ * Whoever removes a user from `presence:online` owns the offline transition: records last-seen
+ * and tells their contacts. That removal happens in the same Lua script as the "no live
+ * connection left" check, so a reconnect can't slip in between. Online transitions are announced
+ * by the node whose connect found no live connection before it. The two announcements come from
+ * different code paths and can still reach a contact out of order (the offline one waits on a DB
+ * write), so after announcing offline the owner re-checks and re-announces online if the user is
+ * back -- the last word a contact gets is always the current state.
  */
 @Injectable()
 export class PresenceService implements OnModuleInit, OnModuleDestroy {
@@ -111,10 +151,16 @@ export class PresenceService implements OnModuleInit, OnModuleDestroy {
   async disconnected(userId: string, connectionId: string, now = Date.now()): Promise<void> {
     if (this.stopping) return;
     try {
-      const key = connsKey(userId);
-      await this.redis.zrem(key, connectionId);
-      const live = await this.redis.zcount(key, now, '+inf');
-      if (live === 0) await this.goOffline(userId, new Date(now));
+      const wentOffline = await this.redis.eval(
+        RELEASE_SCRIPT,
+        2,
+        connsKey(userId),
+        ONLINE_KEY,
+        connectionId,
+        now,
+        userId,
+      );
+      if (wentOffline === 1) await this.announceOffline(userId, new Date(now));
     } catch (err) {
       this.logger.warn(`Presence disconnect failed: ${(err as Error).message}`);
     }
@@ -125,10 +171,17 @@ export class PresenceService implements OnModuleInit, OnModuleDestroy {
     try {
       const expired = await this.redis.zrangebyscore(ONLINE_KEY, '-inf', now);
       for (const userId of expired) {
-        const live = await this.redis.zcount(connsKey(userId), now, '+inf');
-        if (live > 0) continue; // a refresh landed meanwhile
-        await this.redis.zremrangebyscore(connsKey(userId), '-inf', now);
-        await this.goOffline(userId, new Date(now - TTL_MS));
+        const score = (await this.redis.eval(
+          SWEEP_SCRIPT,
+          2,
+          connsKey(userId),
+          ONLINE_KEY,
+          now,
+          userId,
+        )) as string | null;
+        if (score === null) continue; // a refresh landed meanwhile, or someone else got there
+        // The score is the last refresh's expiry; the refresh itself was one TTL earlier.
+        await this.announceOffline(userId, new Date(Number(score) - TTL_MS));
       }
     } catch (err) {
       this.logger.warn(`Presence sweep failed: ${(err as Error).message}`);
@@ -158,11 +211,14 @@ export class PresenceService implements OnModuleInit, OnModuleDestroy {
     });
   }
 
-  private async goOffline(userId: string, at: Date): Promise<void> {
-    const owned = await this.redis.zrem(ONLINE_KEY, userId);
-    if (owned !== 1) return;
+  /** The owner of an offline transition: record last seen, tell contacts, then re-announce online
+   *  if a reconnect raced us (its "online" may have reached contacts before our "offline"). */
+  private async announceOffline(userId: string, at: Date): Promise<void> {
     await setLastActive(this.db, userId, at);
     await this.announce(userId, { userId, online: false, lastSeenAt: at.toISOString() });
+    if ((await this.redis.zcount(connsKey(userId), Date.now(), '+inf')) > 0) {
+      await this.announce(userId, { userId, online: true, lastSeenAt: null });
+    }
   }
 
   /** Tells each contact allowed to see it. */

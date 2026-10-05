@@ -112,7 +112,9 @@ export function PrivacySection() {
             {VISIBILITY_LABELS[v]}
           </label>
         ))}
-        <p className={styles.hint}>If you hide yours, you can’t see other people’s either.</p>
+        <p className={styles.hint}>
+          It works both ways: you only see it for people you show yours to.
+        </p>
       </fieldset>
     </section>
   );

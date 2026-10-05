@@ -12,7 +12,8 @@ export interface PresenceContact {
   sharesDirect: boolean;
 }
 
-/** Everyone `userId` currently shares a conversation with (optionally only `among` these). */
+/** Everyone `userId` currently shares a conversation with (optionally only `among` these), minus
+ *  anyone in a block relationship with them. */
 export async function listPresenceContacts(
   db: DbExecutor,
   userId: string,
@@ -40,6 +41,12 @@ export async function listPresenceContacts(
     join conversations c on c.id = me.conversation_id
     join users u on u.id = other.user_id
     where me.user_id = ${userId} and me.left_at is null ${filter}
+      -- A block in either direction hides presence both ways.
+      and not exists (
+        select 1 from blocks b
+        where (b.blocker_id = me.user_id and b.blocked_id = other.user_id)
+           or (b.blocker_id = other.user_id and b.blocked_id = me.user_id)
+      )
     group by other.user_id, u.last_seen_visibility
   `);
   return result.rows.map((r) => ({

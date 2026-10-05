@@ -1,5 +1,6 @@
-import { BadRequestException, NotFoundException } from '@nestjs/common';
+import { BadRequestException, ForbiddenException, NotFoundException } from '@nestjs/common';
 import type { Database } from '../db/client.js';
+import * as blocksDb from '../db/blocks.js';
 import * as conversationsDb from '../db/conversations.js';
 import * as messagesDb from '../db/messages.js';
 import * as reactionsDb from '../db/reactions.js';
@@ -7,18 +8,24 @@ import type { RealtimeService } from '../realtime/realtime.service.js';
 import { ReactionsService } from './reactions.service.js';
 
 vi.mock('../db/conversations.js', () => ({ isConversationMember: vi.fn() }));
-vi.mock('../db/messages.js', () => ({ findMessage: vi.fn() }));
+vi.mock('../db/messages.js', () => ({ lockMessage: vi.fn() }));
+vi.mock('../db/blocks.js', () => ({ hasBlockInDirectConversation: vi.fn() }));
 vi.mock('../db/reactions.js', () => ({ toggleReaction: vi.fn(), listReactions: vi.fn() }));
 
 describe('ReactionsService (CHAT-033)', () => {
   const realtime = { publishToConversation: vi.fn().mockResolvedValue(undefined) };
-  const service = new ReactionsService({} as Database, realtime as unknown as RealtimeService);
+  const db = { transaction: vi.fn((fn: (tx: unknown) => unknown) => fn({})) };
+  const service = new ReactionsService(
+    db as unknown as Database,
+    realtime as unknown as RealtimeService,
+  );
   const message = { id: 'm', conversationId: 'c', deletedAt: null, type: 'text' };
 
   beforeEach(() => {
     vi.clearAllMocks();
     vi.mocked(conversationsDb.isConversationMember).mockResolvedValue(true);
-    vi.mocked(messagesDb.findMessage).mockResolvedValue(message as never);
+    vi.mocked(blocksDb.hasBlockInDirectConversation).mockResolvedValue(false);
+    vi.mocked(messagesDb.lockMessage).mockResolvedValue(message as never);
     vi.mocked(reactionsDb.listReactions).mockResolvedValue(
       new Map([['m', [{ emoji: '👍', count: 1, userIds: ['u'] }]]]),
     );
@@ -37,18 +44,25 @@ describe('ReactionsService (CHAT-033)', () => {
   it('refuses outsiders, other conversations, deleted messages and the distinct-emoji cap', async () => {
     vi.mocked(conversationsDb.isConversationMember).mockResolvedValueOnce(false);
     await expect(service.toggle('c', 'u', 'm', '👍')).rejects.toThrow(NotFoundException);
-    vi.mocked(messagesDb.findMessage).mockResolvedValueOnce({
+    vi.mocked(messagesDb.lockMessage).mockResolvedValueOnce({
       ...message,
       conversationId: 'x',
     } as never);
     await expect(service.toggle('c', 'u', 'm', '👍')).rejects.toThrow(NotFoundException);
-    vi.mocked(messagesDb.findMessage).mockResolvedValueOnce({
+    vi.mocked(messagesDb.lockMessage).mockResolvedValueOnce({
       ...message,
       deletedAt: new Date(),
     } as never);
     await expect(service.toggle('c', 'u', 'm', '👍')).rejects.toThrow(BadRequestException);
     vi.mocked(reactionsDb.toggleReaction).mockResolvedValue('limit');
     await expect(service.toggle('c', 'u', 'm', '👍')).rejects.toThrow(/at most/);
+    expect(realtime.publishToConversation).not.toHaveBeenCalled();
+  });
+
+  it('refuses reactions in a direct conversation with a block either way', async () => {
+    vi.mocked(blocksDb.hasBlockInDirectConversation).mockResolvedValueOnce(true);
+    await expect(service.toggle('c', 'u', 'm', '👍')).rejects.toThrow(ForbiddenException);
+    expect(reactionsDb.toggleReaction).not.toHaveBeenCalled();
     expect(realtime.publishToConversation).not.toHaveBeenCalled();
   });
 });

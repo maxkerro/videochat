@@ -8,8 +8,9 @@ describe('canSeePresence (CHAT-034)', () => {
     expect(canSeePresence('nobody', 'everyone', true)).toBe(false);
   });
 
-  it("hides everyone's presence from a viewer who hides their own", () => {
+  it('is reciprocal: a viewer sees only those they would share their own presence with', () => {
     expect(canSeePresence('everyone', 'nobody', true)).toBe(false);
-    expect(canSeePresence('everyone', 'contacts', false)).toBe(true);
+    expect(canSeePresence('everyone', 'contacts', true)).toBe(true);
+    expect(canSeePresence('everyone', 'contacts', false)).toBe(false);
   });
 });

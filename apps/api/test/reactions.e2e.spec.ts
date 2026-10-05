@@ -102,4 +102,28 @@ describe.skipIf(!hasInfra)('reactions (CHAT-033)', () => {
       .expect(200);
     await react(anna, conversationId, messageId, '👍').expect(400);
   });
+
+  it('stops reactions both ways in a direct conversation once either side blocks', async () => {
+    const { anna, ben, conversationId, messageId } = await setUp();
+    const annaSocket = await connect(anna);
+    await request(server()).post(`/users/${ben.id}/block`).set(bearer(anna.token)).expect(200);
+
+    await react(ben, conversationId, messageId, '👍').expect(403);
+    await react(anna, conversationId, messageId, '👍').expect(403);
+    await annaSocket.expectNone('message.reactions', (p) => p.messageId === messageId, 300);
+
+    await request(server()).delete(`/users/${ben.id}/block`).set(bearer(anna.token)).expect(200);
+    await react(ben, conversationId, messageId, '👍').expect(200);
+  });
+
+  it('keeps the distinct-emoji cap under concurrent new emoji', async () => {
+    const { anna, conversationId, messageId } = await setUp();
+    // Code points from a contiguous emoji block, one more than the cap, all at once.
+    const emoji = Array.from({ length: LIMITS.reactionsPerMessageMax + 5 }, (_, i) =>
+      String.fromCodePoint(0x1f600 + i),
+    );
+    const results = await Promise.all(emoji.map((e) => react(anna, conversationId, messageId, e)));
+    expect(results.filter((r) => r.status === 200)).toHaveLength(LIMITS.reactionsPerMessageMax);
+    expect(results.filter((r) => r.status === 400)).toHaveLength(5);
+  });
 });

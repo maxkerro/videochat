@@ -263,6 +263,22 @@ export async function findMessage(
   return row;
 }
 
+/** CHAT-033: like {@link findMessage}, but takes a row lock (`FOR UPDATE`) for the rest of the
+ *  caller's transaction -- serialises reactions on one message against each other (the
+ *  distinct-emoji cap) and against a concurrent delete (whose UPDATE waits on the same lock). */
+export async function lockMessage(
+  db: DbExecutor,
+  messageId: string,
+): Promise<MessageRow | undefined> {
+  const [row] = await db
+    .select()
+    .from(messages)
+    .where(eq(messages.id, messageId))
+    .limit(1)
+    .for('update');
+  return row;
+}
+
 export async function findMessagesByIds(db: DbExecutor, ids: string[]): Promise<MessageRow[]> {
   if (!ids.length) return [];
   return db.select().from(messages).where(inArray(messages.id, ids));

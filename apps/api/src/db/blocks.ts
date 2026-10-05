@@ -131,3 +131,34 @@ export async function isSenderBlockedInDirectConversation(
     .limit(1);
   return row !== undefined;
 }
+
+/**
+ * True for a *direct* conversation where either member has blocked the other -- the check
+ * reactions use. Stricter than {@link isSenderBlockedInDirectConversation} on purpose: a reaction
+ * is a live ping to the other person, so a block in either direction ends them both ways (the
+ * blocker reacting would still reach the person they blocked). Always false for groups, like the
+ * message-send check.
+ */
+export async function hasBlockInDirectConversation(
+  db: DbExecutor,
+  conversationId: string,
+  userId: string,
+): Promise<boolean> {
+  const [row] = await db
+    .select({ blockerId: blocks.blockerId })
+    .from(conversations)
+    .innerJoin(
+      memberships,
+      and(eq(memberships.conversationId, conversations.id), ne(memberships.userId, userId)),
+    )
+    .innerJoin(
+      blocks,
+      or(
+        and(eq(blocks.blockerId, memberships.userId), eq(blocks.blockedId, userId)),
+        and(eq(blocks.blockerId, userId), eq(blocks.blockedId, memberships.userId)),
+      ),
+    )
+    .where(and(eq(conversations.id, conversationId), eq(conversations.type, 'direct')))
+    .limit(1);
+  return row !== undefined;
+}

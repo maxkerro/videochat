@@ -31,7 +31,9 @@ export async function listReactions(
 
 /**
  * Adds the reaction, or removes it if this person already reacted with this emoji. Returns
- * whether it's now on. Refuses a new emoji once the message has `maxDistinct` different ones.
+ * whether it's now on. Refuses a new emoji once the message has `maxDistinct` different ones --
+ * exact only when called inside a transaction holding the message's row lock (`lockMessage`),
+ * as `ReactionsService.toggle` does.
  */
 export async function toggleReaction(
   db: DbExecutor,
