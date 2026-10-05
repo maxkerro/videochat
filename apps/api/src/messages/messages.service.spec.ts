@@ -1,4 +1,9 @@
-import { ConflictException, ForbiddenException, NotFoundException } from '@nestjs/common';
+import {
+  BadRequestException,
+  ConflictException,
+  ForbiddenException,
+  NotFoundException,
+} from '@nestjs/common';
 import type { Database } from '../db/client.js';
 import * as blocksDb from '../db/blocks.js';
 import * as attachmentsDb from '../db/attachments.js';
@@ -35,6 +40,7 @@ vi.mock('../db/messages.js', async () => {
     listMessagesAfter: vi.fn(),
     SenderNotAMemberError: actual.SenderNotAMemberError,
     ClientMsgIdConflictError: actual.ClientMsgIdConflictError,
+    AttachmentUnavailableError: actual.AttachmentUnavailableError,
   };
 });
 
@@ -62,7 +68,6 @@ describe('MessagesService', () => {
   let linkPreviews: { attachToMessage: ReturnType<typeof vi.fn> };
   let attachments: {
     prepareForMessage: ReturnType<typeof vi.fn>;
-    linkToMessage: ReturnType<typeof vi.fn>;
     deleteRows: ReturnType<typeof vi.fn>;
   };
 
@@ -70,7 +75,6 @@ describe('MessagesService', () => {
     vi.resetAllMocks();
     attachments = {
       prepareForMessage: vi.fn(),
-      linkToMessage: vi.fn().mockResolvedValue(undefined),
       deleteRows: vi.fn().mockResolvedValue(undefined),
     };
     linkPreviews = { attachToMessage: vi.fn().mockResolvedValue(undefined) };
@@ -137,13 +141,34 @@ describe('MessagesService', () => {
         attachmentId: attachment.id,
       });
 
-      expect(attachments.prepareForMessage).toHaveBeenCalledWith('user-1', 'conv-1', attachment.id);
+      expect(attachments.prepareForMessage).toHaveBeenCalledWith(
+        'user-1',
+        'conv-1',
+        attachment.id,
+        'c-1',
+      );
       expect(messagesDb.appendMessage).toHaveBeenCalledWith(
         {},
-        expect.objectContaining({ type: 'image', body: null, meta: { attachment } }),
+        // Linked in the same transaction as the insert.
+        expect.objectContaining({
+          type: 'image',
+          body: null,
+          meta: { attachment },
+          attachmentId: attachment.id,
+        }),
       );
-      expect(attachments.linkToMessage).toHaveBeenCalledWith(attachment.id, message.id);
       expect(message.attachment).toEqual(attachment);
+    });
+
+    it('CHAT-030: a 400 when the attachment was linked elsewhere or swept meanwhile', async () => {
+      vi.mocked(conversationsDb.isConversationMember).mockResolvedValue(true);
+      attachments.prepareForMessage.mockResolvedValue({ id: 'a', kind: 'file' });
+      vi.mocked(messagesDb.appendMessageWithStatus).mockRejectedValueOnce(
+        new messagesDb.AttachmentUnavailableError('a'),
+      );
+      await expect(
+        service.send('conv-1', 'user-1', { clientMsgId: 'c-1', attachmentId: 'a' }),
+      ).rejects.toThrow(BadRequestException);
     });
 
     it("CHAT-030: doesn't create a message when the attachment can't be prepared", async () => {

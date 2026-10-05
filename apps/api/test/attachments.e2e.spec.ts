@@ -83,7 +83,8 @@ describe.skipIf(!hasInfra)('attachments (CHAT-030)', () => {
       },
     });
 
-    const key = s3.keyFromUrl(upload.uploadUrl);
+    // Uploaded to a staging key; the stripped copy lives at the key downloads use.
+    const key = s3.keyFromUrl(upload.uploadUrl).replace(/upload$/, 'original');
     const stored = s3.objects.get(key)!.body;
     expect((await sharp(stored).metadata()).exif).toBeUndefined();
     const thumb = s3.objects.get(key.replace(/original$/, 'thumb.webp'))!.body;
@@ -123,10 +124,11 @@ describe.skipIf(!hasInfra)('attachments (CHAT-030)', () => {
       sizeBytes: pdf.length,
     });
     s3.upload(upload.uploadUrl, pdf, 'application/pdf');
+    const clientMsgId = randomUUID();
     const sent = await request(server())
       .post(`/conversations/${conversationId}/messages`)
       .set(bearer(anna.token))
-      .send({ clientMsgId: randomUUID(), attachmentId: upload.attachmentId, body: 'numbers' })
+      .send({ clientMsgId, attachmentId: upload.attachmentId, body: 'numbers' })
       .expect(201);
     expect(sent.body).toMatchObject({
       type: 'file',
@@ -138,6 +140,29 @@ describe.skipIf(!hasInfra)('attachments (CHAT-030)', () => {
       .set(bearer(ben.token))
       .expect(200);
     expect(url.body.url).toContain('op=download');
+
+    // A file has no thumbnail, and the thumbnail path never falls back to the original.
+    await request(server())
+      .get(`/attachments/${upload.attachmentId}/url?variant=thumb`)
+      .set(bearer(ben.token))
+      .expect(404);
+
+    // A retry of the same message is fine; the same upload on another message isn't.
+    await request(server())
+      .post(`/conversations/${conversationId}/messages`)
+      .set(bearer(anna.token))
+      .send({ clientMsgId, attachmentId: upload.attachmentId, body: 'numbers' })
+      .expect(201);
+    await request(server())
+      .post(`/conversations/${conversationId}/messages`)
+      .set(bearer(anna.token))
+      .send({ clientMsgId: randomUUID(), attachmentId: upload.attachmentId })
+      .expect(400);
+
+    // Re-using the still-valid upload URL after sending doesn't touch what members download.
+    const storedKey = s3.keyFromUrl(upload.uploadUrl).replace(/upload$/, 'original');
+    s3.upload(upload.uploadUrl, Buffer.alloc(LIMITS.attachmentMaxBytes + 1), 'text/html');
+    expect(s3.objects.get(storedKey)!.body.equals(pdf)).toBe(true);
   });
 
   it("refuses files over the limit, uploads that never happened, and other people's uploads", async () => {

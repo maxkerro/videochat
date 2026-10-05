@@ -245,6 +245,8 @@ export const messages = pgTable(
       call?: CallMessageMeta;
       attachment?: Attachment;
       linkPreview?: LinkPreview;
+      /** CHAT-031: the sender removed the preview; it's never added back to this message. */
+      linkPreviewDismissed?: boolean;
     }>(),
   },
   (t) => [

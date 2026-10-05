@@ -1,5 +1,6 @@
 import { Inject, Injectable } from '@nestjs/common';
 import {
+  CopyObjectCommand,
   DeleteObjectsCommand,
   GetObjectCommand,
   HeadObjectCommand,
@@ -40,8 +41,17 @@ export class S3Service {
 
   /** Short-lived signed GET URL. Only conversation/profile owners' clients ever see one, and it
    *  is meant to be regenerated on every read (e.g. every `/me`), not cached long-term. */
-  getSignedGetUrl(key: string, expiresInSeconds = 3600): Promise<string> {
-    const command = new GetObjectCommand({ Bucket: this.env.S3_BUCKET, Key: key });
+  getSignedGetUrl(
+    key: string,
+    expiresInSeconds = 3600,
+    /** Overrides the stored Content-Type in the response (CHAT-030: never trust the uploader's). */
+    responseContentType?: string,
+  ): Promise<string> {
+    const command = new GetObjectCommand({
+      Bucket: this.env.S3_BUCKET,
+      Key: key,
+      ...(responseContentType ? { ResponseContentType: responseContentType } : {}),
+    });
     return getSignedUrl(this.client, command, { expiresIn: expiresInSeconds });
   }
 
@@ -80,12 +90,31 @@ export class S3Service {
     }
   }
 
-  async getObject(key: string): Promise<Buffer> {
+  /** The object's bytes. With `maxBytes`, refuses (ObjectTooLargeError) before buffering anything
+   *  larger -- the response's length is authoritative even if the object changed since a HEAD. */
+  async getObject(key: string, maxBytes?: number): Promise<Buffer> {
     const res = await this.client.send(
       new GetObjectCommand({ Bucket: this.env.S3_BUCKET, Key: key }),
     );
+    if (maxBytes !== undefined && (res.ContentLength ?? Infinity) > maxBytes) {
+      (res.Body as { destroy?: () => void } | undefined)?.destroy?.();
+      throw new ObjectTooLargeError(key);
+    }
     const bytes = await res.Body!.transformToByteArray();
     return Buffer.from(bytes);
+  }
+
+  /** Server-side copy (no bytes through the API), with a Content-Type we choose. */
+  async copyObject(fromKey: string, toKey: string, contentType: string): Promise<void> {
+    await this.client.send(
+      new CopyObjectCommand({
+        Bucket: this.env.S3_BUCKET,
+        CopySource: `${this.env.S3_BUCKET}/${fromKey.split('/').map(encodeURIComponent).join('/')}`,
+        Key: toKey,
+        ContentType: contentType,
+        MetadataDirective: 'REPLACE',
+      }),
+    );
   }
 
   async deleteObjects(keys: string[]): Promise<void> {
@@ -98,12 +127,15 @@ export class S3Service {
     );
   }
 
-  /** CHAT-030: signed GET that downloads under the original filename. */
+  /** CHAT-030: signed GET that downloads under the original filename -- always as an opaque
+   *  download (attachment + octet-stream), so an uploaded HTML or SVG file never renders inline
+   *  on the bucket's origin. */
   getSignedDownloadUrl(key: string, filename: string, expiresInSeconds: number): Promise<string> {
     const command = new GetObjectCommand({
       Bucket: this.env.S3_BUCKET,
       Key: key,
       ResponseContentDisposition: contentDisposition(filename),
+      ResponseContentType: 'application/octet-stream',
     });
     return getSignedUrl(this.client, command, { expiresIn: expiresInSeconds });
   }
@@ -112,6 +144,13 @@ export class S3Service {
   getAvatarUrl(avatarKey: string | null): Promise<string | null> {
     if (!avatarKey) return Promise.resolve(null);
     return this.getSignedGetUrl(`${avatarKey}/256.webp`);
+  }
+}
+
+export class ObjectTooLargeError extends Error {
+  constructor(key: string) {
+    super(`Object ${key} is larger than allowed`);
+    this.name = 'ObjectTooLargeError';
   }
 }
 

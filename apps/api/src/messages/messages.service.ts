@@ -21,6 +21,7 @@ import { deleteReactionsForMessage } from '../db/reactions.js';
 import { findConversationForUser, isConversationMember } from '../db/conversations.js';
 import {
   appendMessageWithStatus,
+  AttachmentUnavailableError,
   editMessageBody,
   findMessage,
   listMessagesAfter,
@@ -91,7 +92,12 @@ export class MessagesService {
     // CHAT-030: verify (and, for images, strip and thumbnail) the attachment before the message
     // exists, so nobody can ever download an unprocessed upload through it.
     const attachment = input.attachmentId
-      ? await this.attachments.prepareForMessage(senderId, conversationId, input.attachmentId)
+      ? await this.attachments.prepareForMessage(
+          senderId,
+          conversationId,
+          input.attachmentId,
+          input.clientMsgId,
+        )
       : undefined;
 
     let row;
@@ -103,7 +109,9 @@ export class MessagesService {
         body: input.body ?? null,
         clientMsgId: input.clientMsgId,
         replyToId: input.replyToId ?? null,
-        ...(attachment ? { type: attachment.kind, meta: { attachment } } : {}),
+        ...(attachment
+          ? { type: attachment.kind, meta: { attachment }, attachmentId: attachment.id }
+          : {}),
       }));
     } catch (err) {
       if (err instanceof SenderNotAMemberError) {
@@ -115,9 +123,12 @@ export class MessagesService {
       if (err instanceof ClientMsgIdConflictError) {
         throw new ConflictException('clientMsgId already used in another conversation');
       }
+      // CHAT-030: another send linked it first, or it was swept as unsent. Nothing was inserted.
+      if (err instanceof AttachmentUnavailableError) {
+        throw new BadRequestException('This attachment is no longer available');
+      }
       throw err;
     }
-    if (attachment) await this.attachments.linkToMessage(attachment.id, row.id);
     const message = await toMessageWithReply(this.db, row);
 
     // A retried send resolves to the same row every time; re-broadcasting it is harmless

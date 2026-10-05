@@ -37,6 +37,23 @@ function clean(value: string | undefined, max: number): string | null {
   return text.length > max ? `${text.slice(0, max - 1)}…` : text;
 }
 
+/**
+ * The page's text in its declared charset: the Content-Type header's, else a `<meta charset>` /
+ * `http-equiv` in the first 2 KB, else UTF-8. Unknown labels fall back to UTF-8 too.
+ */
+export function decodeHtml(body: Buffer, contentType: string): string {
+  const charset =
+    /charset\s*=\s*["']?([\w.:-]+)/i.exec(contentType)?.[1] ??
+    /<meta\b[^>]*charset\s*=\s*["']?([\w.:-]+)/i.exec(
+      body.subarray(0, 2048).toString('latin1'),
+    )?.[1];
+  try {
+    return new TextDecoder(charset ?? 'utf-8').decode(body);
+  } catch {
+    return body.toString('utf8');
+  }
+}
+
 /** Reads `<meta property|name="..." content="...">` in either attribute order. */
 function metaContent(html: string, names: string[]): string | undefined {
   for (const tag of html.match(/<meta\b[^>]*>/gi) ?? []) {
@@ -88,7 +105,7 @@ export function parsePreview(html: string, pageUrl: string): LinkPreview | null 
  *   inside the socket's DNS lookup, so the address checked is the address connected to (no DNS-
  *   rebinding gap between "check" and "connect");
  * - redirects re-checked the same way, at most 3;
- * - 3 s total, at most 1 MB read, HTML only.
+ * - 3 s total, at most 1 MB read, HTML only, decoded in the page's own charset.
  */
 @Injectable()
 export class LinkPreviewFetcher {
@@ -174,7 +191,7 @@ export class LinkPreviewFetcher {
           const finish = () => {
             if (done) return;
             done = true;
-            resolve({ html: Buffer.concat(chunks).toString('utf8') });
+            resolve({ html: decodeHtml(Buffer.concat(chunks), type) });
           };
           res.on('data', (chunk: Buffer) => {
             if (done) return;

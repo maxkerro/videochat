@@ -16,7 +16,7 @@ import { AppModule } from '../src/app.module.js';
 import { createPool } from '../src/db/client.js';
 import { resetDatabase, runMigrations } from '../src/db/migrate.js';
 import { MailService } from '../src/mail/mail.service.js';
-import { S3Service } from '../src/storage/s3.service.js';
+import { ObjectTooLargeError, S3Service } from '../src/storage/s3.service.js';
 import { LinkPreviewFetcher } from '../src/link-previews/link-preview.fetcher.js';
 import { WebPushChannel } from '../src/notifications/web-push.channel.js';
 
@@ -67,9 +67,19 @@ export class FakeS3Service {
     const o = this.objects.get(key);
     return Promise.resolve(o ? { size: o.body.length, contentType: o.contentType } : null);
   }
-  getObject(key: string) {
+  getObject(key: string, maxBytes?: number) {
     const o = this.objects.get(key);
-    return o ? Promise.resolve(o.body) : Promise.reject(new Error(`No object ${key}`));
+    if (!o) return Promise.reject(new Error(`No object ${key}`));
+    if (maxBytes !== undefined && o.body.length > maxBytes) {
+      return Promise.reject(new ObjectTooLargeError(key));
+    }
+    return Promise.resolve(o.body);
+  }
+  copyObject(fromKey: string, toKey: string, contentType: string) {
+    const o = this.objects.get(fromKey);
+    if (!o) return Promise.reject(new Error(`No object ${fromKey}`));
+    this.objects.set(toKey, { body: o.body, contentType });
+    return Promise.resolve();
   }
   deleteObjects(keys: string[]) {
     for (const k of keys) this.objects.delete(k);

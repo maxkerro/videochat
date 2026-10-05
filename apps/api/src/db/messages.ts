@@ -2,6 +2,7 @@ import { and, asc, desc, eq, gt, inArray, isNull, lt, sql } from 'drizzle-orm';
 import { ulid } from 'ulid';
 import type { LinkPreview, MessageType } from '@videochat/shared';
 import type { Database, DbExecutor } from './client.js';
+import { linkAttachmentToMessage } from './attachments.js';
 import { conversations, memberships, messages, type MessageRow } from './schema.js';
 
 /** Thrown by {@link appendMessage} when `senderId` is no longer (or never was) an active member
@@ -44,6 +45,17 @@ export interface AppendMessageInput {
   replyToId?: string | null;
   /** CHAT-044: structured data for non-text types (see the `meta` column). */
   meta?: MessageRow['meta'];
+  /** CHAT-030: attachment to link to the new message in the same transaction. If it can't be
+   *  linked (already on another message, or swept), nothing is inserted:
+   *  {@link AttachmentUnavailableError}. */
+  attachmentId?: string;
+}
+
+export class AttachmentUnavailableError extends Error {
+  constructor(attachmentId: string) {
+    super(`Attachment ${attachmentId} can't be linked`);
+    this.name = 'AttachmentUnavailableError';
+  }
 }
 
 /**
@@ -124,6 +136,10 @@ export async function appendMessageWithStatus(
         meta: input.meta ?? null,
       })
       .returning();
+
+    if (input.attachmentId && !(await linkAttachmentToMessage(tx, input.attachmentId, row!.id))) {
+      throw new AttachmentUnavailableError(input.attachmentId); // rolls the insert back
+    }
 
     if (input.senderId) {
       // Sending a message counts as having read up to it -- without this, the sender's own
@@ -231,7 +247,8 @@ export function directKeyFor(userA: string, userB: string): string {
 }
 
 /**
- * CHAT-031: sets (or, with null, removes) a message's link preview. Only while the message still
+ * CHAT-031: sets a message's link preview, or with null removes it and records the dismissal
+ * (so it is never set again). Only while the message still
  * exists, isn't deleted, and still has the body the preview was made for -- an edit or delete
  * that landed while the preview was being fetched wins.
  */
@@ -243,12 +260,15 @@ export async function setMessageLinkPreview(
 ): Promise<MessageRow | undefined> {
   const conditions = [eq(messages.id, messageId), isNull(messages.deletedAt)];
   if (expectedBody !== undefined) conditions.push(eq(messages.body, expectedBody));
+  // Never re-add a preview the sender dismissed.
+  if (preview)
+    conditions.push(sql`coalesce(${messages.meta} ->> 'linkPreviewDismissed', '') <> 'true'`);
   const [row] = await db
     .update(messages)
     .set({
       meta: preview
         ? sql`coalesce(${messages.meta}, '{}'::jsonb) || jsonb_build_object('linkPreview', ${JSON.stringify(preview)}::jsonb)`
-        : sql`case when ${messages.meta} is null then null else ${messages.meta} - 'linkPreview' end`,
+        : sql`(coalesce(${messages.meta}, '{}'::jsonb) - 'linkPreview') || '{"linkPreviewDismissed": true}'::jsonb`,
     })
     .where(and(...conditions))
     .returning();

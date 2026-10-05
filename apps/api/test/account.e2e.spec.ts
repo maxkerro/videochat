@@ -270,7 +270,8 @@ describe.skipIf(!hasInfra)('settings and account (CHAT-037)', () => {
         .set(bearer(anna.token))
         .send({ clientMsgId: randomUUID(), attachmentId: upload.body.attachmentId })
         .expect(201);
-      const key = s3.keyFromUrl(upload.body.uploadUrl);
+      // The stored (processed) copy, not the staging key the upload went to.
+      const key = s3.keyFromUrl(upload.body.uploadUrl).replace(/upload$/, 'original');
       expect(s3.objects.has(key)).toBe(true);
 
       await request(server())

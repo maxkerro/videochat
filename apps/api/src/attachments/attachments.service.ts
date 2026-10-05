@@ -22,14 +22,14 @@ import {
   deleteStaleUnsentAttachments,
   findAttachment,
   insertAttachment,
-  linkAttachmentToMessage,
   markAttachmentProcessed,
 } from '../db/attachments.js';
 import type { Database } from '../db/client.js';
 import { isConversationMember } from '../db/conversations.js';
+import { findMessage } from '../db/messages.js';
 import type { AttachmentRow } from '../db/schema.js';
 import { DB } from '../infra/tokens.js';
-import { S3Service } from '../storage/s3.service.js';
+import { ObjectTooLargeError, S3Service } from '../storage/s3.service.js';
 
 /** How long a signed upload URL stays valid. */
 const UPLOAD_URL_TTL_SEC = 15 * 60;
@@ -55,6 +55,23 @@ export function normalizeContentType(type: string): string {
   return /^[a-z0-9.+-]+\/[a-z0-9.+-]+$/.test(t) ? t : 'application/octet-stream';
 }
 
+/**
+ * Where the browser uploads to. Deliberately not the key anyone downloads from (`objectKey`): the
+ * signed PUT stays valid for its whole TTL, so the uploader could otherwise overwrite the
+ * verified, stripped object after sending. Processing reads from here and writes `objectKey`.
+ */
+export function uploadKeyOf(objectKey: string): string {
+  return objectKey.replace(/\/original$/, '/upload');
+}
+
+/** Every object an attachment row may own. */
+function objectKeysOf(row: AttachmentRow): string[] {
+  return [row.objectKey, uploadKeyOf(row.objectKey), ...(row.thumbKey ? [row.thumbKey] : [])];
+}
+
+const tooLarge = () =>
+  new BadRequestException(`Files can be up to ${LIMITS.attachmentMaxBytes / (1024 * 1024)} MB`);
+
 export function toAttachment(row: AttachmentRow): Attachment {
   return {
     id: row.id,
@@ -71,11 +88,11 @@ export function toAttachment(row: AttachmentRow): Attachment {
  * CHAT-030: file and image attachments.
  *
  * 1. `createUpload` -- a member asks to upload; gets a short-lived signed PUT straight to object
- *    storage (the bytes never pass through the API).
+ *    storage (the bytes never pass through the API), to a staging key (`uploadKeyOf`).
  * 2. The client uploads, then sends a message with `attachmentId`; MessagesService calls
  *    `prepareForMessage`, which checks the upload really happened and is within the size limit,
  *    and for images strips metadata (EXIF location!) and makes a thumbnail -- before anyone else
- *    can download it.
+ *    can download it. The result is written to `objectKey`, which only the API writes.
  * 3. `getUrl` hands out short-lived signed GETs, re-checking membership every time.
  *
  * Image processing runs inside the send request rather than a background queue: a 25 MB image
@@ -121,7 +138,7 @@ export class AttachmentsService implements OnModuleInit, OnModuleDestroy {
       objectKey,
     });
     const { url, headers } = await this.s3.getSignedPutUrl(
-      objectKey,
+      uploadKeyOf(objectKey),
       contentType,
       UPLOAD_URL_TTL_SEC,
     );
@@ -135,45 +152,44 @@ export class AttachmentsService implements OnModuleInit, OnModuleDestroy {
 
   /**
    * Verifies an upload before a message may carry it, and processes it once. Only the uploader
-   * can attach it, only in the conversation it was uploaded to. A retried send (same attachment,
-   * already processed) returns the stored result without redoing the work.
+   * can attach it, only in the conversation it was uploaded to, and only to one message: a
+   * retried send of that same message (same `clientMsgId`) gets the stored result back, any other
+   * message is refused. The final link to the message happens atomically with the message insert
+   * (`appendMessageWithStatus`), which also catches two different sends racing for one upload.
    */
   async prepareForMessage(
     userId: string,
     conversationId: string,
     attachmentId: string,
+    clientMsgId: string,
   ): Promise<Attachment> {
     const row = await findAttachment(this.db, attachmentId);
     if (!row || row.uploaderId !== userId || row.conversationId !== conversationId) {
       throw new BadRequestException('Attachment not found');
     }
+    if (row.messageId) {
+      const sentWith = await findMessage(this.db, row.messageId);
+      if (sentWith?.senderId === userId && sentWith.clientMsgId === clientMsgId) {
+        return toAttachment(row);
+      }
+      throw new BadRequestException('This attachment has already been sent');
+    }
     if (row.processedAt) return toAttachment(row);
 
-    const head = await this.s3.headObject(row.objectKey);
+    const uploadKey = uploadKeyOf(row.objectKey);
+    const head = await this.s3.headObject(uploadKey);
     if (!head) throw new BadRequestException('The file has not finished uploading');
     if (head.size <= 0 || head.size > LIMITS.attachmentMaxBytes) {
       await this.discard(row);
-      throw new BadRequestException(
-        `Files can be up to ${LIMITS.attachmentMaxBytes / (1024 * 1024)} MB`,
-      );
+      throw tooLarge();
     }
 
-    if (row.kind === 'image') {
-      return toAttachment(await this.processImage(row));
-    }
-    return toAttachment(
-      await markAttachmentProcessed(this.db, row.id, {
-        sizeBytes: head.size,
-        width: null,
-        height: null,
-        thumbKey: null,
-        contentType: row.contentType,
-      }),
-    );
-  }
-
-  async linkToMessage(attachmentId: string, messageId: string): Promise<void> {
-    await linkAttachmentToMessage(this.db, attachmentId, messageId);
+    const processed =
+      row.kind === 'image' ? await this.processImage(row, uploadKey) : await this.storeFile(row);
+    // The staging copy has served its purpose. (The PUT URL may still be live and re-create it;
+    // nothing reads it after this, and `deleteRows` removes it with the rest.)
+    await this.s3.deleteObjects([uploadKey]).catch(() => undefined);
+    return toAttachment(processed);
   }
 
   async getUrl(
@@ -190,20 +206,26 @@ export class AttachmentsService implements OnModuleInit, OnModuleDestroy {
     ) {
       throw new NotFoundException('Attachment not found');
     }
-    const key = variant === 'thumb' && row.thumbKey ? row.thumbKey : row.objectKey;
-    const url =
-      variant === 'original' && row.kind === 'file'
-        ? await this.s3.getSignedDownloadUrl(key, row.filename, DOWNLOAD_URL_TTL_SEC)
-        : await this.s3.getSignedGetUrl(key, DOWNLOAD_URL_TTL_SEC);
+    let url: string;
+    if (variant === 'thumb') {
+      // Only processed images have a thumbnail. Anything else must not fall back to the original
+      // through this inline-rendering path.
+      if (!row.thumbKey) throw new NotFoundException('Attachment not found');
+      url = await this.s3.getSignedGetUrl(row.thumbKey, DOWNLOAD_URL_TTL_SEC, 'image/webp');
+    } else if (row.kind === 'file') {
+      // Files are only ever downloaded (attachment, octet-stream), never rendered inline.
+      url = await this.s3.getSignedDownloadUrl(row.objectKey, row.filename, DOWNLOAD_URL_TTL_SEC);
+    } else {
+      // Images were re-encoded by `processImage`; the type is one from the image allowlist.
+      url = await this.s3.getSignedGetUrl(row.objectKey, DOWNLOAD_URL_TTL_SEC, row.contentType);
+    }
     return { url, expiresAt: new Date(Date.now() + DOWNLOAD_URL_TTL_SEC * 1000).toISOString() };
   }
 
   /** Removes attachments and their stored objects (CHAT-032 deletes call this too). */
   async deleteRows(rows: AttachmentRow[]): Promise<void> {
     if (!rows.length) return;
-    await this.s3.deleteObjects(
-      rows.flatMap((r) => [r.objectKey, ...(r.thumbKey ? [r.thumbKey] : [])]),
-    );
+    await this.s3.deleteObjects(rows.flatMap(objectKeysOf));
     await deleteAttachments(
       this.db,
       rows.map((r) => r.id),
@@ -214,7 +236,7 @@ export class AttachmentsService implements OnModuleInit, OnModuleDestroy {
   async deleteFiles(rows: AttachmentRow[]): Promise<void> {
     if (!rows.length) return;
     await this.s3
-      .deleteObjects(rows.flatMap((r) => [r.objectKey, ...(r.thumbKey ? [r.thumbKey] : [])]))
+      .deleteObjects(rows.flatMap(objectKeysOf))
       .catch((err: Error) => this.logger.warn(`Couldn't delete attachment files: ${err.message}`));
   }
 
@@ -225,9 +247,7 @@ export class AttachmentsService implements OnModuleInit, OnModuleDestroy {
         new Date(now.getTime() - UNSENT_TTL_MS),
       );
       if (stale.length) {
-        await this.s3.deleteObjects(
-          stale.flatMap((r) => [r.objectKey, ...(r.thumbKey ? [r.thumbKey] : [])]),
-        );
+        await this.s3.deleteObjects(stale.flatMap(objectKeysOf));
       }
       return stale.length;
     } catch (err) {
@@ -236,8 +256,34 @@ export class AttachmentsService implements OnModuleInit, OnModuleDestroy {
     }
   }
 
-  private async processImage(row: AttachmentRow): Promise<AttachmentRow> {
-    const original = await this.s3.getObject(row.objectKey);
+  /** A plain file: server-side copy to the stored key, then size-check *that* copy -- the upload
+   *  key may have been rewritten since the HEAD, the copy can't be. */
+  private async storeFile(row: AttachmentRow): Promise<AttachmentRow> {
+    await this.s3.copyObject(uploadKeyOf(row.objectKey), row.objectKey, row.contentType);
+    const stored = await this.s3.headObject(row.objectKey);
+    if (!stored || stored.size <= 0 || stored.size > LIMITS.attachmentMaxBytes) {
+      await this.discard(row);
+      throw tooLarge();
+    }
+    return markAttachmentProcessed(this.db, row.id, {
+      sizeBytes: stored.size,
+      width: null,
+      height: null,
+      thumbKey: null,
+      contentType: row.contentType,
+    });
+  }
+
+  private async processImage(row: AttachmentRow, uploadKey: string): Promise<AttachmentRow> {
+    let original: Buffer;
+    try {
+      // Capped read: the object may have been swapped for a bigger one since the HEAD.
+      original = await this.s3.getObject(uploadKey, LIMITS.attachmentMaxBytes);
+    } catch (err) {
+      if (!(err instanceof ObjectTooLargeError)) throw err;
+      await this.discard(row);
+      throw tooLarge();
+    }
     const animated = row.contentType === 'image/gif';
     let cleaned: Buffer;
     let width: number | undefined;
@@ -269,7 +315,8 @@ export class AttachmentsService implements OnModuleInit, OnModuleDestroy {
         .toBuffer();
     } catch {
       // Claimed to be an image but isn't decodable: keep it, as a plain file nobody's browser
-      // will try to render inline.
+      // will try to render inline. Stored from the bytes we checked, not re-read.
+      await this.s3.putObject(row.objectKey, original, 'application/octet-stream');
       return markAttachmentProcessed(this.db, row.id, {
         kind: 'file',
         sizeBytes: original.length,

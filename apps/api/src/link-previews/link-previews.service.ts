@@ -40,7 +40,14 @@ export class LinkPreviewsService {
     const cached = await this.redis.get(key).catch(() => null);
     if (cached === NONE) return null;
     if (cached) {
-      const parsed = linkPreviewSchema.safeParse(JSON.parse(cached));
+      // A corrupt cache entry is just a miss, not a 500.
+      let json: unknown;
+      try {
+        json = JSON.parse(cached);
+      } catch {
+        json = undefined;
+      }
+      const parsed = linkPreviewSchema.safeParse(json);
       if (parsed.success) return parsed.data;
     }
     // Several messages with the same link at once share one fetch.
@@ -60,14 +67,15 @@ export class LinkPreviewsService {
       const preview = await this.getPreview(url);
       if (!preview) return;
       const updated = await setMessageLinkPreview(this.db, row.id, preview, row.body ?? undefined);
-      if (!updated) return; // Deleted or edited meanwhile.
+      if (!updated) return; // Deleted, edited or dismissed meanwhile.
       await this.publishUpdated(updated);
     } catch (err) {
       this.logger.warn(`Link preview for message ${row.id} failed: ${(err as Error).message}`);
     }
   }
 
-  /** AC: the sender can dismiss the preview after sending. */
+  /** AC: the sender can dismiss the preview after sending. The dismissal is stored on the
+   *  message, so a fetch still in flight (or one after an edit) can't bring the preview back. */
   async removeFromMessage(
     userId: string,
     conversationId: string,
@@ -84,9 +92,9 @@ export class LinkPreviewsService {
     if (row.senderId !== userId) {
       throw new ForbiddenException('Only the sender can remove a link preview');
     }
-    if (!row.meta?.linkPreview) return;
+    const hadPreview = !!row.meta?.linkPreview;
     const updated = await setMessageLinkPreview(this.db, messageId, null);
-    if (updated) await this.publishUpdated(updated);
+    if (updated && hadPreview) await this.publishUpdated(updated);
   }
 
   private async publishUpdated(row: MessageRow): Promise<void> {

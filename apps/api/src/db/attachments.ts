@@ -1,4 +1,4 @@
-import { and, eq, inArray, isNull, sql } from 'drizzle-orm';
+import { and, eq, inArray, isNotNull, isNull, lt, sql } from 'drizzle-orm';
 import type { DbExecutor } from './client.js';
 import { attachments, type AttachmentRow } from './schema.js';
 
@@ -33,7 +33,9 @@ export async function markAttachmentProcessed(
   return row!;
 }
 
-/** Links an attachment to the message that carries it. Only the first message wins. */
+/** Links a processed attachment to the message that carries it. Only the first message wins,
+ *  and a row the unsent-sweep already deleted links nothing (both report false). Runs inside the
+ *  message-insert transaction (`appendMessageWithStatus`). */
 export async function linkAttachmentToMessage(
   db: DbExecutor,
   id: string,
@@ -42,7 +44,13 @@ export async function linkAttachmentToMessage(
   const rows = await db
     .update(attachments)
     .set({ messageId })
-    .where(and(eq(attachments.id, id), isNull(attachments.messageId)))
+    .where(
+      and(
+        eq(attachments.id, id),
+        isNull(attachments.messageId),
+        isNotNull(attachments.processedAt),
+      ),
+    )
     .returning({ id: attachments.id });
   return rows.length > 0;
 }
@@ -55,7 +63,9 @@ export async function findAttachmentsForMessage(
 }
 
 /** Deletes up to `limit` never-sent attachments created before `cutoff`, returning them so
- *  their objects can be removed too. */
+ *  their objects can be removed too. The conditions are repeated on the outer DELETE so that
+ *  Postgres re-checks them against a row a concurrent send just linked (and skips it), rather
+ *  than trusting the subquery's older snapshot. */
 export async function deleteStaleUnsentAttachments(
   db: DbExecutor,
   cutoff: Date,
@@ -64,9 +74,13 @@ export async function deleteStaleUnsentAttachments(
   return db
     .delete(attachments)
     .where(
-      sql`${attachments.id} in (select ${attachments.id} from ${attachments}
-        where ${attachments.messageId} is null and ${attachments.createdAt} < ${cutoff}
-        limit ${limit})`,
+      and(
+        isNull(attachments.messageId),
+        lt(attachments.createdAt, cutoff),
+        sql`${attachments.id} in (select ${attachments.id} from ${attachments}
+          where ${attachments.messageId} is null and ${attachments.createdAt} < ${cutoff}
+          limit ${limit})`,
+      ),
     )
     .returning();
 }

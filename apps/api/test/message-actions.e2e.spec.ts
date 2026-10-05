@@ -144,7 +144,8 @@ describe.skipIf(!hasInfra)('reply, edit and delete (CHAT-032)', () => {
       .expect(201);
     s3.upload(upload.body.uploadUrl, Buffer.from('notes'), 'text/plain');
     const msg = await send(ben, conversationId, { attachmentId: upload.body.attachmentId });
-    const key = s3.keyFromUrl(upload.body.uploadUrl);
+    // The stored (processed) copy, not the staging key the upload went to.
+    const key = s3.keyFromUrl(upload.body.uploadUrl).replace(/upload$/, 'original');
     expect(s3.objects.has(key)).toBe(true);
 
     await request(server())

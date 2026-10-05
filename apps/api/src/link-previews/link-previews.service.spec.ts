@@ -112,4 +112,20 @@ describe('LinkPreviewsService', () => {
       /not found/,
     );
   });
+
+  it('treats a corrupt cache entry as a miss', async () => {
+    await service.getPreview('https://d.dev/');
+    const [cacheKey] = [...store.keys()];
+    store.set(cacheKey!, '{not json');
+    await expect(service.getPreview('https://d.dev/')).resolves.toEqual(preview);
+    expect(fetcher.fetchPreview).toHaveBeenCalledTimes(2);
+  });
+
+  it('records a dismissal even before the preview arrived, without announcing anything', async () => {
+    vi.mocked(messagesDb.findMessage).mockResolvedValue(row());
+    vi.mocked(messagesDb.setMessageLinkPreview).mockResolvedValue(row());
+    await service.removeFromMessage('anna', 'conv', row().id);
+    expect(messagesDb.setMessageLinkPreview).toHaveBeenCalledWith({}, row().id, null);
+    expect(realtime.publishToConversation).not.toHaveBeenCalled();
+  });
 });

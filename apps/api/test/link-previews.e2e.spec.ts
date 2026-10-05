@@ -1,17 +1,20 @@
 import type { INestApplication } from '@nestjs/common';
 import { randomUUID } from 'node:crypto';
+import type { MessageRow } from '../src/db/schema.js';
+import { LinkPreviewsService } from '../src/link-previews/link-previews.service.js';
 import request from 'supertest';
 import { bearer, startE2eApp, type E2eUser, type TestSocket } from './e2e-app.js';
 import { hasInfra } from './helpers.js';
 
 describe.skipIf(!hasInfra)('link previews (CHAT-031)', () => {
+  let app: INestApplication;
   let server: () => ReturnType<INestApplication['getHttpServer']>;
   let signUp: () => Promise<E2eUser>;
   let connect: (user: E2eUser) => Promise<TestSocket>;
   let closeAll: () => Promise<void>;
 
   beforeAll(async () => {
-    ({ server, signUp, connect, close: closeAll } = await startE2eApp('lp'));
+    ({ app, server, signUp, connect, close: closeAll } = await startE2eApp('lp'));
   });
   afterAll(() => closeAll());
 
@@ -94,5 +97,41 @@ describe.skipIf(!hasInfra)('link previews (CHAT-031)', () => {
       .query({ url: 'javascript:alert(1)' })
       .set(bearer(anna.token))
       .expect(400);
+  });
+
+  it('a preview that lands after the sender dismissed it stays dismissed', async () => {
+    const { anna, conversationId, benSocket } = await setUp();
+    // Sent without a fetch, so the dismissal below happens "before the fetch lands".
+    const sent = await send(anna, conversationId, {
+      body: 'https://www.preview.test/late',
+      linkPreview: false,
+    });
+    const path = `/conversations/${conversationId}/messages/${sent.body.id}/link-preview`;
+    await request(server()).delete(path).set(bearer(anna.token)).expect(204);
+
+    await app.get(LinkPreviewsService).attachToMessage({
+      id: sent.body.id,
+      type: 'text',
+      body: 'https://www.preview.test/late',
+    } as MessageRow);
+    await benSocket.expectNone('message.updated', (p) => p.id === sent.body.id, 300);
+    const history = await request(server())
+      .get(`/conversations/${conversationId}/messages`)
+      .set(bearer(anna.token))
+      .expect(200);
+    const message = (history.body.messages as Array<{ id: string }>).find(
+      (m) => m.id === sent.body.id,
+    );
+    expect(message).not.toHaveProperty('linkPreview');
+  });
+
+  it('answers a non-member removing a preview with 404', async () => {
+    const { anna, conversationId } = await setUp();
+    const sent = await send(anna, conversationId, { body: 'https://www.preview.test/x' });
+    const outsider = await signUp();
+    await request(server())
+      .delete(`/conversations/${conversationId}/messages/${sent.body.id}/link-preview`)
+      .set(bearer(outsider.token))
+      .expect(404);
   });
 });

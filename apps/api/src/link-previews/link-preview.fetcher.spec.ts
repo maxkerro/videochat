@@ -6,6 +6,7 @@ import {
   LinkPreviewRefused,
   parsePreview,
 } from './link-preview.fetcher.js';
+import { isPublicAddress } from './ssrf.js';
 
 describe('parsePreview', () => {
   it('reads OpenGraph tags in either attribute order and decodes entities', () => {
@@ -78,6 +79,21 @@ describe('LinkPreviewFetcher', () => {
         } else if (req.url === '/page') {
           res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
           res.end('<meta property="og:title" content="Hello"><title>x</title>');
+        } else if (req.url === '/to-metadata') {
+          res.writeHead(302, { Location: 'http://169.254.169.254/latest/meta-data' });
+          res.end();
+        } else if (req.url === '/cp1251') {
+          res.writeHead(200, { 'Content-Type': 'text/html; charset=windows-1251' });
+          res.end(
+            Buffer.concat([
+              Buffer.from('<title>'),
+              Buffer.from([0xcf, 0xf0, 0xe8, 0xe2, 0xe5, 0xf2]),
+              Buffer.from('</title>'),
+            ]),
+          );
+        } else if (req.url === '/meta-charset') {
+          res.writeHead(200, { 'Content-Type': 'text/html' });
+          res.end(Buffer.from('<meta charset="iso-8859-1"><title>Gr\xfc\xdfe</title>', 'latin1'));
         } else if (req.url === '/json') {
           res.writeHead(200, { 'Content-Type': 'application/json' });
           res.end('{}');
@@ -97,15 +113,37 @@ describe('LinkPreviewFetcher', () => {
       server.close();
     });
 
-    // These use a non-default port, which the real fetcher refuses; the subclass lifts only the
-    // address check, so lift the port check by pointing at it through the checkUrl override too.
-    class TestFetcher extends LoopbackFetcher {
-      protected override isAllowedAddress(): boolean {
-        return true;
+    // The local server is on loopback and a non-default port, both of which the real fetcher
+    // refuses: lift the address check (subclass) and the URL check for these tests.
+    const local = new LoopbackFetcher();
+    (local as unknown as { checkUrl: (u: URL) => void }).checkUrl = () => undefined;
+
+    // Allows only the test server itself (by its port); every other URL gets the real checks.
+    class ServerOnlyFetcher extends LinkPreviewFetcher {
+      protected override isAllowedAddress(address: string): boolean {
+        return address === '127.0.0.1' || address === '::1' || isPublicAddress(address);
       }
     }
-    const local = new TestFetcher();
-    (local as unknown as { checkUrl: (u: URL) => void }).checkUrl = () => undefined;
+    function serverOnly() {
+      const f = new ServerOnlyFetcher();
+      const target = f as unknown as { checkUrl: (u: URL) => void };
+      const realCheck = target.checkUrl.bind(f);
+      target.checkUrl = (u) => (u.origin === base ? undefined : realCheck(u));
+      return f;
+    }
+
+    it('refuses a redirect from an allowed URL to a private address', async () => {
+      await expect(serverOnly().fetchPreview(`${base}/to-metadata`)).rejects.toThrow(/not allowed/);
+    });
+
+    it("decodes the page's own charset", async () => {
+      await expect(local.fetchPreview(`${base}/cp1251`)).resolves.toMatchObject({
+        title: 'Привет',
+      });
+      await expect(local.fetchPreview(`${base}/meta-charset`)).resolves.toMatchObject({
+        title: 'Grüße',
+      });
+    });
 
     it('follows a redirect and parses the page', async () => {
       await expect(local.fetchPreview(`${base}/redirect`)).resolves.toMatchObject({
