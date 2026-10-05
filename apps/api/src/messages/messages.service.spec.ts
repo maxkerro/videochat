@@ -4,6 +4,7 @@ import * as blocksDb from '../db/blocks.js';
 import * as conversationsDb from '../db/conversations.js';
 import * as messagesDb from '../db/messages.js';
 import { SenderNotAMemberError } from '../db/messages.js';
+import type { AttachmentsService } from '../attachments/attachments.service.js';
 import type { RealtimeService } from '../realtime/realtime.service.js';
 import { MessagesService } from './messages.service.js';
 
@@ -41,15 +42,66 @@ function makeMessageRow(overrides: Partial<Record<string, unknown>> = {}) {
 describe('MessagesService', () => {
   let realtime: { publishToConversation: ReturnType<typeof vi.fn> };
   let service: MessagesService;
+  let attachments: {
+    prepareForMessage: ReturnType<typeof vi.fn>;
+    linkToMessage: ReturnType<typeof vi.fn>;
+  };
 
   beforeEach(() => {
     vi.resetAllMocks();
+    attachments = {
+      prepareForMessage: vi.fn(),
+      linkToMessage: vi.fn().mockResolvedValue(undefined),
+    };
     realtime = { publishToConversation: vi.fn().mockResolvedValue(undefined) };
     vi.mocked(blocksDb.isSenderBlockedInDirectConversation).mockResolvedValue(false);
-    service = new MessagesService({} as Database, realtime as unknown as RealtimeService);
+    service = new MessagesService(
+      {} as Database,
+      realtime as unknown as RealtimeService,
+      attachments as unknown as AttachmentsService,
+    );
   });
 
   describe('send', () => {
+    it('CHAT-030: sends a prepared attachment as an image message and links it', async () => {
+      vi.mocked(conversationsDb.isConversationMember).mockResolvedValue(true);
+      const attachment = {
+        id: '22222222-2222-4222-8222-222222222222',
+        kind: 'image' as const,
+        filename: 'cat.jpg',
+        contentType: 'image/jpeg',
+        sizeBytes: 1234,
+        width: 640,
+        height: 480,
+      };
+      attachments.prepareForMessage.mockResolvedValue(attachment);
+      vi.mocked(messagesDb.appendMessage).mockResolvedValue(
+        makeMessageRow({ type: 'image', body: null, meta: { attachment } }),
+      );
+
+      const message = await service.send('conv-1', 'user-1', {
+        clientMsgId: 'c-1',
+        attachmentId: attachment.id,
+      });
+
+      expect(attachments.prepareForMessage).toHaveBeenCalledWith('user-1', 'conv-1', attachment.id);
+      expect(messagesDb.appendMessage).toHaveBeenCalledWith(
+        {},
+        expect.objectContaining({ type: 'image', body: null, meta: { attachment } }),
+      );
+      expect(attachments.linkToMessage).toHaveBeenCalledWith(attachment.id, message.id);
+      expect(message.attachment).toEqual(attachment);
+    });
+
+    it("CHAT-030: doesn't create a message when the attachment can't be prepared", async () => {
+      vi.mocked(conversationsDb.isConversationMember).mockResolvedValue(true);
+      attachments.prepareForMessage.mockRejectedValue(new Error('not uploaded'));
+      await expect(
+        service.send('conv-1', 'user-1', { clientMsgId: 'c-1', attachmentId: 'a' }),
+      ).rejects.toThrow('not uploaded');
+      expect(messagesDb.appendMessage).not.toHaveBeenCalled();
+    });
+
     it('rejects a non-member with 404, without persisting or broadcasting', async () => {
       vi.mocked(conversationsDb.isConversationMember).mockResolvedValue(false);
 

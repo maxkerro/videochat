@@ -645,6 +645,57 @@ describe('ChatPane', () => {
     expect(screen.queryByLabelText('New messages')).not.toBeInTheDocument();
   });
 
+  describe('CHAT-030 attachments', () => {
+    const attachment = {
+      id: '66666666-6666-4666-8666-666666666666',
+      kind: 'file' as const,
+      filename: 'report.pdf',
+      contentType: 'application/pdf',
+      sizeBytes: 2_500_000,
+      width: null,
+      height: null,
+    };
+
+    it('renders a file message with its name, size and caption', async () => {
+      vi.stubGlobal(
+        'fetch',
+        routedFetch({
+          'POST /auth/refresh': () => jsonResponse(session()),
+          [`GET /conversations/${conversationId}`]: () => jsonResponse(conversation()),
+          [`GET /conversations/${conversationId}/messages`]: () =>
+            jsonResponse({
+              messages: [message({ type: 'file', body: 'Q3 numbers', attachment } as never)],
+              hasMore: false,
+            }),
+        }),
+      );
+      renderApp(`/c/${conversationId}`);
+      expect(await screen.findByText('report.pdf')).toBeInTheDocument();
+      expect(screen.getByText('2.4 MB')).toBeInTheDocument();
+      expect(screen.getByText('Q3 numbers')).toBeInTheDocument();
+      expect(screen.getByRole('button', { name: 'Download report.pdf' })).toBeInTheDocument();
+    });
+
+    it('refuses a file over the size limit before uploading anything', async () => {
+      const fetchMock = routedFetch({
+        'POST /auth/refresh': () => jsonResponse(session()),
+        [`GET /conversations/${conversationId}`]: () => jsonResponse(conversation()),
+        [`GET /conversations/${conversationId}/messages`]: () =>
+          jsonResponse({ messages: [], hasMore: false }),
+      });
+      vi.stubGlobal('fetch', fetchMock);
+      renderApp(`/c/${conversationId}`);
+      await screen.findByRole('heading', { name: 'Ben Okafor' });
+      const big = new File(['x'], 'huge.zip', { type: 'application/zip' });
+      Object.defineProperty(big, 'size', { value: 26 * 1024 * 1024 });
+      fireEvent.change(screen.getByTestId('attachment-input'), { target: { files: [big] } });
+      expect(await screen.findByText(/huge.zip is too big/)).toBeInTheDocument();
+      expect(
+        vi.mocked(fetchMock).mock.calls.some(([u]) => String(u).includes('/attachments')),
+      ).toBe(false);
+    });
+  });
+
   describe('CHAT-018 groups', () => {
     const groupId = '77777777-7777-4777-8777-777777777777';
 

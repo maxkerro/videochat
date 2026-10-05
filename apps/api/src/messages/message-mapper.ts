@@ -19,5 +19,9 @@ export function toMessage(row: MessageRow): Message {
     createdAt: row.createdAt.toISOString(),
     // CHAT-044: only call messages carry this, so every other message keeps its exact shape.
     ...(row.type === 'call' && row.meta?.call ? { call: row.meta.call } : {}),
+    // CHAT-030: a deleted message's file is gone with it.
+    ...((row.type === 'image' || row.type === 'file') && row.meta?.attachment && !row.deletedAt
+      ? { attachment: row.meta.attachment }
+      : {}),
   };
 }

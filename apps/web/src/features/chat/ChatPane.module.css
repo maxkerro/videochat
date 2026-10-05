@@ -248,3 +248,38 @@
   display: flex;
   justify-content: center;
 }
+
+/* CHAT-030: a message carrying an image or file. */
+.attachmentBubble {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  padding: var(--space-1);
+  white-space: normal;
+}
+.attachmentBubble .caption {
+  padding: 0 var(--space-2) var(--space-1);
+  white-space: pre-wrap;
+}
+.pane {
+  position: relative;
+}
+.dragging::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  border: 2px dashed var(--color-accent);
+  border-radius: var(--radius-md);
+  pointer-events: none;
+}
+.dropHint {
+  position: absolute;
+  inset: 0;
+  z-index: 5;
+  display: grid;
+  place-items: center;
+  background: color-mix(in srgb, var(--color-bg) 80%, transparent);
+  color: var(--color-text);
+  font-weight: 600;
+  pointer-events: none;
+}

@@ -41,7 +41,25 @@ export const LIMITS = {
    *  Bounded, like the history page, but larger -- there's no scroll-jank concern to keep it small
    *  for, and a bigger page means fewer round trips for someone who was offline a while. */
   messageGapSyncPageSize: 200,
+  /** CHAT-030: largest file a message can carry. */
+  attachmentMaxBytes: 25 * 1024 * 1024,
+  /** CHAT-030: longest edge of an image attachment's preview thumbnail, in px. */
+  attachmentThumbMaxPx: 512,
 } as const;
+
+/** CHAT-030: images get a thumbnail and open in the lightbox; anything else is a download card. */
+export const ATTACHMENT_KINDS = ['image', 'file'] as const;
+export type AttachmentKind = (typeof ATTACHMENT_KINDS)[number];
+
+/** CHAT-030: image types the server can decode, strip and thumbnail. Other images (HEIC, SVG,
+ *  ...) are still accepted, just as plain files -- SVG deliberately so, since rendering one inline
+ *  would be a script-injection vector. */
+export const ATTACHMENT_IMAGE_TYPES = [
+  'image/jpeg',
+  'image/png',
+  'image/webp',
+  'image/gif',
+] as const;
 
 /** CHAT-041: what a call carries. An audio call can be upgraded by turning the camera on later. */
 export const CALL_MEDIA = ['audio', 'video'] as const;

@@ -16,6 +16,7 @@ import { AppModule } from '../src/app.module.js';
 import { createPool } from '../src/db/client.js';
 import { resetDatabase, runMigrations } from '../src/db/migrate.js';
 import { MailService } from '../src/mail/mail.service.js';
+import { S3Service } from '../src/storage/s3.service.js';
 
 class FakeMailService {
   verifyTokens: string[] = [];
@@ -25,6 +26,55 @@ class FakeMailService {
   }
   sendPasswordResetEmail() {
     return Promise.resolve();
+  }
+}
+
+/**
+ * In-memory stand-in for object storage (the test infra has Postgres and Redis, no MinIO).
+ * Signed URLs point at a fake host; a test "uploads" with `upload(url, bytes)`.
+ */
+export class FakeS3Service {
+  readonly objects = new Map<string, { body: Buffer; contentType: string }>();
+  private static readonly HOST = 'https://fake-s3.test/';
+
+  keyFromUrl(url: string): string {
+    return decodeURIComponent(new URL(url).pathname.slice(1));
+  }
+  upload(url: string, body: Buffer, contentType: string): void {
+    this.objects.set(this.keyFromUrl(url), { body, contentType });
+  }
+  putObject(key: string, body: Buffer, contentType: string) {
+    this.objects.set(key, { body, contentType });
+    return Promise.resolve();
+  }
+  getSignedPutUrl(key: string, contentType: string) {
+    return Promise.resolve({
+      url: `${FakeS3Service.HOST}${key}?op=put`,
+      headers: { 'Content-Type': contentType },
+    });
+  }
+  getSignedGetUrl(key: string) {
+    return Promise.resolve(`${FakeS3Service.HOST}${key}?op=get`);
+  }
+  getSignedDownloadUrl(key: string, filename: string) {
+    return Promise.resolve(
+      `${FakeS3Service.HOST}${key}?op=download&name=${encodeURIComponent(filename)}`,
+    );
+  }
+  headObject(key: string) {
+    const o = this.objects.get(key);
+    return Promise.resolve(o ? { size: o.body.length, contentType: o.contentType } : null);
+  }
+  getObject(key: string) {
+    const o = this.objects.get(key);
+    return o ? Promise.resolve(o.body) : Promise.reject(new Error(`No object ${key}`));
+  }
+  deleteObjects(keys: string[]) {
+    for (const k of keys) this.objects.delete(k);
+    return Promise.resolve();
+  }
+  getAvatarUrl(avatarKey: string | null) {
+    return Promise.resolve(avatarKey ? `${FakeS3Service.HOST}${avatarKey}/256.webp` : null);
   }
 }
 
@@ -48,11 +98,14 @@ export async function startE2eApp(prefix: string) {
   const moduleRef = await Test.createTestingModule({ imports: [AppModule] })
     .overrideProvider(MailService)
     .useClass(FakeMailService)
+    .overrideProvider(S3Service)
+    .useClass(FakeS3Service)
     .compile();
   const app: INestApplication = moduleRef.createNestApplication({ bufferLogs: true });
   configureApp(app);
   await app.listen(0, '127.0.0.1');
   const mail = moduleRef.get(MailService) as unknown as FakeMailService;
+  const s3 = moduleRef.get(S3Service) as unknown as FakeS3Service;
   const server = () => app.getHttpServer();
 
   let counter = 0;
@@ -93,7 +146,7 @@ export async function startE2eApp(prefix: string) {
     await app.close();
   }
 
-  return { app, server, signUp, connect, close };
+  return { app, server, signUp, connect, close, s3 };
 }
 
 /**

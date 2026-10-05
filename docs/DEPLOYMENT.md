@@ -76,3 +76,30 @@ UDP), and set `TURN_PROVIDER=hmac`, `TURN_URLS=turn:host:3478?transport=udp,turn
   usage) at, say, 80% of the free allowance.
 - coturn: `--prometheus` exposes metrics on port 9641; alert on
   `rate(turn_traffic_sentb[1h])` crossing your monthly budget divided by 720 (hours in a month).
+
+## Attachments: bucket CORS (CHAT-030)
+
+Browsers upload attachments **straight to the bucket** with a signed `PUT` (the bytes never pass
+through the API), and show images from signed `GET` URLs. The bucket therefore has to allow
+cross-origin requests from the web app's origin, or every upload fails with a CORS error in the
+browser console.
+
+Backblaze B2 (this project's provider) -- with the [B2 CLI](https://www.backblaze.com/docs/cloud-storage-command-line-tools):
+
+```sh
+b2 bucket update --cors-rules '[
+  {
+    "corsRuleName": "videochat-web",
+    "allowedOrigins": ["https://videochat-web-v219.onrender.com", "http://localhost:5173"],
+    "allowedOperations": ["s3_put", "s3_get", "s3_head"],
+    "allowedHeaders": ["content-type"],
+    "exposeHeaders": ["etag"],
+    "maxAgeSeconds": 3600
+  }
+]' <bucket-name>
+```
+
+(The B2 web UI's "CORS Rules" dialog only offers the B2-native API presets, which don't cover the
+S3-compatible `PUT` used here -- use the CLI.) Local MinIO allows all origins by default.
+
+Unsent uploads (a slot requested but no message sent) are removed with their objects after 24 h.

@@ -23,6 +23,7 @@ import {
   SenderNotAMemberError,
 } from '../db/messages.js';
 import { DB } from '../infra/tokens.js';
+import { AttachmentsService } from '../attachments/attachments.service.js';
 import { RealtimeService } from '../realtime/realtime.service.js';
 import { toMessage } from './message-mapper.js';
 
@@ -31,6 +32,7 @@ export class MessagesService {
   constructor(
     @Inject(DB) private readonly db: Database,
     private readonly realtime: RealtimeService,
+    private readonly attachments: AttachmentsService,
   ) {}
 
   /**
@@ -62,13 +64,20 @@ export class MessagesService {
       throw new ForbiddenException('This message could not be delivered');
     }
 
+    // CHAT-030: verify (and, for images, strip and thumbnail) the attachment before the message
+    // exists, so nobody can ever download an unprocessed upload through it.
+    const attachment = input.attachmentId
+      ? await this.attachments.prepareForMessage(senderId, conversationId, input.attachmentId)
+      : undefined;
+
     let row;
     try {
       row = await appendMessage(this.db, {
         conversationId,
         senderId,
-        body: input.body,
+        body: input.body ?? null,
         clientMsgId: input.clientMsgId,
+        ...(attachment ? { type: attachment.kind, meta: { attachment } } : {}),
       });
     } catch (err) {
       if (err instanceof SenderNotAMemberError) {
@@ -82,6 +91,7 @@ export class MessagesService {
       }
       throw err;
     }
+    if (attachment) await this.attachments.linkToMessage(attachment.id, row.id);
     const message = toMessage(row);
 
     // A retried send resolves to the same row every time; re-broadcasting it is harmless

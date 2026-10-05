@@ -1,4 +1,5 @@
 import {
+  ATTACHMENT_KINDS,
   AUTH_TOKEN_PURPOSES,
   CALL_END_REASONS,
   CALL_MEDIA,
@@ -7,6 +8,7 @@ import {
   DEVICE_PLATFORMS,
   MEMBER_ROLES,
   MESSAGE_TYPES,
+  type Attachment,
   type CallMessageMeta,
 } from '@videochat/shared';
 import { sql } from 'drizzle-orm';
@@ -18,6 +20,7 @@ import {
   check,
   foreignKey,
   index,
+  integer,
   pgEnum,
   pgTable,
   primaryKey,
@@ -217,7 +220,7 @@ export const messages = pgTable(
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
     /** Structured data for non-text message types. CHAT-044: `{ call: CallMessageMeta }` on a
      *  `call` message. Null for ordinary text. */
-    meta: jsonb('meta').$type<{ call?: CallMessageMeta }>(),
+    meta: jsonb('meta').$type<{ call?: CallMessageMeta; attachment?: Attachment }>(),
   },
   (t) => [
     // Guarantees ordering integrity and also serves history paging
@@ -324,6 +327,49 @@ export const calls = pgTable(
   ],
 );
 
+export const attachmentKind = pgEnum('attachment_kind', ATTACHMENT_KINDS);
+
+/**
+ * CHAT-030: a file uploaded into a conversation. Created when the client asks for an upload URL
+ * (`message_id` null); attached to a message when that message is sent. The authorisation record
+ * for downloads: a signed URL is only handed to a current member of `conversation_id`. Rows never
+ * attached to a message are swept (with their objects) after a day.
+ */
+export const attachments = pgTable(
+  'attachments',
+  {
+    id: uuid('id').primaryKey(),
+    conversationId: uuid('conversation_id')
+      .notNull()
+      .references(() => conversations.id, { onDelete: 'cascade' }),
+    uploaderId: uuid('uploader_id')
+      .notNull()
+      .references(() => users.id, { onDelete: 'cascade' }),
+    messageId: char('message_id', { length: 26 }).references(() => messages.id, {
+      onDelete: 'set null',
+    }),
+    kind: attachmentKind('kind').notNull(),
+    filename: text('filename').notNull(),
+    contentType: text('content_type').notNull(),
+    /** Declared at upload request; replaced by the stored object's real size once processed. */
+    sizeBytes: integer('size_bytes').notNull(),
+    width: integer('width'),
+    height: integer('height'),
+    objectKey: text('object_key').notNull(),
+    thumbKey: text('thumb_key'),
+    /** Set once the upload was verified (and, for images, stripped and thumbnailed). */
+    processedAt: timestamp('processed_at', { withTimezone: true }),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [
+    index('attachments_message_idx').on(t.messageId),
+    index('attachments_unsent_idx')
+      .on(t.createdAt)
+      .where(sql`${t.messageId} IS NULL`),
+    check('attachments_size_positive_ck', sql`${t.sizeBytes} > 0`),
+  ],
+);
+
 export type User = typeof users.$inferSelect;
 export type NewUser = typeof users.$inferInsert;
 export type RefreshTokenRow = typeof refreshTokens.$inferSelect;
@@ -334,3 +380,4 @@ export type MessageRow = typeof messages.$inferSelect;
 export type NewMessageRow = typeof messages.$inferInsert;
 export type BlockRow = typeof blocks.$inferSelect;
 export type CallRow = typeof calls.$inferSelect;
+export type AttachmentRow = typeof attachments.$inferSelect;

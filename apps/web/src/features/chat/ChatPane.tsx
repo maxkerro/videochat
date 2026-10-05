@@ -34,6 +34,9 @@ import {
   markConversationRead,
 } from '../conversations/conversationsApi';
 import { GroupMembersPanel } from '../conversations/GroupMembersPanel';
+import { AttachmentView } from '../attachments/AttachmentView';
+import { PendingUploads } from '../attachments/PendingUploads';
+import { useAttachmentUploads } from '../attachments/useAttachmentUploads';
 import { CallButtons } from '../calls/CallButtons';
 import { CallHistoryEntry } from '../calls/CallHistoryEntry';
 import { useAuth, withAuthRetry } from '../auth/AuthContext';
@@ -253,6 +256,19 @@ export function ChatPane() {
   // with `ProfilePage`'s blocklist view, so blocking/unblocking from either place invalidates and
   // refreshes both without a page reload.
   const { toast } = useToast();
+
+  // CHAT-030: files picked, dropped or pasted -- each becomes its own message once uploaded.
+  const fileInputRef = useRef<HTMLInputElement>(null);
+  const [dragging, setDragging] = useState(false);
+  const attachmentUploads = useAttachmentUploads({
+    conversationId,
+    onSent: (message) => {
+      queryClient.setQueryData<MessagesData>(['messages', message.conversationId], (old) =>
+        appendToLatestPage(old, message),
+      );
+    },
+    onRejected: (reason) => toast({ title: reason, tone: 'danger' }),
+  });
   const peer = conversationQuery.data?.peer;
   const blockedUsersQuery = useQuery({
     queryKey: ['blocked-users'],
@@ -644,7 +660,30 @@ export function ChatPane() {
   const title = conversation?.peer?.displayName ?? conversation?.title ?? 'Conversation';
 
   return (
-    <section className={styles.pane} aria-label={`Conversation with ${title}`}>
+    <section
+      className={cx(styles.pane, dragging && styles.dragging)}
+      aria-label={`Conversation with ${title}`}
+      onDragOver={(event) => {
+        if (!event.dataTransfer.types.includes('Files')) return;
+        event.preventDefault();
+        setDragging(true);
+      }}
+      onDragLeave={(event) => {
+        if (event.currentTarget.contains(event.relatedTarget as Node | null)) return;
+        setDragging(false);
+      }}
+      onDrop={(event) => {
+        if (!event.dataTransfer.files.length) return;
+        event.preventDefault();
+        setDragging(false);
+        attachmentUploads.addFiles(Array.from(event.dataTransfer.files));
+      }}
+    >
+      {dragging && (
+        <div className={styles.dropHint} aria-hidden="true">
+          Drop files to send
+        </div>
+      )}
       <header className={styles.header}>
         <Link to="/" className={styles.back} aria-label="Back to conversations">
           <svg width="20" height="20" viewBox="0 0 24 24" aria-hidden="true">
@@ -786,8 +825,18 @@ export function ChatPane() {
                             row.grouped && styles.grouped,
                           )}
                         >
-                          <span className={styles.bubble}>
-                            {row.message.body ? linkify(row.message.body) : null}
+                          <span
+                            className={cx(
+                              styles.bubble,
+                              row.message.attachment && styles.attachmentBubble,
+                            )}
+                          >
+                            {row.message.attachment && (
+                              <AttachmentView attachment={row.message.attachment} />
+                            )}
+                            {row.message.body ? (
+                              <span className={styles.caption}>{linkify(row.message.body)}</span>
+                            ) : null}
                           </span>
                           {!row.grouped && (
                             <time className={styles.time}>{timeFor(row.message.createdAt)}</time>
@@ -836,7 +885,42 @@ export function ChatPane() {
         </div>
       )}
 
+      <PendingUploads
+        uploads={attachmentUploads.uploads}
+        onCancel={attachmentUploads.cancel}
+        onRetry={attachmentUploads.retry}
+      />
+
       <form className={styles.composer} onSubmit={handleSubmit}>
+        <input
+          ref={fileInputRef}
+          type="file"
+          multiple
+          hidden
+          data-testid="attachment-input"
+          onChange={(event) => {
+            if (event.target.files) attachmentUploads.addFiles(Array.from(event.target.files));
+            event.target.value = '';
+          }}
+        />
+        <Button
+          type="button"
+          variant="ghost"
+          size="icon"
+          aria-label="Attach files"
+          onClick={() => fileInputRef.current?.click()}
+        >
+          <svg width="20" height="20" viewBox="0 0 24 24" aria-hidden="true">
+            <path
+              d="M21 11.5l-8.6 8.6a5 5 0 0 1-7.1-7.1l8.6-8.6a3.5 3.5 0 0 1 5 5l-8.6 8.6a2 2 0 0 1-2.8-2.8l7.9-7.9"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="1.8"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+            />
+          </svg>
+        </Button>
         <label htmlFor="composer" className="visually-hidden">
           Message
         </label>
@@ -855,6 +939,14 @@ export function ChatPane() {
             if (value.trim() && conversationId) typingThrottle.notifyTyping(conversationId);
           }}
           onKeyDown={handleKeyDown}
+          onPaste={(event) => {
+            // CHAT-030: pasting an image (a screenshot) attaches it; pasted text behaves as usual.
+            const files = Array.from(event.clipboardData.files);
+            if (files.length) {
+              event.preventDefault();
+              attachmentUploads.addFiles(files);
+            }
+          }}
         />
         {remaining <= COUNTER_THRESHOLD && (
           <span className={styles.counter} aria-live="polite">
