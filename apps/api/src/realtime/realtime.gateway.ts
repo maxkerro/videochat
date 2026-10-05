@@ -24,6 +24,7 @@ import { isSenderBlockedInDirectConversation } from '../db/blocks.js';
 import { isConversationMember, listConversationIdsForUser } from '../db/conversations.js';
 import { findUserById } from '../db/users.js';
 import { DB } from '../infra/tokens.js';
+import { TokenStateService } from '../auth/token-state.service.js';
 import { PresenceService } from './presence.service.js';
 import { RealtimeService, type RealtimeSocket } from './realtime.service.js';
 
@@ -66,6 +67,7 @@ export class RealtimeGateway
     private readonly realtime: RealtimeService,
     @Inject(DB) private readonly db: Database,
     private readonly presence: PresenceService,
+    private readonly tokenState: TokenStateService,
   ) {}
 
   afterInit(server: Server): void {
@@ -93,7 +95,10 @@ export class RealtimeGateway
   }
 
   async handleConnection(client: RealtimeSocket, request: IncomingMessage): Promise<void> {
-    const userId = this.authenticate(request);
+    const auth = this.authenticate(request);
+    // CHAT-037 review: a deleted account, or a token from before a password change, can't connect.
+    const userId =
+      auth && (await this.tokenState.isTokenValid(auth.sub, auth.iat)) ? auth.sub : undefined;
     if (!userId) {
       this.logger.debug('Rejected realtime connection: missing or invalid access token');
       client.close(UNAUTHORIZED_CLOSE_CODE, 'Missing or invalid access token');
@@ -146,11 +151,11 @@ export class RealtimeGateway
 
   /** Verifies the access token from the connection URL's `token` query parameter, the same
    *  token issued to `AccessTokenGuard` for ordinary HTTP requests. */
-  private authenticate(request: IncomingMessage): string | undefined {
+  private authenticate(request: IncomingMessage): AccessTokenPayload | undefined {
     const token = new URL(request.url ?? '', 'ws://localhost').searchParams.get('token');
     if (!token) return undefined;
     try {
-      return this.jwt.verify<AccessTokenPayload>(token).sub;
+      return this.jwt.verify<AccessTokenPayload>(token);
     } catch {
       return undefined;
     }

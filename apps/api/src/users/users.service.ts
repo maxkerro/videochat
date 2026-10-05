@@ -80,7 +80,14 @@ export class UsersService {
 
     if (query.includes('@')) {
       const user = await findUserByEmail(this.db, query);
-      if (!user || user.id === excludeUserId || blockRelationshipIds.has(user.id)) return [];
+      if (
+        !user ||
+        user.deletedAt ||
+        user.id === excludeUserId ||
+        blockRelationshipIds.has(user.id)
+      ) {
+        return [];
+      }
       const avatarUrl = await this.s3.getAvatarUrl(user.avatarKey);
       return [toPublicUser(user, avatarUrl)];
     }

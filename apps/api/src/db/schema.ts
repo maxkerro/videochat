@@ -81,6 +81,8 @@ export const users = pgTable(
     theme: themePreference('theme').notNull().default('system'),
     /** CHAT-037: set when the account was deleted (personal data already erased). */
     deletedAt: timestamp('deleted_at', { withTimezone: true }),
+    /** CHAT-037 review: access tokens issued before this are no longer accepted. */
+    passwordChangedAt: timestamp('password_changed_at', { withTimezone: true }),
     ...timestamps,
   },
   (t) => [

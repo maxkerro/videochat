@@ -9,6 +9,7 @@ import { useAuth, withAuthRetry } from '../auth/AuthContext';
 import styles from './ProfilePage.module.css';
 import { checkUsernameAvailable, updateProfile, uploadAvatar } from './profileApi';
 import { CallOverlay } from '../calls/CallOverlay';
+import { useSettingsSync } from '../settings/useSettingsSync';
 import {
   AccountSection,
   AppearanceSection,
@@ -22,6 +23,8 @@ const ACCEPTED_AVATAR_TYPES = ['image/jpeg', 'image/png', 'image/webp'];
 
 export function ProfilePage() {
   const auth = useAuth();
+  // CHAT-037 review: this page sits outside AppShell, so it needs its own settings sync.
+  useSettingsSync();
   const { user, setUser } = auth;
   const { toast } = useToast();
   const queryClient = useQueryClient();

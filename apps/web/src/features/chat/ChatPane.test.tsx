@@ -1114,6 +1114,43 @@ describe('ChatPane', () => {
     });
   });
 
+  describe('CHAT-037 session ended', () => {
+    it('refreshes the token after a password change elsewhere, and signs out when the account is deleted', async () => {
+      let refreshes = 0;
+      let loggedOut = false;
+      vi.stubGlobal(
+        'fetch',
+        routedFetch({
+          'POST /auth/refresh': () => {
+            refreshes += 1;
+            return jsonResponse(session());
+          },
+          'POST /auth/logout': () => {
+            loggedOut = true;
+            return jsonResponse({ message: 'Logged out.' });
+          },
+          [`GET /conversations/${conversationId}`]: () => jsonResponse(conversation()),
+          [`GET /conversations/${conversationId}/messages`]: () =>
+            jsonResponse({ messages: [], hasMore: false }),
+        }),
+      );
+      renderApp(`/c/${conversationId}`);
+      await screen.findByLabelText('Message');
+      await waitFor(() => expect(FakeWebSocket.instances).toHaveLength(1));
+      const socket = FakeWebSocket.instances[0]!;
+      socket.emit('open');
+      const before = refreshes;
+      socket.emit('message', {
+        data: JSON.stringify(makeEnvelope('session.ended', { reason: 'password-changed' }, 's1')),
+      });
+      await waitFor(() => expect(refreshes).toBe(before + 1));
+      socket.emit('message', {
+        data: JSON.stringify(makeEnvelope('session.ended', { reason: 'account-deleted' }, 's2')),
+      });
+      await waitFor(() => expect(loggedOut).toBe(true));
+    });
+  });
+
   describe('CHAT-018 groups', () => {
     const groupId = '77777777-7777-4777-8777-777777777777';
 

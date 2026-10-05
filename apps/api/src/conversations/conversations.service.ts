@@ -62,7 +62,8 @@ export class ConversationsService {
       throw new BadRequestException("Can't start a conversation with yourself");
     }
     const other = await findUserById(this.db, otherUserId);
-    if (!other) throw new NotFoundException('User not found');
+    // CHAT-037: a deleted account can't be messaged.
+    if (!other || other.deletedAt) throw new NotFoundException('User not found');
 
     // CHAT-021: "blocked users cannot DM you" reads either way -- neither side of a block should
     // be able to start (or reopen) the DM, including the blocker themselves; if they want to talk
@@ -263,6 +264,8 @@ export class ConversationsService {
     if (!membership) throw new NotFoundException('Conversation not found');
 
     const rows = await listActiveMembers(this.db, conversationId);
+    // CHAT-037: read receipts go both ways -- with yours off you don't see anyone's.
+    const viewerShares = rows.find((r) => r.user.id === userId)?.user.readReceipts !== false;
     return Promise.all(
       rows.map(async (row) => ({
         userId: row.user.id,
@@ -272,7 +275,8 @@ export class ConversationsService {
         role: row.role,
         joinedAt: row.joinedAt.toISOString(),
         // CHAT-037: someone with read receipts off doesn't show up in "Seen by N".
-        lastReadSeq: row.user.readReceipts || row.user.id === userId ? row.lastReadSeq : 0,
+        lastReadSeq:
+          row.user.id === userId || (row.user.readReceipts && viewerShares) ? row.lastReadSeq : 0,
       })),
     );
   }
@@ -429,7 +433,7 @@ export class ConversationsService {
 
   private async requireUsersExist(userIds: string[]) {
     const users = await Promise.all(userIds.map((id) => findUserById(this.db, id)));
-    const missingIndex = users.findIndex((u) => !u);
+    const missingIndex = users.findIndex((u) => !u || u.deletedAt);
     if (missingIndex >= 0) throw new NotFoundException('User not found');
     return users as NonNullable<(typeof users)[number]>[];
   }

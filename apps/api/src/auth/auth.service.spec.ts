@@ -57,6 +57,7 @@ function makeUser(overrides: Partial<User> = {}): User {
     notifyPreviews: true,
     theme: 'system' as const,
     deletedAt: null,
+    passwordChangedAt: null,
     createdAt: new Date(),
     updatedAt: new Date(),
     ...overrides,
@@ -112,8 +113,18 @@ function makeService() {
   const s3 = { getAvatarUrl: vi.fn(async () => null) };
   // The service only ever passes `db` through to the mocked repository functions, never
   // touches it directly, so a placeholder is enough here.
-  const service = new AuthService({} as never, env, jwt as never, mail as never, s3 as never);
-  return { service, jwt, mail, s3 };
+  const tokenState = { invalidate: vi.fn() };
+  const redis = { publish: vi.fn(async () => 1) };
+  const service = new AuthService(
+    {} as never,
+    env,
+    jwt as never,
+    mail as never,
+    s3 as never,
+    tokenState as never,
+    redis as never,
+  );
+  return { service, jwt, mail, s3, tokenState, redis };
 }
 
 describe('AuthService', () => {
@@ -498,6 +509,7 @@ describe('AuthService', () => {
         expect.anything(),
         'user-1',
         'hashed:newpass123',
+        { passwordChanged: true },
       );
       expect(refreshTokensDb.revokeAllForUser).toHaveBeenCalledWith(expect.anything(), 'user-1');
     });

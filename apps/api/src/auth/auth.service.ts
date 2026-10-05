@@ -19,7 +19,10 @@ import {
 import { randomUUID } from 'node:crypto';
 import type { Env } from '../config/env.js';
 import type { Database } from '../db/client.js';
-import { DB, ENV } from '../infra/tokens.js';
+import { DB, ENV, REDIS } from '../infra/tokens.js';
+import { Redis } from 'ioredis';
+import { publishSessionEnded } from '../realtime/realtime.service.js';
+import { TokenStateService } from './token-state.service.js';
 import { consumeAuthToken, createAuthToken } from '../db/auth-tokens.js';
 import { isUniqueViolation } from '../db/pg-errors.js';
 import {
@@ -66,6 +69,8 @@ export class AuthService implements OnModuleInit {
     private readonly jwt: JwtService,
     private readonly mail: MailService,
     private readonly s3: S3Service,
+    private readonly tokenState: TokenStateService,
+    @Inject(REDIS) private readonly redis: Redis,
   ) {}
 
   onModuleInit(): Promise<void> {
@@ -216,10 +221,13 @@ export class AuthService implements OnModuleInit {
     const row = await consumeAuthToken(this.db, hashToken(input.token), 'password_reset');
     if (!row) throw new BadRequestException('This reset link is invalid or has expired');
     const passwordHash = await hashPassword(input.password);
-    await setPasswordHash(this.db, row.userId, passwordHash);
+    await setPasswordHash(this.db, row.userId, passwordHash, { passwordChanged: true });
+    this.tokenState.invalidate(row.userId);
     // Force every existing session to re-authenticate: a password reset usually means the old
-    // password (and anything signed in with it) shouldn't be trusted anymore.
+    // password (and anything signed in with it) shouldn't be trusted anymore -- including access
+    // tokens and open connections, not just refresh tokens.
     await revokeAllForUser(this.db, row.userId);
+    await publishSessionEnded(this.redis, row.userId, 'password-changed').catch(() => undefined);
   }
 
   /**
@@ -235,7 +243,10 @@ export class AuthService implements OnModuleInit {
     if (!user?.passwordHash || !(await verifyPassword(user.passwordHash, input.currentPassword))) {
       throw new BadRequestException('Your current password is incorrect');
     }
-    await setPasswordHash(this.db, userId, await hashPassword(input.newPassword));
+    await setPasswordHash(this.db, userId, await hashPassword(input.newPassword), {
+      passwordChanged: true,
+    });
+    this.tokenState.invalidate(userId);
     const current = currentRefreshToken
       ? await findRefreshTokenByHash(this.db, hashToken(currentRefreshToken))
       : undefined;
@@ -244,6 +255,8 @@ export class AuthService implements OnModuleInit {
       userId,
       current && current.userId === userId ? current.familyId : null,
     );
+    // Other devices' live connections end too; this tab reconnects with a fresh token.
+    await publishSessionEnded(this.redis, userId, 'password-changed').catch(() => undefined);
   }
 
   /** CHAT-037: re-checks the password before an account is deleted. */

@@ -29,6 +29,17 @@ function tokens(block: string): Record<string, string> {
 
 const light = tokens(css.slice(0, css.indexOf('@media (prefers-color-scheme: dark)')));
 const dark = tokens(css.slice(css.indexOf(":root[data-theme='dark']")));
+// The dark palette is written twice (OS preference, and the explicit dark choice); they must match.
+const darkFromMedia = tokens(
+  css.slice(
+    css.indexOf('@media (prefers-color-scheme: dark)'),
+    css.indexOf(":root[data-theme='dark']"),
+  ),
+);
+
+it('the two dark-theme blocks define the same colours', () => {
+  expect(darkFromMedia).toEqual(dark);
+});
 
 function luminance(hex: string): number {
   const [r, g, b] = [1, 3, 5].map((i) => {

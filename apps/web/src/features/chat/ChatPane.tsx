@@ -402,7 +402,12 @@ export function ChatPane() {
         : message.type === 'call'
           ? 'call'
           : (message.body ?? '');
-      setAnnouncement(`New message from ${nameFor(message.senderId)}: ${what}`);
+      // A trailing zero-width space toggles so two identical messages in a row ("ok", "ok") are
+      // still a change the screen reader announces.
+      setAnnouncement(
+        (prev) =>
+          `New message from ${nameFor(message.senderId)}: ${what}${prev.endsWith('\u200b') ? '' : '\u200b'}`,
+      );
     }
   });
 

@@ -3,6 +3,9 @@ import { makeEnvelope, type Me, type UpdateSettingsInput } from '@videochat/shar
 import { randomUUID } from 'node:crypto';
 import { AttachmentsService } from '../attachments/attachments.service.js';
 import { AuthService } from '../auth/auth.service.js';
+import { TokenStateService } from '../auth/token-state.service.js';
+import { appendMessage } from '../db/messages.js';
+import { toMessage } from '../messages/message-mapper.js';
 import {
   eraseAccount,
   listActiveConversationIds,
@@ -27,6 +30,7 @@ export class AccountService {
     private readonly realtime: RealtimeService,
     private readonly auth: AuthService,
     private readonly attachments: AttachmentsService,
+    private readonly tokenState: TokenStateService,
   ) {}
 
   /** AC "changes save immediately and apply on all devices": the new settings go to every one
@@ -40,9 +44,11 @@ export class AccountService {
 
   /**
    * AC: "delete account asks for the password and removes personal data within 30 days". Done
-   * immediately rather than within 30 days: leaves every conversation (handing a group's admin
-   * role on as leaving normally does), erases their messages, files and profile, ends every
-   * session. The row itself stays as an anonymous "Deleted user" so others' history holds up.
+   * immediately. Leaving every conversation (handing a group's admin role on, as leaving
+   * normally does) and erasing their messages, files and profile happen in one transaction --
+   * all or nothing. Only once that's committed: stored files are deleted, every open connection
+   * of theirs is closed on every node (so a still-open tab stops receiving anything), and the
+   * conversations they left are told.
    */
   async deleteAccount(userId: string, password: string): Promise<void> {
     if (!(await this.auth.verifyPasswordFor(userId, password))) {
@@ -50,16 +56,51 @@ export class AccountService {
     }
     const user = await findUserById(this.db, userId);
     if (!user) throw new NotFoundException('User not found');
-    for (const conversationId of await listActiveConversationIds(this.db, userId)) {
-      await leaveConversation(this.db, conversationId, userId);
+
+    const left: Array<{ conversationId: string; promotedUserId: string | null }> = [];
+    const files = await this.db.transaction(async (tx) => {
+      for (const conversationId of await listActiveConversationIds(tx, userId)) {
+        // leaveConversation opens its own (nested -> savepoint) transaction.
+        const result = await leaveConversation(tx as unknown as Database, conversationId, userId);
+        if (result.left) left.push({ conversationId, promotedUserId: result.promotedUserId });
+      }
+      return eraseAccount(tx, userId);
+    });
+
+    this.tokenState.invalidate(userId);
+    await this.realtime.closeUserConnections(userId, 'account-deleted');
+    for (const { conversationId } of left) {
+      this.realtime.removeConversationForUser(userId, conversationId);
     }
-    const files = await eraseAccount(this.db, userId);
     await this.attachments.deleteFiles(files);
     if (user.avatarKey) {
       await this.s3
         .deleteObjects([`${user.avatarKey}/64.webp`, `${user.avatarKey}/256.webp`])
         .catch(() => undefined);
     }
+    // Not their name: the notice outlives the account, and the point is that it's erased.
+    for (const { conversationId, promotedUserId } of left) {
+      await this.postSystemMessage(conversationId, 'A member deleted their account');
+      if (promotedUserId) {
+        const promoted = await findUserById(this.db, promotedUserId);
+        if (promoted)
+          await this.postSystemMessage(conversationId, `${promoted.displayName} is now an admin`);
+      }
+    }
+  }
+
+  private async postSystemMessage(conversationId: string, body: string): Promise<void> {
+    const row = await appendMessage(this.db, {
+      conversationId,
+      senderId: null,
+      body,
+      type: 'system',
+    });
+    const message = toMessage(row);
+    await this.realtime.publishToConversation(
+      conversationId,
+      makeEnvelope('message.new', message, message.id),
+    );
   }
 
   /** AC: "data export produces a JSON archive of the user's messages" (plus their profile,

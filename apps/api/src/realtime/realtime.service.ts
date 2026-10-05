@@ -5,7 +5,8 @@ import {
   type OnModuleDestroy,
   type OnModuleInit,
 } from '@nestjs/common';
-import type { WsEnvelope } from '@videochat/shared';
+import { makeEnvelope, type WsEnvelope } from '@videochat/shared';
+import { randomUUID } from 'node:crypto';
 import { Redis } from 'ioredis';
 import type { WebSocket } from 'ws';
 import { REDIS } from '../infra/tokens.js';
@@ -32,6 +33,24 @@ export interface RealtimeSocket extends WebSocket {
    *  (a rename, a role change) doesn't need this at all -- it's carried in the ordinary
    *  `message.new` system message and the next HTTP fetch, not a socket-membership update. */
   conversationIds?: Set<string>;
+}
+
+/** Same code as an unauthorised connect: the client treats both as "sign in again". */
+export const SESSION_ENDED_CLOSE_CODE = 4401;
+
+export type SessionEndReason = 'account-deleted' | 'password-changed';
+
+/** Publishes the `session.ended` control message that makes every node close a user's sockets.
+ *  A plain function so auth code can use it without depending on the realtime module. */
+export async function publishSessionEnded(
+  redis: Redis,
+  userId: string,
+  reason: SessionEndReason,
+): Promise<void> {
+  await redis.publish(
+    userChannel(userId),
+    JSON.stringify(makeEnvelope('session.ended', { reason }, randomUUID())),
+  );
 }
 
 function conversationChannel(conversationId: string): string {
@@ -196,6 +215,15 @@ export class RealtimeService implements OnModuleInit, OnModuleDestroy {
     }
   }
 
+  /**
+   * CHAT-037 review: closes every open socket of a user, on every node (account deleted, or
+   * password changed -- "your other devices were signed out" includes their live connections).
+   * Each socket is told why first (`session.ended`) and closed with code 4401.
+   */
+  async closeUserConnections(userId: string, reason: SessionEndReason): Promise<void> {
+    await publishSessionEnded(this.redis, userId, reason);
+  }
+
   private deliverLocally(channel: string, message: string): void {
     if (channel.startsWith('conn:')) {
       const client = this.byConnection.get(channel.slice('conn:'.length));
@@ -208,8 +236,10 @@ export class RealtimeService implements OnModuleInit, OnModuleDestroy {
         ? this.byUser.get(channel.slice('user:'.length))
         : undefined;
     if (!targets) return;
-    for (const client of targets) {
+    const endsSession = channel.startsWith('user:') && message.includes('"session.ended"');
+    for (const client of [...targets]) {
       if (client.readyState === client.OPEN) client.send(message);
+      if (endsSession) client.close(SESSION_ENDED_CLOSE_CODE, 'Session ended');
     }
   }
 }

@@ -12,6 +12,7 @@ import { ApiError } from '../../lib/api';
 import { useTheme } from '../../theme/ThemeProvider';
 import { useAuth, withAuthRetry } from '../auth/AuthContext';
 import { isPushSupported, syncPushSubscription } from '../notifications/push';
+import { fetchMe } from '../profile/profileApi';
 import { changePassword, deleteAccount, downloadExport, updateSettings } from './settingsApi';
 import styles from './Settings.module.css';
 
@@ -41,7 +42,13 @@ function useSaveSettings() {
     try {
       auth.setUser(await withAuthRetry(auth, (t) => updateSettings(t, input)));
     } catch {
-      if (previous) auth.setUser(previous);
+      // Back to what the server actually has -- not the snapshot from before this change, which
+      // could undo a different setting that was saved in the meantime.
+      try {
+        auth.setUser(await withAuthRetry(auth, (t) => fetchMe(t)));
+      } catch {
+        if (previous) auth.setUser(previous);
+      }
       toast({ title: 'Couldn’t save that setting', tone: 'danger' });
     }
   };
@@ -223,6 +230,8 @@ export function AccountSection() {
       );
       setCurrent('');
       setNext('');
+      // Tokens from before the change are no longer accepted; get this tab a fresh one.
+      await auth.refresh();
       toast({ title: 'Password changed. Your other devices were signed out.' });
     } catch (error) {
       setPwError(error instanceof ApiError ? error.message : 'Couldn’t change your password');

@@ -1,5 +1,5 @@
-import type { UpdateSettingsInput } from '@videochat/shared';
-import { and, asc, eq, isNull, or, sql } from 'drizzle-orm';
+import { DELETED_USERNAME_PREFIX, type UpdateSettingsInput } from '@videochat/shared';
+import { and, asc, eq, inArray, isNull, or, sql } from 'drizzle-orm';
 import type { DbExecutor } from './client.js';
 import {
   attachments,
@@ -56,22 +56,33 @@ export async function listActiveConversationIds(db: DbExecutor, userId: string):
  * Returns the attachment rows whose stored files the caller must delete.
  */
 export async function eraseAccount(db: DbExecutor, userId: string): Promise<AttachmentRow[]> {
+  // Only what they wrote or shared. Call entries are other people's record too (and carry no
+  // content of theirs), so they stay.
   await db
     .update(messages)
     .set({ body: null, meta: null, deletedAt: sql`now()` })
-    .where(and(eq(messages.senderId, userId), isNull(messages.deletedAt)));
+    .where(
+      and(
+        eq(messages.senderId, userId),
+        isNull(messages.deletedAt),
+        inArray(messages.type, ['text', 'image', 'file']),
+      ),
+    );
   const files = await db.delete(attachments).where(eq(attachments.uploaderId, userId)).returning();
   await db.delete(reactions).where(eq(reactions.userId, userId));
   await db.delete(devices).where(eq(devices.userId, userId));
   await db.delete(refreshTokens).where(eq(refreshTokens.userId, userId));
   await db.delete(authTokens).where(eq(authTokens.userId, userId));
   await db.delete(blocks).where(or(eq(blocks.blockerId, userId), eq(blocks.blockedId, userId)));
-  const shortId = userId.replace(/-/g, '').slice(0, 12);
+  // `deleted_` is a prefix nobody can choose (see chosenUsernameSchema), so this can't collide
+  // with a name someone registered ahead of time; 22 hex chars of the id keep two deleted
+  // accounts apart and fit the 30-character limit.
+  const shortId = userId.replace(/-/g, '').slice(0, 30 - DELETED_USERNAME_PREFIX.length);
   await db
     .update(users)
     .set({
       email: `deleted+${userId}@deleted.invalid`,
-      username: `deleted_${shortId}`,
+      username: `${DELETED_USERNAME_PREFIX}${shortId}`,
       displayName: 'Deleted user',
       avatarKey: null,
       passwordHash: null,

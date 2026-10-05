@@ -62,7 +62,12 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         setSession(next);
         return next.accessToken;
       } catch {
-        setSession(null);
+        // CHAT-036 review: a session that simply expired takes its drafts with it too (an
+        // explicit logout already clears them).
+        setSession((prev) => {
+          if (prev?.user) clearDrafts(prev.user.id);
+          return null;
+        });
         return null;
       }
     })();

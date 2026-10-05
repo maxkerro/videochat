@@ -568,11 +568,18 @@ async function loadDirectPeers(
         ne(memberships.userId, excludeUserId),
       ),
     );
+  // CHAT-037: read receipts go both ways -- a peer with them off never shows as "Seen", and
+  // neither does anyone for a viewer who has turned their own off.
+  const [viewer] = await db
+    .select({ readReceipts: users.readReceipts })
+    .from(users)
+    .where(eq(users.id, excludeUserId))
+    .limit(1);
+  const viewerShares = viewer?.readReceipts !== false;
   for (const row of rows) {
-    // CHAT-037: a peer with read receipts off never shows as "Seen".
     map.set(row.conversationId, {
       user: row.user,
-      lastReadSeq: row.user.readReceipts ? row.lastReadSeq : 0,
+      lastReadSeq: row.user.readReceipts && viewerShares ? row.lastReadSeq : 0,
     });
   }
   return map;

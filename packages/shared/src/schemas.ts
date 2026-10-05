@@ -97,9 +97,17 @@ export const passwordSchema = z
   .min(LIMITS.passwordMin, `At least ${LIMITS.passwordMin} characters`)
   .max(LIMITS.passwordMax);
 
+/** CHAT-037 review: deleted accounts are renamed `deleted_<id>`; nobody can claim that prefix
+ *  (squatting a victim's future name would make their deletion fail on the unique index). */
+export const DELETED_USERNAME_PREFIX = 'deleted_';
+export const chosenUsernameSchema = usernameSchema.refine(
+  (v) => !v.toLowerCase().startsWith(DELETED_USERNAME_PREFIX),
+  'That username isn’t available',
+);
+
 export const signUpSchema = z.object({
   email: emailSchema,
-  username: usernameSchema,
+  username: chosenUsernameSchema,
   displayName: displayNameSchema,
   password: passwordSchema,
 });
@@ -162,7 +170,7 @@ export type VerifyEmailInput = z.infer<typeof verifyEmailSchema>;
 
 export const updateProfileSchema = z
   .object({
-    username: usernameSchema.optional(),
+    username: chosenUsernameSchema.optional(),
     displayName: displayNameSchema.optional(),
   })
   .refine((v) => v.username !== undefined || v.displayName !== undefined, {

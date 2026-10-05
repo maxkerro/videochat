@@ -194,6 +194,20 @@ export function RealtimeProvider({ children }: { children: ReactNode }) {
     [singleton, auth, queryClient],
   );
 
+  // CHAT-037 review: the server ends a session's live connections when the password changes or
+  // the account is deleted. Refreshing either gets this tab a token that's valid again (the
+  // session that changed the password keeps its refresh token) or signs it out (every other one).
+  useEffect(
+    () =>
+      singleton.context.subscribe((envelope) => {
+        if (envelope.type !== 'session.ended') return;
+        const reason = (envelope.payload as { reason?: string } | null)?.reason;
+        if (reason === 'account-deleted') void auth.logout();
+        else void auth.refresh();
+      }),
+    [singleton, auth],
+  );
+
   return <RealtimeContext.Provider value={singleton.context}>{children}</RealtimeContext.Provider>;
 }
 

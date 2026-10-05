@@ -71,6 +71,13 @@
       "when": 1791214413852,
       "tag": "0009_settings",
       "breakpoints": true
+    },
+    {
+      "idx": 10,
+      "version": "7",
+      "when": 1791223030092,
+      "tag": "0010_password_changed_at",
+      "breakpoints": true
     }
   ]
 }

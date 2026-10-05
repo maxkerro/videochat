@@ -6,6 +6,7 @@ import { MailModule } from '../mail/mail.module.js';
 import { AccessTokenGuard } from './access-token.guard.js';
 import { AuthController } from './auth.controller.js';
 import { AuthService } from './auth.service.js';
+import { TokenStateService } from './token-state.service.js';
 
 @Module({
   imports: [
@@ -19,7 +20,7 @@ import { AuthService } from './auth.service.js';
     }),
   ],
   controllers: [AuthController],
-  providers: [AuthService, AccessTokenGuard],
-  exports: [AccessTokenGuard, JwtModule, AuthService],
+  providers: [AuthService, AccessTokenGuard, TokenStateService],
+  exports: [AccessTokenGuard, JwtModule, AuthService, TokenStateService],
 })
 export class AuthModule {}

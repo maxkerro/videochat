@@ -40,6 +40,7 @@ function makeUser(overrides: Partial<User> = {}): User {
     notifyPreviews: true,
     theme: 'system' as const,
     deletedAt: null,
+    passwordChangedAt: null,
     createdAt: new Date(),
     updatedAt: new Date(),
     ...overrides,

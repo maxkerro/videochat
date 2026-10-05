@@ -1,4 +1,4 @@
-import { sql, eq, and, ne, notInArray } from 'drizzle-orm';
+import { sql, eq, and, isNull, ne, notInArray } from 'drizzle-orm';
 import { LIMITS } from '@videochat/shared';
 import type { DbExecutor } from './client.js';
 import { users, type NewUser, type User } from './schema.js';
@@ -65,7 +65,12 @@ export async function searchUsersByUsernamePrefix(
   // Escape ILIKE's own wildcard characters so a search term containing "%" or "_" is matched
   // literally, not as a pattern -- otherwise a query like "a%" would match far more than intended.
   const escaped = prefix.replace(/[\\%_]/g, (c) => `\\${c}`);
-  const conditions = [sql`${users.username} ILIKE ${escaped + '%'}`, ne(users.id, excludeUserId)];
+  const conditions = [
+    sql`${users.username} ILIKE ${escaped + '%'}`,
+    ne(users.id, excludeUserId),
+    // CHAT-037: deleted accounts can't be found or messaged.
+    isNull(users.deletedAt),
+  ];
   // `notInArray` with an empty array would build `NOT IN ()`, invalid SQL -- only add the
   // condition when there's actually something to exclude.
   if (excludeAlsoIds.length > 0) conditions.push(notInArray(users.id, excludeAlsoIds));
@@ -120,8 +125,16 @@ export async function setPasswordHash(
   db: DbExecutor,
   id: string,
   passwordHash: string,
+  options: { passwordChanged?: boolean } = {},
 ): Promise<void> {
-  await db.update(users).set({ passwordHash }).where(eq(users.id, id));
+  await db
+    .update(users)
+    .set({
+      passwordHash,
+      // CHAT-037 review: access tokens issued before this are refused (TokenStateService).
+      ...(options.passwordChanged ? { passwordChangedAt: sql`now()` } : {}),
+    })
+    .where(eq(users.id, id));
 }
 
 /**
