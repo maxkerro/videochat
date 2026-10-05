@@ -26,6 +26,7 @@ import { Link, useNavigate, useParams } from 'react-router';
 import { Avatar, Button, Menu, Modal, useToast } from '../../components/ui';
 import { ApiError } from '../../lib/api';
 import { cx } from '../../lib/cx';
+import { getDraft, saveDraft } from '../../lib/drafts';
 import { recordSeenSeq } from '../../lib/lastSeenSeq';
 import { useDocumentVisible } from '../../lib/useDocumentVisible';
 import { enqueueOutboxMessage, removeOutboxMessage } from '../../lib/outbox';
@@ -230,7 +231,15 @@ export function ChatPane() {
   const auth = useAuth();
   const navigate = useNavigate();
   const queryClient = useQueryClient();
-  const [draft, setDraft] = useState('');
+  // CHAT-036: restored from (and saved to) the per-conversation draft store.
+  const [draft, setDraftState] = useState(() => getDraft(auth.user?.id, conversationId));
+  const setDraft = useCallback(
+    (value: string) => {
+      setDraftState(value);
+      saveDraft(auth.user?.id, conversationId, value);
+    },
+    [auth.user?.id, conversationId],
+  );
   const [membersOpen, setMembersOpen] = useState(false);
   const [pending, setPending] = useState<PendingMessage[]>([]);
   const [newArrivals, setNewArrivals] = useState(0);
@@ -253,10 +262,17 @@ export function ChatPane() {
   // otherwise follow the person into the next conversation and could get sent to the wrong
   // person. Adjusted during render (React's documented pattern for this) rather than in an
   // effect, so it takes effect before the stale draft ever paints.
+  // CHAT-036: whose draft is in the composer; reloaded when the conversation (or the signed-in
+  // user, once known) changes. Same adjust-during-render pattern as below.
+  const draftKey = `${auth.user?.id ?? ''}:${conversationId ?? ''}`;
+  const [loadedDraftKey, setLoadedDraftKey] = useState(draftKey);
+  if (loadedDraftKey !== draftKey) {
+    setLoadedDraftKey(draftKey);
+    setDraftState(getDraft(auth.user?.id, conversationId));
+  }
   const [draftConversationId, setDraftConversationId] = useState(conversationId);
   if (draftConversationId !== conversationId) {
     setDraftConversationId(conversationId);
-    setDraft('');
     unreadThroughRef.current = null;
     landedRef.current = false;
     setNewArrivals(0);

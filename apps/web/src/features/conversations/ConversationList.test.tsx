@@ -317,3 +317,23 @@ describe('previewFor (CHAT-030 attachments)', () => {
     expect(previewFor({ ...base, lastMessage: file }, me)).toBe('q3.pdf · numbers');
   });
 });
+
+describe('previewFor drafts (CHAT-036)', () => {
+  it('shows a draft instead of the last message', () => {
+    const c = {
+      id: '33333333-3333-4333-8333-333333333333',
+      type: 'direct' as const,
+      title: null,
+      lastSeq: 1,
+      lastMessageAt: null,
+      role: 'member' as const,
+      lastReadSeq: 1,
+      peer: null,
+      peerLastReadSeq: null,
+      muted: false,
+      lastMessage: { type: 'text' as const, senderId: 'x', body: 'hi' },
+    };
+    expect(previewFor(c, 'me', 'see you\n at 5')).toBe('Draft: see you at 5');
+    expect(previewFor(c, 'me', '  ')).toBe('hi');
+  });
+});

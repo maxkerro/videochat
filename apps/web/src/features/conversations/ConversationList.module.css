@@ -124,3 +124,8 @@
   vertical-align: -1px;
   color: var(--color-text-muted);
 }
+
+/* CHAT-036: "Draft: ..." in the preview line. */
+.previewDraft {
+  color: var(--color-danger);
+}

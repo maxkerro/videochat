@@ -17,6 +17,7 @@ import {
   type ReactNode,
 } from 'react';
 import { removePushSubscription } from '../notifications/push';
+import { clearDrafts } from '../../lib/drafts';
 import { apiPost, ApiError } from '../../lib/api';
 import { messageResponseSchema } from './authApi';
 
@@ -93,6 +94,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const logout = useCallback(async () => {
     // CHAT-035: stop this browser receiving the signed-out person's notifications.
     if (session?.accessToken) await removePushSubscription(session.accessToken);
+    // CHAT-036: unsent drafts stay on this device only while you're signed in.
+    clearDrafts(session?.user.id);
     try {
       await apiPost('/auth/logout', messageResponseSchema);
     } catch {
@@ -103,7 +106,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       setSession(null);
       queryClient.clear();
     }
-  }, [queryClient, session?.accessToken]);
+  }, [queryClient, session?.accessToken, session?.user.id]);
 
   const setUser = useCallback((user: Me) => {
     setSession((prev) => (prev ? { ...prev, user } : prev));

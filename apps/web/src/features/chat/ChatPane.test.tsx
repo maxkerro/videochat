@@ -1014,6 +1014,32 @@ describe('ChatPane', () => {
     });
   });
 
+  describe('CHAT-036 drafts', () => {
+    it('restores an unsent draft after a reload and clears it once sent', async () => {
+      localStorage.setItem(
+        `videochat.drafts.${baseUser.id}`,
+        JSON.stringify({ [conversationId]: 'half written' }),
+      );
+      vi.stubGlobal(
+        'fetch',
+        routedFetch({
+          'POST /auth/refresh': () => jsonResponse(session()),
+          [`GET /conversations/${conversationId}`]: () => jsonResponse(conversation()),
+          [`GET /conversations/${conversationId}/messages`]: () =>
+            jsonResponse({ messages: [], hasMore: false }),
+          [`POST /conversations/${conversationId}/messages`]: () =>
+            jsonResponse(message({ senderId: baseUser.id, body: 'half written' })),
+        }),
+      );
+      renderApp(`/c/${conversationId}`);
+      expect(await screen.findByLabelText('Message')).toHaveValue('half written');
+      await userEvent.click(screen.getByRole('button', { name: 'Send message' }));
+      await waitFor(() =>
+        expect(localStorage.getItem(`videochat.drafts.${baseUser.id}`)).toBeNull(),
+      );
+    });
+  });
+
   describe('CHAT-018 groups', () => {
     const groupId = '77777777-7777-4777-8777-777777777777';
 

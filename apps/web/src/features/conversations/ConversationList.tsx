@@ -13,6 +13,7 @@ import { useAuth, withAuthRetry } from '../auth/AuthContext';
 import { useRealtimeEvent } from '../chat/RealtimeProvider';
 import { usePresence } from '../presence/presence';
 import { useUnreadBadge } from '../notifications/unreadBadge';
+import { useDrafts } from '../../lib/drafts';
 import { cx } from '../../lib/cx';
 import {
   fetchConversations,
@@ -30,7 +31,10 @@ function titleFor(conversation: ConversationSummary): string {
 export function previewFor(
   conversation: ConversationSummary,
   myUserId: string | undefined,
+  draft?: string,
 ): string {
+  // CHAT-036: an unsent draft takes the preview line.
+  if (draft?.trim()) return `Draft: ${draft.trim().replace(/\s+/g, ' ')}`;
   const last = conversation.lastMessage;
   if (!last) return '';
   if (last.call) return callHistoryText(last.call, myUserId);
@@ -94,6 +98,7 @@ export function ConversationList() {
   const presence = usePresence(peerIds);
   // CHAT-035: unread count in the tab title and on the favicon.
   useUnreadBadge(conversations);
+  const drafts = useDrafts(auth.user?.id);
 
   // CHAT-015: keeps the inbox live -- a new message (ours or a peer's) moves its conversation to
   // the top and updates the unread badge immediately, without waiting on a refetch.
@@ -293,17 +298,19 @@ export function ConversationList() {
                         </span>
                         <time className={styles.time}>{timeFor(c)}</time>
                       </span>
-                      {(unread > 0 || c.lastMessage) && (
+                      {(unread > 0 || c.lastMessage || drafts[c.id]) && (
                         <span className={styles.row}>
                           <span
                             className={cx(
                               styles.preview,
-                              c.lastMessage?.call &&
+                              !drafts[c.id] &&
+                                c.lastMessage?.call &&
                                 isMissedByMe(c.lastMessage.call, auth.user?.id) &&
                                 styles.previewMissed,
+                              drafts[c.id] && styles.previewDraft,
                             )}
                           >
-                            {previewFor(c, auth.user?.id)}
+                            {previewFor(c, auth.user?.id, drafts[c.id])}
                           </span>
                           {unread > 0 && (
                             <span className={styles.badge} aria-label={`${unread} unread`}>
