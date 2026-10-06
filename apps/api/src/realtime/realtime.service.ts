@@ -88,6 +88,7 @@ export type DisconnectListener = (client: RealtimeSocket) => Promise<void>;
 export class RealtimeService implements OnModuleInit, OnModuleDestroy {
   private readonly logger = new Logger(RealtimeService.name);
   private readonly subscriber: Redis;
+  private readonly sessionEndedListeners: Array<(userId: string) => void> = [];
   private readonly byUser = new Map<string, Set<RealtimeSocket>>();
   private readonly byConversation = new Map<string, Set<RealtimeSocket>>();
   private readonly byConnection = new Map<string, RealtimeSocket>();
@@ -227,11 +228,23 @@ export class RealtimeService implements OnModuleInit, OnModuleDestroy {
     await publishSessionEnded(this.redis, userId, reason);
   }
 
+  /** CHAT-037 review: told on *every* node (each one pattern-subscribes to `user:*`) when a user's
+   *  sessions end, whether or not that user has sockets here -- e.g. so each node's token-state
+   *  cache forgets them at once. */
+  onSessionEnded(listener: (userId: string) => void): void {
+    this.sessionEndedListeners.push(listener);
+  }
+
   private deliverLocally(channel: string, message: string): void {
     if (channel.startsWith('conn:')) {
       const client = this.byConnection.get(channel.slice('conn:'.length));
       if (client && client.readyState === client.OPEN) client.send(message);
       return;
+    }
+    const endsSession = channel.startsWith('user:') && isSessionEnded(message);
+    if (endsSession) {
+      const userId = channel.slice('user:'.length);
+      for (const listener of this.sessionEndedListeners) listener(userId);
     }
     const targets = channel.startsWith('conv:')
       ? this.byConversation.get(channel.slice('conv:'.length))
@@ -239,11 +252,25 @@ export class RealtimeService implements OnModuleInit, OnModuleDestroy {
         ? this.byUser.get(channel.slice('user:'.length))
         : undefined;
     if (!targets) return;
-    const endsSession = channel.startsWith('user:') && message.includes('"session.ended"');
     for (const client of [...targets]) {
       if (client.readyState === client.OPEN) client.send(message);
       if (endsSession) client.close(SESSION_ENDED_CLOSE_CODE, 'Session ended');
     }
+  }
+}
+
+/**
+ * Whether a user-channel message is the `session.ended` control envelope. By its parsed `type`,
+ * never by a substring: other envelopes on the channel carry user-chosen text (a display name or
+ * group title that is literally "session.ended" must not sign anyone out). The cheap substring test
+ * only skips parsing for the vast majority that can't match.
+ */
+export function isSessionEnded(message: string): boolean {
+  if (!message.includes('session.ended')) return false;
+  try {
+    return (JSON.parse(message) as { type?: unknown }).type === 'session.ended';
+  } catch {
+    return false;
   }
 }
 

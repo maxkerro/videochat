@@ -37,6 +37,7 @@ import { publishReadEvent } from './read-events.js';
 import { RealtimeService } from '../realtime/realtime.service.js';
 import { S3Service } from '../storage/s3.service.js';
 import { toConversationSummary } from './conversation-mapper.js';
+import { UserUnavailableError } from '../db/live-users.js';
 
 /** "Anna", "Anna and Ben", "Anna, Ben and Carl" -- the join style used by every CHAT-018 system
  *  message that names more than one person (an "add members" call can add several at once). */
@@ -74,7 +75,7 @@ export class ConversationsService {
       throw new NotFoundException('User not found');
     }
 
-    const conv = await findOrCreateDirectConversation(this.db, userId, otherUserId);
+    const conv = await orNotFound(findOrCreateDirectConversation(this.db, userId, otherUserId));
     // Whether this just created the conversation or found an existing one, make sure both
     // members' already-open sockets (if any) are registered for it -- otherwise a socket that
     // connected before this conversation existed would never hear the first message sent into
@@ -133,11 +134,13 @@ export class ConversationsService {
     // check, so the two stay in sync.
     await this.assertNoneHaveBlockedActor(creatorId, uniqueMemberIds);
 
-    const conv = await createGroupConversation(this.db, {
-      title,
-      createdBy: creatorId,
-      memberIds: uniqueMemberIds,
-    });
+    const conv = await orNotFound(
+      createGroupConversation(this.db, {
+        title,
+        createdBy: creatorId,
+        memberIds: uniqueMemberIds,
+      }),
+    );
     // Mirrors `startDirect`'s own reasoning: an already-open socket for any of these members
     // (including the creator) snapshotted its conversations at connect time, before this one
     // existed, and would never hear the "created the group" system message below without this.
@@ -195,7 +198,7 @@ export class ConversationsService {
     // deliberately generic.
     await this.assertNoneHaveBlockedActor(userId, uniqueMemberIds);
 
-    const added = await addGroupMembers(this.db, conversationId, uniqueMemberIds);
+    const added = await orNotFound(addGroupMembers(this.db, conversationId, uniqueMemberIds));
     for (const memberId of added) this.realtime.addConversationForUser(memberId, conversationId);
 
     if (added.length > 0) {
@@ -436,5 +439,16 @@ export class ConversationsService {
     const missingIndex = users.findIndex((u) => !u || u.deletedAt);
     if (missingIndex >= 0) throw new NotFoundException('User not found');
     return users as NonNullable<(typeof users)[number]>[];
+  }
+}
+
+/** A person turned out to be deleted inside the membership transaction (account deletion raced
+ *  this): the same 404 the up-front checks give. */
+async function orNotFound<T>(work: Promise<T>): Promise<T> {
+  try {
+    return await work;
+  } catch (err) {
+    if (err instanceof UserUnavailableError) throw new NotFoundException('User not found');
+    throw err;
   }
 }

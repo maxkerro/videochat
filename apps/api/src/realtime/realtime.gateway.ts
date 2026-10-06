@@ -71,6 +71,9 @@ export class RealtimeGateway
   ) {}
 
   afterInit(server: Server): void {
+    // CHAT-037 review: a deletion or password change on any node reaches every node's token
+    // cache at once, instead of after its 15 s expiry.
+    this.realtime.onSessionEnded((userId) => this.tokenState.invalidate(userId));
     this.heartbeatTimer = setInterval(() => {
       const live: Array<{ userId: string; connectionId: string }> = [];
       for (const raw of server.clients) {

@@ -73,7 +73,11 @@ export function MessageBubble(props: MessageBubbleProps) {
   const actions = deleted
     ? []
     : [
-        { label: 'Reply', onSelect: () => props.onReply(message) },
+        {
+          label: 'Reply',
+          onSelect: () => props.onReply(message),
+          afterClose: () => document.getElementById('composer')?.focus(),
+        },
         { label: 'Add reaction…', onSelect: () => props.onOpenPicker(message) },
         ...(canEdit ? [{ label: 'Edit', onSelect: () => props.onStartEdit(message) }] : []),
         ...(canDelete

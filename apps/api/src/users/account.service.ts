@@ -1,4 +1,4 @@
-import { BadRequestException, Inject, Injectable, NotFoundException } from '@nestjs/common';
+import { BadRequestException, Inject, Injectable, Logger, NotFoundException } from '@nestjs/common';
 import { makeEnvelope, type Me, type UpdateSettingsInput } from '@videochat/shared';
 import { randomUUID } from 'node:crypto';
 import { AttachmentsService } from '../attachments/attachments.service.js';
@@ -11,6 +11,7 @@ import { PresenceService } from '../realtime/presence.service.js';
 import {
   eraseAccount,
   listActiveConversationIds,
+  lockUserForDeletion,
   listConversationsForExport,
   listMessagesSentBy,
   updateUserSettings,
@@ -29,6 +30,8 @@ const ERASED_ANNOUNCE_LIMIT = 100;
 /** CHAT-037: settings, data export and account deletion. */
 @Injectable()
 export class AccountService {
+  private readonly logger = new Logger(AccountService.name);
+
   constructor(
     @Inject(DB) private readonly db: Database,
     private readonly s3: S3Service,
@@ -71,6 +74,9 @@ export class AccountService {
 
     const left: Array<{ conversationId: string; promotedUserId: string | null }> = [];
     const { files, erased } = await this.db.transaction(async (tx) => {
+      // Exclusive lock on the account for the whole erase: concurrent "add to group" / "start a
+      // chat" with them waits, then sees them deleted (see lockLiveUsers).
+      await lockUserForDeletion(tx, userId);
       for (const conversationId of await listActiveConversationIds(tx, userId)) {
         // leaveConversation opens its own (nested -> savepoint) transaction.
         const result = await leaveConversation(tx as unknown as Database, conversationId, userId);
@@ -79,26 +85,40 @@ export class AccountService {
       return eraseAccount(tx, userId);
     });
 
+    // The account is gone from here on, so the request succeeds. Each follow-up step is best
+    // effort: one failing (Redis, storage) is logged and doesn't stop the others.
     this.tokenState.invalidate(userId);
-    await this.realtime.closeUserConnections(userId, 'account-deleted');
+    await this.afterDeletion('close connections', () =>
+      this.realtime.closeUserConnections(userId, 'account-deleted'),
+    );
     for (const { conversationId } of left) {
       this.realtime.removeConversationForUser(userId, conversationId);
     }
-    await this.attachments.deleteFiles(files);
+    await this.afterDeletion('delete files', () => this.attachments.deleteFiles(files));
     if (user.avatarKey) {
-      await this.s3
-        .deleteObjects([`${user.avatarKey}/64.webp`, `${user.avatarKey}/256.webp`])
-        .catch(() => undefined);
+      await this.afterDeletion('delete avatar', () =>
+        this.s3.deleteObjects([`${user.avatarKey}/64.webp`, `${user.avatarKey}/256.webp`]),
+      );
     }
-    await this.announceErased(erased);
+    await this.afterDeletion('announce erased messages', () => this.announceErased(erased));
     // Not their name: the notice outlives the account, and the point is that it's erased.
     for (const { conversationId, promotedUserId } of left) {
-      await this.postSystemMessage(conversationId, 'A member deleted their account');
-      if (promotedUserId) {
-        const promoted = await findUserById(this.db, promotedUserId);
-        if (promoted)
-          await this.postSystemMessage(conversationId, `${promoted.displayName} is now an admin`);
-      }
+      await this.afterDeletion('post notices', async () => {
+        await this.postSystemMessage(conversationId, 'A member deleted their account');
+        if (promotedUserId) {
+          const promoted = await findUserById(this.db, promotedUserId);
+          if (promoted)
+            await this.postSystemMessage(conversationId, `${promoted.displayName} is now an admin`);
+        }
+      });
+    }
+  }
+
+  private async afterDeletion(step: string, work: () => Promise<unknown>): Promise<void> {
+    try {
+      await work();
+    } catch (err) {
+      this.logger.warn(`Account deletion: couldn't ${step}: ${(err as Error).message}`);
     }
   }
 

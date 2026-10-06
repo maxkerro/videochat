@@ -10,6 +10,7 @@ import {
   type MessageRow,
 } from './schema.js';
 import { directKeyFor } from './messages.js';
+import { lockLiveUsers } from './live-users.js';
 import { isUniqueViolation } from './pg-errors.js';
 
 export interface ConversationWithMembership extends Conversation {
@@ -71,6 +72,7 @@ export async function findOrCreateDirectConversation(
 
   try {
     return await db.transaction(async (tx) => {
+      await lockLiveUsers(tx, [userA, userB]);
       const [conv] = await tx
         .insert(conversations)
         .values({ type: 'direct', directKey, createdBy: userA })
@@ -245,6 +247,7 @@ export async function createGroupConversation(
   input: { title: string; createdBy: string; memberIds: string[] },
 ): Promise<ConversationWithMembership> {
   return db.transaction(async (tx) => {
+    await lockLiveUsers(tx, [input.createdBy, ...input.memberIds]);
     const [conv] = await tx
       .insert(conversations)
       .values({ type: 'group', title: input.title, createdBy: input.createdBy })
@@ -338,6 +341,7 @@ export async function addGroupMembers(
     const alreadyActive = new Set(existing.map((e) => e.userId));
     const toAdd = userIds.filter((id) => !alreadyActive.has(id));
     if (toAdd.length === 0) return [];
+    await lockLiveUsers(tx, toAdd);
 
     await tx
       .insert(memberships)

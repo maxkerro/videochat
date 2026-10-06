@@ -1,6 +1,6 @@
 import { EventEmitter } from 'node:events';
 import type { Redis } from 'ioredis';
-import { RealtimeService, type RealtimeSocket } from './realtime.service.js';
+import { isSessionEnded, RealtimeService, type RealtimeSocket } from './realtime.service.js';
 
 /** A `duplicate()`d subscriber connection is a separate object from the main client in ioredis;
  *  this fakes just enough of it (connect/quit/psubscribe plus the real EventEmitter `pmessage`
@@ -23,6 +23,7 @@ function makeSocket(readyState = 1): RealtimeSocket {
     OPEN: 1,
     readyState,
     send: vi.fn(),
+    close: vi.fn(),
   } as unknown as RealtimeSocket;
 }
 
@@ -97,6 +98,40 @@ describe('RealtimeService', () => {
 
     expect(tabA.send).toHaveBeenCalledWith('{"type":"session.revoked"}');
     expect(tabB.send).toHaveBeenCalledWith('{"type":"session.revoked"}');
+  });
+
+  it('CHAT-037: closes sockets and tells listeners only for a real session.ended envelope', async () => {
+    const { redis, subscriber } = makeFakeRedis();
+    const service = new RealtimeService(redis);
+    await service.onModuleInit();
+    const ended = vi.fn();
+    service.onSessionEnded(ended);
+    const tab = makeSocket();
+    service.register(tab, 'user-a', []);
+
+    // User-chosen text that happens to be the marker must not sign anyone out.
+    subscriber.emit(
+      'pmessage',
+      'user:*',
+      'user:user-a',
+      JSON.stringify({ type: 'me.updated', payload: { displayName: 'session.ended' } }),
+    );
+    expect(tab.close).not.toHaveBeenCalled();
+    expect(ended).not.toHaveBeenCalled();
+
+    // The real thing -- and listeners hear it even for a user with no socket on this node.
+    subscriber.emit('pmessage', 'user:*', 'user:user-b', '{"type":"session.ended"}');
+    expect(ended).toHaveBeenCalledWith('user-b');
+    subscriber.emit('pmessage', 'user:*', 'user:user-a', '{"type":"session.ended"}');
+    expect(tab.close).toHaveBeenCalledWith(4401, 'Session ended');
+  });
+
+  it('isSessionEnded parses rather than substring-matches', () => {
+    expect(isSessionEnded('{"type":"session.ended","payload":{}}')).toBe(true);
+    expect(
+      isSessionEnded('{"type":"conversation.added","payload":{"title":"session.ended"}}'),
+    ).toBe(false);
+    expect(isSessionEnded('not json "session.ended"')).toBe(false);
   });
 
   it('never sends to a socket that is not open', async () => {

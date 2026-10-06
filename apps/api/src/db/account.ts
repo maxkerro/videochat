@@ -1,5 +1,6 @@
 import { DELETED_USERNAME_PREFIX, type UpdateSettingsInput } from '@videochat/shared';
-import { and, asc, eq, inArray, isNull, or, sql } from 'drizzle-orm';
+import { and, asc, eq, inArray, isNull, ne, or, sql } from 'drizzle-orm';
+import { randomBytes } from 'node:crypto';
 import type { DbExecutor } from './client.js';
 import {
   attachments,
@@ -83,11 +84,22 @@ export async function eraseAccount(
   // with a name someone registered ahead of time; 22 hex chars of the id keep two deleted
   // accounts apart and fit the 30-character limit.
   const shortId = userId.replace(/-/g, '').slice(0, 30 - DELETED_USERNAME_PREFIX.length);
+  // Accounts made before the prefix was reserved could hold this exact name already: fall back
+  // to a random one rather than failing the whole deletion.
+  let username = `${DELETED_USERNAME_PREFIX}${shortId}`;
+  const [taken] = await db
+    .select({ id: users.id })
+    .from(users)
+    .where(and(sql`lower(${users.username}) = ${username}`, ne(users.id, userId)))
+    .limit(1);
+  if (taken) {
+    username = `${DELETED_USERNAME_PREFIX}${randomBytes(11).toString('hex')}`;
+  }
   await db
     .update(users)
     .set({
       email: `deleted+${userId}@deleted.invalid`,
-      username: `${DELETED_USERNAME_PREFIX}${shortId}`,
+      username,
       displayName: 'Deleted user',
       avatarKey: null,
       passwordHash: null,
@@ -159,4 +171,9 @@ export async function listConversationsForExport(db: DbExecutor, userId: string)
     order by me.joined_at
   `);
   return result.rows;
+}
+
+/** CHAT-037 review: see `lockLiveUsers` -- the other half of that handshake. */
+export async function lockUserForDeletion(db: DbExecutor, userId: string): Promise<void> {
+  await db.select({ id: users.id }).from(users).where(eq(users.id, userId)).for('update');
 }

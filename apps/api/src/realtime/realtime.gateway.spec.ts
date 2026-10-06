@@ -46,6 +46,7 @@ describe('RealtimeGateway', () => {
     publishToConversation: ReturnType<typeof vi.fn>;
     dispatchInbound: ReturnType<typeof vi.fn>;
     notifyDisconnected: ReturnType<typeof vi.fn>;
+    onSessionEnded: ReturnType<typeof vi.fn>;
   };
   let gateway: RealtimeGateway;
   let presence: {
@@ -71,6 +72,7 @@ describe('RealtimeGateway', () => {
       publishToConversation: vi.fn().mockResolvedValue(undefined),
       dispatchInbound: vi.fn().mockResolvedValue(false),
       notifyDisconnected: vi.fn().mockResolvedValue(undefined),
+      onSessionEnded: vi.fn(),
     };
     gateway = new RealtimeGateway(
       jwt as unknown as JwtService,

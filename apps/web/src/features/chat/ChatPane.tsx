@@ -742,8 +742,7 @@ export function ChatPane() {
   function startReply(message: Message) {
     setEditingId(null);
     setReplyTo(message);
-    // After the menu has closed and handed focus back to its trigger.
-    window.setTimeout(() => document.getElementById('composer')?.focus(), 50);
+    // The message menu focuses the composer once it has closed (its "Reply" item's afterClose).
   }
 
   async function saveEdit(message: Message, body: string) {

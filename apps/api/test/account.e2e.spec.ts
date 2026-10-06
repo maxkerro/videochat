@@ -4,7 +4,9 @@ import { randomUUID } from 'node:crypto';
 import { eq, or } from 'drizzle-orm';
 import request from 'supertest';
 import { createDb, createPool } from '../src/db/client.js';
+import { findOrCreateDirectConversation } from '../src/db/conversations.js';
 import { getNotificationPrefs } from '../src/db/devices.js';
+import { UserUnavailableError } from '../src/db/live-users.js';
 import { attachments, blocks, devices, reactions } from '../src/db/schema.js';
 import {
   bearer,
@@ -538,6 +540,29 @@ describe.skipIf(!hasInfra)('settings and account (CHAT-037)', () => {
           await db.select().from(attachments).where(eq(attachments.uploaderId, anna.id)),
         ).toEqual([]);
         expect((await getNotificationPrefs(db, [anna.id])).get(anna.id)?.enabled).toBe(false);
+      } finally {
+        await pool.end();
+      }
+    });
+
+    it("a deleted account can't open a chat with its old token, nor be put into one", async () => {
+      const [anna, ben] = [await signUp(), await signUp()];
+      await request(server())
+        .post('/auth/delete-account')
+        .set(bearer(anna.token))
+        .send({ password: PASSWORD })
+        .expect(204);
+      await request(server())
+        .post('/conversations/direct')
+        .set(bearer(anna.token))
+        .send({ userId: ben.id })
+        .expect(401);
+      // Even past the service's up-front checks, the membership transaction refuses them.
+      const pool = createPool(process.env.TEST_DATABASE_URL!, 1);
+      try {
+        await expect(
+          findOrCreateDirectConversation(createDb(pool), ben.id, anna.id),
+        ).rejects.toBeInstanceOf(UserUnavailableError);
       } finally {
         await pool.end();
       }

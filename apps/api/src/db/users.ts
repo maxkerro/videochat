@@ -132,7 +132,9 @@ export async function setPasswordHash(
     .set({
       passwordHash,
       // CHAT-037 review: access tokens issued before this are refused (TokenStateService).
-      ...(options.passwordChanged ? { passwordChangedAt: sql`now()` } : {}),
+      // The API's clock, not the database's: it's compared with JWT `iat`, which this process
+      // signs. Mixing the two clocks would let skew refuse fresh tokens (or keep old ones).
+      ...(options.passwordChanged ? { passwordChangedAt: new Date() } : {}),
     })
     .where(eq(users.id, id));
 }

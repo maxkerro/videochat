@@ -20,6 +20,8 @@ import { RealtimeService } from './realtime.service.js';
 
 const TTL_MS = PRESENCE_TTL_SECONDS * 1000;
 const SWEEP_INTERVAL_MS = 15_000;
+// Note: the Lua scripts below touch a user's conns key and this one in one call -- fine on a
+// single Redis; on Redis Cluster they'd need a shared hash tag ({presence}) to land on one slot.
 const ONLINE_KEY = 'presence:online';
 const connsKey = (userId: string) => `presence:conns:${userId}`;
 

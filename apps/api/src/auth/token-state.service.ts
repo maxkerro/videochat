@@ -6,6 +6,9 @@ import { DB } from '../infra/tokens.js';
 
 /** How long a node trusts its cached copy. Changes made on this node take effect at once. */
 const CACHE_MS = 15_000;
+/** Past this many entries, expired ones are swept on the next miss (the cache stays bounded by
+ *  the users active in the last CACHE_MS). */
+const SWEEP_AT = 10_000;
 
 interface UserTokenState {
   exists: boolean;
@@ -32,7 +35,8 @@ export class TokenStateService {
     return (issuedAtSec ?? 0) >= state.validFromSec;
   }
 
-  /** Call after deleting an account or changing a password, so this node notices at once. */
+  /** Call after deleting an account or changing a password. This node notices at once; every
+   *  other node does too, through the `session.ended` broadcast (see RealtimeGateway). */
   invalidate(userId: string): void {
     this.cache.delete(userId);
   }
@@ -45,6 +49,10 @@ export class TokenStateService {
       .from(users)
       .where(eq(users.id, userId))
       .limit(1);
+    if (this.cache.size >= SWEEP_AT) {
+      const now = Date.now();
+      for (const [id, entry] of this.cache) if (now - entry.at >= CACHE_MS) this.cache.delete(id);
+    }
     const state: UserTokenState = {
       exists: !!row,
       deleted: !!row?.deletedAt,
