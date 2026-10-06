@@ -21,6 +21,12 @@ export class S3Service {
       endpoint: env.S3_ENDPOINT,
       region: env.S3_REGION,
       forcePathStyle: env.S3_FORCE_PATH_STYLE,
+      // Newer AWS SDKs add a CRC32 checksum to every PUT by default -- and for a *presigned* PUT
+      // they compute it over an empty body at signing time, so the browser's real upload would
+      // never match it. B2 (and other S3-compatibles) also handle these headers unevenly. Only
+      // send checksums when an operation actually requires one.
+      requestChecksumCalculation: 'WHEN_REQUIRED',
+      responseChecksumValidation: 'WHEN_REQUIRED',
       credentials: {
         accessKeyId: env.S3_ACCESS_KEY_ID,
         secretAccessKey: env.S3_SECRET_ACCESS_KEY,
