@@ -123,4 +123,31 @@ describe('NotificationsService', () => {
     expect(devicesDb.listPushDevices).toHaveBeenCalledWith({}, ['ben']);
     expect(channel.send.mock.calls[0]![1]).toMatchObject({ body: 'New message', silent: true });
   });
+
+  it("a missed call keeps its text with previews off (there's no content to hide)", async () => {
+    vi.mocked(devicesDb.getNotificationPrefs).mockResolvedValue(
+      new Map([['ben', { enabled: true, sound: true, previews: false }]]),
+    );
+    await service.notifyMissedCall({
+      id: 'call-1',
+      conversationId: 'conv',
+      callerId: 'anna',
+      calleeId: 'ben',
+      media: 'audio',
+      silenced: false,
+    } as never);
+    expect(channel.send).toHaveBeenCalledTimes(1);
+    expect(channel.send.mock.calls[0]![1]).toMatchObject({ body: 'Missed audio call' });
+  });
+
+  it('skips anyone whose notifications are off (a deleted account always counts as off)', async () => {
+    vi.mocked(devicesDb.getNotificationPrefs).mockResolvedValue(
+      new Map([
+        ['ben', { enabled: false, sound: true, previews: true }],
+        ['clara', { enabled: true, sound: true, previews: true }],
+      ]),
+    );
+    await service.notifyNewMessage(row);
+    expect(devicesDb.listPushDevices).toHaveBeenCalledWith({}, ['clara']);
+  });
 });

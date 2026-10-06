@@ -239,8 +239,7 @@ export class AuthService implements OnModuleInit {
     input: ChangePasswordInput,
     currentRefreshToken: string | undefined,
   ): Promise<void> {
-    const user = await findUserById(this.db, userId);
-    if (!user?.passwordHash || !(await verifyPassword(user.passwordHash, input.currentPassword))) {
+    if (!(await this.checkPasswordWithLockout(userId, input.currentPassword))) {
       throw new BadRequestException('Your current password is incorrect');
     }
     const passwordHash = await hashPassword(input.newPassword);
@@ -264,9 +263,27 @@ export class AuthService implements OnModuleInit {
   }
 
   /** CHAT-037: re-checks the password before an account is deleted. */
-  async verifyPasswordFor(userId: string, password: string): Promise<boolean> {
+  verifyPasswordFor(userId: string, password: string): Promise<boolean> {
+    return this.checkPasswordWithLockout(userId, password);
+  }
+
+  /**
+   * A signed-in password re-check (change password, delete account) counts toward the same
+   * CHAT-010 lockout as logging in: otherwise a stolen access token would allow guessing the
+   * password at the throttle's rate, unbounded across IPs.
+   */
+  private async checkPasswordWithLockout(userId: string, password: string): Promise<boolean> {
     const user = await findUserById(this.db, userId);
-    return !!user?.passwordHash && (await verifyPassword(user.passwordHash, password));
+    if (!user?.passwordHash) return false;
+    if (user.lockedUntil && user.lockedUntil.getTime() > Date.now()) {
+      throw new ForbiddenException('Too many failed attempts. Try again in a few minutes.');
+    }
+    if (!(await verifyPassword(user.passwordHash, password))) {
+      await recordFailedLogin(this.db, user.id);
+      return false;
+    }
+    if (user.failedLoginAttempts > 0) await resetFailedLogins(this.db, user.id);
+    return true;
   }
 
   private async issueSession(

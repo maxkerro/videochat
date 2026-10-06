@@ -104,13 +104,17 @@ export class NotificationsService implements OnModuleInit {
       );
       if (!recipients.length) return;
       const caller = await findUserById(this.db, call.callerId);
-      await this.push(recipients, {
-        title: caller?.displayName ?? 'Missed call',
-        body: call.media === 'video' ? 'Missed video call' : 'Missed audio call',
-        conversationId: call.conversationId,
-        url: `/c/${call.conversationId}`,
-        tag: `call-${call.id}`,
-      });
+      await this.push(
+        recipients,
+        {
+          title: caller?.displayName ?? 'Missed call',
+          body: call.media === 'video' ? 'Missed video call' : 'Missed audio call',
+          conversationId: call.conversationId,
+          url: `/c/${call.conversationId}`,
+          tag: `call-${call.id}`,
+        },
+        false,
+      );
     } catch (err) {
       this.logger.warn(`Notifying about missed call ${call.id} failed: ${(err as Error).message}`);
     }
@@ -129,7 +133,9 @@ export class NotificationsService implements OnModuleInit {
     return result;
   }
 
-  private async push(userIds: string[], payload: PushPayload): Promise<void> {
+  /** `hasPreview`: the body shows message content, which "previews off" replaces. A missed-call
+   *  notice ("Missed audio call") has none, so it's sent as is. */
+  private async push(userIds: string[], payload: PushPayload, hasPreview = true): Promise<void> {
     // CHAT-037: each person's own notification settings.
     const prefs = await getNotificationPrefs(this.db, userIds);
     const wanted = userIds.filter((id) => prefs.get(id)?.enabled !== false);
@@ -141,7 +147,7 @@ export class NotificationsService implements OnModuleInit {
         const pref = prefs.get(device.userId);
         const personal: PushPayload = {
           ...payload,
-          ...(pref && !pref.previews ? { body: 'New message' } : {}),
+          ...(pref && !pref.previews && hasPreview ? { body: 'New message' } : {}),
           ...(pref && !pref.sound ? { silent: true } : {}),
         };
         const result = await channel.send(device, personal);

@@ -1,7 +1,11 @@
 import type { INestApplication } from '@nestjs/common';
-import { authSessionSchema } from '@videochat/shared';
+import { authSessionSchema, LIMITS } from '@videochat/shared';
 import { randomUUID } from 'node:crypto';
+import { eq, or } from 'drizzle-orm';
 import request from 'supertest';
+import { createDb, createPool } from '../src/db/client.js';
+import { getNotificationPrefs } from '../src/db/devices.js';
+import { attachments, blocks, devices, reactions } from '../src/db/schema.js';
 import {
   bearer,
   startE2eApp,
@@ -90,6 +94,14 @@ describe.skipIf(!hasInfra)('settings and account (CHAT-037)', () => {
   it('changes the password with the current one, keeping this session and ending others', async () => {
     const anna = await signUp();
     const meRes = await me(anna);
+    // This session, with its refresh cookie -- the one that must survive the change.
+    const first = await request(server())
+      .post('/auth/login')
+      .send({ identifier: meRes.email, password: PASSWORD })
+      .expect(200);
+    const firstCookie = (first.headers['set-cookie'] as unknown as string[]).find((c) =>
+      c.startsWith('refresh_token='),
+    )!;
     // A second session (another device).
     const second = await request(server())
       .post('/auth/login')
@@ -107,8 +119,15 @@ describe.skipIf(!hasInfra)('settings and account (CHAT-037)', () => {
     await request(server())
       .post('/auth/change-password')
       .set(bearer(anna.token))
+      .set('Cookie', firstCookie.split(';')[0]!)
       .send({ currentPassword: PASSWORD, newPassword: 'a-new-long-password' })
       .expect(204);
+
+    // This session carries on: its refresh cookie still gets a fresh token...
+    await request(server())
+      .post('/auth/refresh')
+      .set('Cookie', firstCookie.split(';')[0]!)
+      .expect(200);
 
     await request(server())
       .post('/auth/refresh')
@@ -445,6 +464,83 @@ describe.skipIf(!hasInfra)('settings and account (CHAT-037)', () => {
         expect.objectContaining({ id: group.body.id, leftAt: expect.any(String) }),
       ]);
       expect(res.body.messages.map((m: { body: string }) => m.body)).toEqual(['bye all']);
+    });
+
+    it('wrong passwords on change-password and delete-account count toward the lockout', async () => {
+      const anna = await signUp();
+      for (let i = 0; i < LIMITS.loginAttemptsBeforeLockout; i++) {
+        await request(server())
+          .post(i % 2 ? '/auth/delete-account' : '/auth/change-password')
+          .set(bearer(anna.token))
+          .send(
+            i % 2
+              ? { password: 'wrong-password' }
+              : { currentPassword: 'wrong-password', newPassword: 'a-new-long-password' },
+          )
+          .expect(400);
+      }
+      // Locked: even the right password is refused for now, here and at login.
+      await request(server())
+        .post('/auth/delete-account')
+        .set(bearer(anna.token))
+        .send({ password: PASSWORD })
+        .expect(403);
+      const email = (await me(anna)).email as string;
+      await request(server())
+        .post('/auth/login')
+        .send({ identifier: email, password: PASSWORD })
+        .expect(403);
+    });
+
+    it('erasure removes their reactions, blocks, devices and uploads, and silences notifications', async () => {
+      const [anna, ben, clara] = [await signUp(), await signUp(), await signUp()];
+      const conversationId = await direct(anna, ben);
+      const msg = await request(server())
+        .post(`/conversations/${conversationId}/messages`)
+        .set(bearer(ben.token))
+        .send({ clientMsgId: randomUUID(), body: 'react to me' })
+        .expect(201);
+      await request(server())
+        .post(`/conversations/${conversationId}/messages/${msg.body.id as string}/reactions`)
+        .set(bearer(anna.token))
+        .send({ emoji: '👍' })
+        .expect(200);
+      await request(server()).post(`/users/${clara.id}/block`).set(bearer(anna.token)).expect(200);
+      await request(server())
+        .post('/push/subscriptions')
+        .set(bearer(anna.token))
+        .send({ endpoint: `https://push.test/${anna.id}`, keys: { p256dh: 'B', auth: 'a' } })
+        .expect(204);
+      await request(server())
+        .post(`/conversations/${conversationId}/attachments`)
+        .set(bearer(anna.token))
+        .send({ filename: 'a.txt', contentType: 'text/plain', sizeBytes: 3 })
+        .expect(201);
+
+      await request(server())
+        .post('/auth/delete-account')
+        .set(bearer(anna.token))
+        .send({ password: PASSWORD })
+        .expect(204);
+
+      const pool = createPool(process.env.TEST_DATABASE_URL!, 1);
+      try {
+        const db = createDb(pool);
+        expect(await db.select().from(reactions).where(eq(reactions.userId, anna.id))).toEqual([]);
+        expect(
+          await db
+            .select()
+            .from(blocks)
+            .where(or(eq(blocks.blockerId, anna.id), eq(blocks.blockedId, anna.id))),
+        ).toEqual([]);
+        expect(await db.select().from(devices).where(eq(devices.userId, anna.id))).toEqual([]);
+        expect(
+          await db.select().from(attachments).where(eq(attachments.uploaderId, anna.id)),
+        ).toEqual([]);
+        expect((await getNotificationPrefs(db, [anna.id])).get(anna.id)?.enabled).toBe(false);
+      } finally {
+        await pool.end();
+      }
     });
   });
 });
