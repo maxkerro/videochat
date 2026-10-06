@@ -79,6 +79,11 @@ describe('attachment helpers', () => {
     expect(sanitizeFilename('   ')).toBe('file');
   });
 
+  it("derives the staging key, and refuses a key it can't derive one from", () => {
+    expect(uploadKeyOf('attachments/c/1/original')).toBe('attachments/c/1/upload');
+    expect(() => uploadKeyOf('attachments/c/1/other')).toThrow(/Unexpected/);
+  });
+
   it('normalises content types and falls back for junk', () => {
     expect(normalizeContentType('Image/JPEG; charset=binary')).toBe('image/jpeg');
     expect(normalizeContentType('not a type')).toBe('application/octet-stream');
@@ -171,12 +176,15 @@ describe('AttachmentsService', () => {
   });
 
   it('sweeps unsent uploads and their objects', async () => {
-    s3.objects.set('k1', Buffer.from('x'));
+    const key = 'attachments/conv/k1/original';
+    s3.objects.set(key, Buffer.from('x'));
+    s3.objects.set(uploadKeyOf(key), Buffer.from('x'));
     vi.mocked(attachmentsDb.deleteStaleUnsentAttachments).mockResolvedValue([
-      { ...baseRow, objectKey: 'k1' },
+      { ...baseRow, objectKey: key },
     ]);
     await expect(service.sweepUnsent()).resolves.toBe(1);
-    expect(s3.objects.has('k1')).toBe(false);
+    expect(s3.objects.has(key)).toBe(false);
+    expect(s3.objects.has(uploadKeyOf(key))).toBe(false);
   });
 
   it('reads uploads from the staging key and stores files under a key only the API writes', async () => {

@@ -244,7 +244,14 @@ export class RealtimeService implements OnModuleInit, OnModuleDestroy {
     const endsSession = channel.startsWith('user:') && isSessionEnded(message);
     if (endsSession) {
       const userId = channel.slice('user:'.length);
-      for (const listener of this.sessionEndedListeners) listener(userId);
+      for (const listener of this.sessionEndedListeners) {
+        try {
+          listener(userId);
+        } catch (err) {
+          // One failing listener mustn't stop the sockets below from being closed.
+          this.logger.warn(`Session-ended listener failed: ${(err as Error).message}`);
+        }
+      }
     }
     const targets = channel.startsWith('conv:')
       ? this.byConversation.get(channel.slice('conv:'.length))

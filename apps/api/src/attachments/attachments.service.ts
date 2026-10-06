@@ -61,7 +61,12 @@ export function normalizeContentType(type: string): string {
  * verified, stripped object after sending. Processing reads from here and writes `objectKey`.
  */
 export function uploadKeyOf(objectKey: string): string {
-  return objectKey.replace(/\/original$/, '/upload');
+  // Never fall back to the key itself: that would sign uploads onto the stored object again
+  // (and the staging cleanup would delete the processed file).
+  if (!objectKey.endsWith('/original')) {
+    throw new Error(`Unexpected attachment object key: ${objectKey}`);
+  }
+  return objectKey.slice(0, -'original'.length) + 'upload';
 }
 
 /** Every object an attachment row may own. */

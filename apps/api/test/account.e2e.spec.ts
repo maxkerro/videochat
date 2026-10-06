@@ -1,13 +1,13 @@
 import type { INestApplication } from '@nestjs/common';
 import { authSessionSchema, LIMITS } from '@videochat/shared';
 import { randomUUID } from 'node:crypto';
-import { eq, or } from 'drizzle-orm';
+import { and, eq, or } from 'drizzle-orm';
 import request from 'supertest';
 import { createDb, createPool } from '../src/db/client.js';
 import { findOrCreateDirectConversation } from '../src/db/conversations.js';
 import { getNotificationPrefs } from '../src/db/devices.js';
 import { UserUnavailableError } from '../src/db/live-users.js';
-import { attachments, blocks, devices, reactions } from '../src/db/schema.js';
+import { attachments, blocks, devices, memberships, reactions } from '../src/db/schema.js';
 import {
   bearer,
   startE2eApp,
@@ -461,9 +461,20 @@ describe.skipIf(!hasInfra)('settings and account (CHAT-037)', () => {
         .post(`/conversations/${group.body.id as string}/leave`)
         .set(bearer(ben.token))
         .expect((r) => expect(r.status).toBeLessThan(300));
+      // Someone joins after Ben left: his export must not reveal them (or anyone current).
+      const dora = await signUp();
+      await request(server())
+        .post(`/conversations/${group.body.id as string}/members`)
+        .set(bearer(anna.token))
+        .send({ memberIds: [dora.id] })
+        .expect((r) => expect(r.status).toBeLessThan(300));
       const res = await request(server()).get('/me/export').set(bearer(ben.token)).expect(200);
       expect(res.body.conversations).toEqual([
-        expect.objectContaining({ id: group.body.id, leftAt: expect.any(String) }),
+        expect.objectContaining({
+          id: group.body.id,
+          leftAt: expect.any(String),
+          otherMembers: [],
+        }),
       ]);
       expect(res.body.messages.map((m: { body: string }) => m.body)).toEqual(['bye all']);
     });
@@ -547,6 +558,8 @@ describe.skipIf(!hasInfra)('settings and account (CHAT-037)', () => {
 
     it("a deleted account can't open a chat with its old token, nor be put into one", async () => {
       const [anna, ben] = [await signUp(), await signUp()];
+      // They already had a chat: erasure left it, and nothing may bring Anna back into it.
+      const existing = await direct(ben, anna);
       await request(server())
         .post('/auth/delete-account')
         .set(bearer(anna.token))
@@ -560,9 +573,31 @@ describe.skipIf(!hasInfra)('settings and account (CHAT-037)', () => {
       // Even past the service's up-front checks, the membership transaction refuses them.
       const pool = createPool(process.env.TEST_DATABASE_URL!, 1);
       try {
-        await expect(
-          findOrCreateDirectConversation(createDb(pool), ben.id, anna.id),
-        ).rejects.toBeInstanceOf(UserUnavailableError);
+        const db = createDb(pool);
+        // The existing-conversation fast path hands Ben his own (still active) membership and
+        // never touches Anna's, which stays left.
+        expect((await findOrCreateDirectConversation(db, ben.id, anna.id)).id).toBe(existing);
+        const [annaMembership] = await db
+          .select()
+          .from(memberships)
+          .where(and(eq(memberships.conversationId, existing), eq(memberships.userId, anna.id)));
+        expect(annaMembership!.leftAt).not.toBeNull();
+        // And through the API the deleted user can't be messaged at all.
+        await request(server())
+          .post('/conversations/direct')
+          .set(bearer(ben.token))
+          .send({ userId: anna.id })
+          .expect(404);
+        // A brand-new chat with a deleted user is refused inside the membership transaction.
+        const carl = await signUp();
+        await request(server())
+          .post('/auth/delete-account')
+          .set(bearer(carl.token))
+          .send({ password: PASSWORD })
+          .expect(204);
+        await expect(findOrCreateDirectConversation(db, ben.id, carl.id)).rejects.toBeInstanceOf(
+          UserUnavailableError,
+        );
       } finally {
         await pool.end();
       }

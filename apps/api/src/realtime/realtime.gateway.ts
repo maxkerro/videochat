@@ -151,9 +151,11 @@ export class RealtimeGateway
     if (client.userId && client.connectionId) {
       const { userId, connectionId } = client;
       // After the connect's presence write, never before it (see `presenceReady`).
-      void (client.presenceReady ?? Promise.resolve()).then(() =>
-        this.presence.disconnected(userId, connectionId),
-      );
+      // Even if the connect's write failed: removing an entry that isn't there is harmless.
+      void (client.presenceReady ?? Promise.resolve())
+        .catch(() => undefined)
+        .then(() => this.presence.disconnected(userId, connectionId))
+        .catch(() => undefined);
     }
     // Only sockets that finished authenticating can be in a call.
     if (client.userId) void this.realtime.notifyDisconnected(client);

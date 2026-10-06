@@ -213,8 +213,6 @@ export class PresenceService implements OnModuleInit, OnModuleDestroy {
     });
   }
 
-  /** The owner of an offline transition: record last seen, tell contacts, then re-announce online
-   *  if a reconnect raced us (its "online" may have reached contacts before our "offline"). */
   /**
    * CHAT-037: `userId` changed their last-seen setting. Each contact gets what they may now see:
    * the current state, or -- for those who just lost sight of it -- "offline, no last seen", which
@@ -253,6 +251,8 @@ export class PresenceService implements OnModuleInit, OnModuleDestroy {
     }
   }
 
+  /** The owner of an offline transition: record last seen, tell contacts, then re-announce online
+   *  if a reconnect raced us (its "online" may have reached contacts before our "offline"). */
   private async announceOffline(userId: string, at: Date): Promise<void> {
     await setLastActive(this.db, userId, at);
     await this.announce(userId, { userId, online: false, lastSeenAt: at.toISOString() });

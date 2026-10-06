@@ -44,14 +44,25 @@ const AuthContext = createContext<AuthContextValue | null>(null);
  * is how a returning visitor picks their session back up.
  */
 export function AuthProvider({ children }: { children: ReactNode }) {
-  const [session, setSession] = useState<AuthSession | null | undefined>(undefined);
+  const [session, setSessionState] = useState<AuthSession | null | undefined>(undefined);
   // Avoids two overlapping silent-refresh attempts (e.g. StrictMode's double-invoked effect).
   const refreshing = useRef<Promise<string | null> | null>(null);
-  // The latest session, for callbacks that must not depend on it (like `refresh`).
+  // The latest session, for callbacks that must not depend on it (like `refresh`). Kept in step
+  // synchronously with every update, not an effect behind.
   const sessionRef = useRef<AuthSession | null | undefined>(undefined);
-  useEffect(() => {
-    sessionRef.current = session;
-  }, [session]);
+  const setSession = useCallback(
+    (
+      next:
+        | AuthSession
+        | null
+        | ((prev: AuthSession | null | undefined) => AuthSession | null | undefined),
+    ) => {
+      const value = typeof next === 'function' ? next(sessionRef.current) : next;
+      sessionRef.current = value;
+      setSessionState(value);
+    },
+    [],
+  );
   // None of the query keys used across the app (['conversations'], ['conversation', id],
   // ['messages', id], ...) are scoped by user id, since there's normally only ever one signed-in
   // user per browser session. Without clearing on logout/login, a second person signing in on the

@@ -26,6 +26,7 @@ interface UserTokenState {
 @Injectable()
 export class TokenStateService {
   private readonly cache = new Map<string, { state: UserTokenState; at: number }>();
+  private lastSweepAt = 0;
 
   constructor(@Inject(DB) private readonly db: Database) {}
 
@@ -49,8 +50,10 @@ export class TokenStateService {
       .from(users)
       .where(eq(users.id, userId))
       .limit(1);
-    if (this.cache.size >= SWEEP_AT) {
+    // At most once per CACHE_MS, so a large cache of fresh entries isn't walked on every miss.
+    if (this.cache.size >= SWEEP_AT && Date.now() - this.lastSweepAt >= CACHE_MS) {
       const now = Date.now();
+      this.lastSweepAt = now;
       for (const [id, entry] of this.cache) if (now - entry.at >= CACHE_MS) this.cache.delete(id);
     }
     const state: UserTokenState = {

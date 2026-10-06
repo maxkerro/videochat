@@ -49,6 +49,7 @@ describe('RealtimeGateway', () => {
     onSessionEnded: ReturnType<typeof vi.fn>;
   };
   let gateway: RealtimeGateway;
+  let tokenState: { isTokenValid: ReturnType<typeof vi.fn>; invalidate: ReturnType<typeof vi.fn> };
   let presence: {
     connected: ReturnType<typeof vi.fn>;
     disconnected: ReturnType<typeof vi.fn>;
@@ -61,6 +62,7 @@ describe('RealtimeGateway', () => {
     vi.mocked(blocksDb.isSenderBlockedInDirectConversation).mockResolvedValue(false);
     vi.mocked(usersDb.findUserById).mockResolvedValue({ displayName: 'Anna' } as never);
     jwt = { verify: vi.fn() };
+    tokenState = { isTokenValid: vi.fn().mockResolvedValue(true), invalidate: vi.fn() };
     presence = {
       connected: vi.fn().mockResolvedValue(undefined),
       disconnected: vi.fn().mockResolvedValue(undefined),
@@ -79,7 +81,7 @@ describe('RealtimeGateway', () => {
       realtime as unknown as RealtimeService,
       {} as Database,
       presence as unknown as PresenceService,
-      { isTokenValid: vi.fn().mockResolvedValue(true) } as unknown as TokenStateService,
+      tokenState as unknown as TokenStateService,
     );
   });
 
@@ -306,6 +308,14 @@ describe('RealtimeGateway', () => {
       finishConnect();
       await vi.waitFor(() => expect(presence.disconnected).toHaveBeenCalledWith('user-1', 'c1'));
     });
+  });
+
+  it('CHAT-037: forgets a user in the token-state cache when their sessions end on any node', () => {
+    gateway.afterInit({ clients: new Set() } as never);
+    const [listener] = realtime.onSessionEnded.mock.calls[0] as [(userId: string) => void];
+    listener('user-9');
+    expect(tokenState.invalidate).toHaveBeenCalledWith('user-9');
+    gateway.onModuleDestroy();
   });
 
   describe('heartbeat', () => {

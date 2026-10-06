@@ -164,7 +164,10 @@ export async function listConversationsForExport(db: DbExecutor, userId: string)
              filter (where u.id is not null and u.id <> ${userId}), '{}') as members
     from ${memberships} me
     join ${conversations} c on c.id = me.conversation_id
-    left join ${memberships} other on other.conversation_id = c.id and other.left_at is null
+    -- Who's in it now -- only for conversations you're still in. For one you've left, listing
+    -- today's members would show people who joined after you, which you were never told.
+    left join ${memberships} other
+      on other.conversation_id = c.id and other.left_at is null and me.left_at is null
     left join ${users} u on u.id = other.user_id
     where me.user_id = ${userId}
     group by c.id, c.type, c.title, me.joined_at, me.left_at
