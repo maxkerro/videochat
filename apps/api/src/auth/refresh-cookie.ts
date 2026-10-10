@@ -1,4 +1,5 @@
-import type { Response } from 'express';
+import type { Request, Response } from 'express';
+import { REFRESH_MODE_HEADER } from '@videochat/shared';
 import type { Env } from '../config/env.js';
 
 export const REFRESH_COOKIE_NAME = 'refresh_token';
@@ -47,4 +48,34 @@ export function clearRefreshCookie(res: Response, env: Env): void {
     sameSite: 'strict',
     path: COOKIE_PATH,
   });
+}
+
+/** CHAT-051: a client that can't keep an httpOnly cookie (the mobile app) opts in per request. A
+ *  browser page can't set this header on a cross-origin request without CORS allowing it, and the
+ *  web app never sends it, so cookie clients are unaffected. */
+export function wantsBodyToken(req: Request): boolean {
+  return req.header(REFRESH_MODE_HEADER) === 'body';
+}
+
+/** The refresh token for this request: from the cookie, or -- in body mode -- from the JSON body. */
+export function readRefreshToken(req: Request): string | undefined {
+  if (wantsBodyToken(req)) {
+    const token = (req.body as { refreshToken?: unknown } | undefined)?.refreshToken;
+    return typeof token === 'string' && token.length > 0 ? token : undefined;
+  }
+  return (req.cookies as Record<string, string | undefined> | undefined)?.[REFRESH_COOKIE_NAME];
+}
+
+/** Hands a freshly issued refresh token to the client the way it asked for it: as the cookie, or
+ *  as a `refreshToken` field next to the session. */
+export function deliverRefreshToken<T extends object>(
+  req: Request,
+  res: Response,
+  session: T,
+  token: string,
+  env: Env,
+): T | (T & { refreshToken: string }) {
+  if (wantsBodyToken(req)) return { ...session, refreshToken: token };
+  setRefreshCookie(res, token, env);
+  return session;
 }

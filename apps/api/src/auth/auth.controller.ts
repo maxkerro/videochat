@@ -7,6 +7,7 @@ import {
   signUpSchema,
   verifyEmailSchema,
   type AuthSession,
+  type MobileAuthSession,
 } from '@videochat/shared';
 import { z } from 'zod';
 import type { Request, Response } from 'express';
@@ -16,7 +17,12 @@ import { ENV } from '../infra/tokens.js';
 import { AccessTokenGuard, CurrentUserId } from './access-token.guard.js';
 import { LoginThrottlerGuard } from '../rate-limit/rate-limit.guards.js';
 import { AuthService } from './auth.service.js';
-import { REFRESH_COOKIE_NAME, clearRefreshCookie, setRefreshCookie } from './refresh-cookie.js';
+import {
+  clearRefreshCookie,
+  deliverRefreshToken,
+  readRefreshToken,
+  wantsBodyToken,
+} from './refresh-cookie.js';
 
 const emailOnlySchema = requestPasswordResetSchema; // { email }
 
@@ -60,11 +66,11 @@ export class AuthController {
   async login(
     // CHAT-080: `{identifier, password}`, or the legacy `{email, password}`; normalised here.
     @Body(new ZodValidationPipe(loginRequestSchema)) body: z.infer<typeof loginRequestSchema>,
+    @Req() req: Request,
     @Res({ passthrough: true }) res: Response,
-  ): Promise<AuthSession> {
+  ): Promise<AuthSession | MobileAuthSession> {
     const { session, refreshToken } = await this.auth.login(body);
-    setRefreshCookie(res, refreshToken, this.env);
-    return session;
+    return deliverRefreshToken(req, res, session, refreshToken, this.env);
   }
 
   @Post('refresh')
@@ -72,23 +78,16 @@ export class AuthController {
   async refresh(
     @Req() req: Request,
     @Res({ passthrough: true }) res: Response,
-  ): Promise<AuthSession> {
-    const current = (req.cookies as Record<string, string | undefined> | undefined)?.[
-      REFRESH_COOKIE_NAME
-    ];
-    const { session, refreshToken } = await this.auth.refresh(current);
-    setRefreshCookie(res, refreshToken, this.env);
-    return session;
+  ): Promise<AuthSession | MobileAuthSession> {
+    const { session, refreshToken } = await this.auth.refresh(readRefreshToken(req));
+    return deliverRefreshToken(req, res, session, refreshToken, this.env);
   }
 
   @Post('logout')
   @HttpCode(200)
   async logout(@Req() req: Request, @Res({ passthrough: true }) res: Response) {
-    const current = (req.cookies as Record<string, string | undefined> | undefined)?.[
-      REFRESH_COOKIE_NAME
-    ];
-    await this.auth.logout(current);
-    clearRefreshCookie(res, this.env);
+    await this.auth.logout(readRefreshToken(req));
+    if (!wantsBodyToken(req)) clearRefreshCookie(res, this.env);
     return { message: 'Logged out.' };
   }
 
@@ -103,10 +102,7 @@ export class AuthController {
     @Body(new ZodValidationPipe(changePasswordSchema)) body: z.infer<typeof changePasswordSchema>,
     @Req() req: Request,
   ): Promise<void> {
-    const current = (req.cookies as Record<string, string | undefined> | undefined)?.[
-      REFRESH_COOKIE_NAME
-    ];
-    await this.auth.changePassword(userId, body, current);
+    await this.auth.changePassword(userId, body, readRefreshToken(req));
   }
 
   @Post('request-password-reset')

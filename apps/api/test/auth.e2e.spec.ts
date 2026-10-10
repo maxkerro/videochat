@@ -1,6 +1,6 @@
 import type { INestApplication } from '@nestjs/common';
 import { Test } from '@nestjs/testing';
-import { authSessionSchema, LIMITS } from '@videochat/shared';
+import { authSessionSchema, LIMITS, mobileAuthSessionSchema } from '@videochat/shared';
 import request from 'supertest';
 import { configureApp } from '../src/app.factory.js';
 import { AppModule } from '../src/app.module.js';
@@ -247,6 +247,74 @@ describe.skipIf(!hasInfra)('auth HTTP flow (CHAT-010)', () => {
 
     await request(server()).post('/auth/logout').set('Cookie', cookie).expect(200);
     await request(server()).post('/auth/refresh').set('Cookie', cookie).expect(401);
+  });
+
+  describe('CHAT-051: body-token mode (X-Refresh-Mode: body, for the mobile app)', () => {
+    async function bodyLogin() {
+      const user = await signUpAndVerify();
+      const res = await request(server())
+        .post('/auth/login')
+        .set('X-Refresh-Mode', 'body')
+        .send({ email: user.email, password: user.password })
+        .expect(200);
+      return { user, res, session: mobileAuthSessionSchema.parse(res.body) };
+    }
+
+    it('returns the refresh token in the body and sets no cookie', async () => {
+      const { res } = await bodyLogin();
+      expect(res.headers['set-cookie']).toBeUndefined();
+    });
+
+    it('keeps the cookie flow unchanged without the header (no token in the body)', async () => {
+      const user = await signUpAndVerify();
+      const res = await request(server())
+        .post('/auth/login')
+        .send({ email: user.email, password: user.password })
+        .expect(200);
+      expect(res.body).not.toHaveProperty('refreshToken');
+      expect(requireSetCookie(res).some((c) => c.startsWith('refresh_token='))).toBe(true);
+    });
+
+    it('rotates the token on refresh and rejects reuse of the old one', async () => {
+      const { session } = await bodyLogin();
+      const refreshed = await request(server())
+        .post('/auth/refresh')
+        .set('X-Refresh-Mode', 'body')
+        .send({ refreshToken: session.refreshToken })
+        .expect(200);
+      const next = mobileAuthSessionSchema.parse(refreshed.body);
+      expect(next.refreshToken).not.toBe(session.refreshToken);
+      expect(refreshed.headers['set-cookie']).toBeUndefined();
+
+      await request(server())
+        .post('/auth/refresh')
+        .set('X-Refresh-Mode', 'body')
+        .send({ refreshToken: session.refreshToken })
+        .expect(401);
+    });
+
+    it('rejects a refresh with no token and ignores a body token without the header', async () => {
+      const { session } = await bodyLogin();
+      await request(server()).post('/auth/refresh').set('X-Refresh-Mode', 'body').expect(401);
+      await request(server())
+        .post('/auth/refresh')
+        .send({ refreshToken: session.refreshToken })
+        .expect(401);
+    });
+
+    it('logs out by body token and invalidates it', async () => {
+      const { session } = await bodyLogin();
+      await request(server())
+        .post('/auth/logout')
+        .set('X-Refresh-Mode', 'body')
+        .send({ refreshToken: session.refreshToken })
+        .expect(200);
+      await request(server())
+        .post('/auth/refresh')
+        .set('X-Refresh-Mode', 'body')
+        .send({ refreshToken: session.refreshToken })
+        .expect(401);
+    });
   });
 
   it('resets a forgotten password and revokes existing sessions', async () => {

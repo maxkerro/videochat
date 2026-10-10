@@ -163,3 +163,14 @@ Stored in the repo at `SECURITY.md` (this file), satisfying the AC directly.
 
 _Last reviewed: CHAT-022, 2026-09-26. Re-review whenever a new conversation/message endpoint, a
 new cookie, or a new client origin is added -- none of the above is a one-time check._
+
+## Mobile sessions (CHAT-051)
+
+The mobile app has no cookie jar, so it opts into body-token mode per request with the header
+`X-Refresh-Mode: body`: `/auth/login` and `/auth/refresh` then return the rotating refresh token as
+a `refreshToken` field instead of setting the httpOnly cookie, and the app sends it back in the JSON
+body of `/auth/refresh`, `/auth/logout` and `/auth/change-password`. Rotation, reuse detection and
+revocation are the same code path as for cookies. The app stores that token only in the OS keystore
+(iOS Keychain / Android Keystore via `expo-secure-store`, `AFTER_FIRST_UNLOCK_THIS_DEVICE_ONLY`) and
+keeps the access token in memory. Web never sends the header, and a cross-origin page cannot add it
+(CORS only allows our own origins), so the cookie flow and its CSRF mitigations are unchanged.

@@ -191,6 +191,18 @@ export const authSessionSchema = z.object({
 export type AuthSession = z.infer<typeof authSessionSchema>;
 
 /**
+ * CHAT-051: clients without a cookie jar (the mobile app) send `X-Refresh-Mode: body` and get the
+ * rotating refresh token in the JSON body instead of an httpOnly cookie, and send it back in the
+ * body of /auth/refresh, /auth/logout and /auth/change-password. They keep it in the OS keystore.
+ */
+export const REFRESH_MODE_HEADER = 'x-refresh-mode';
+export const mobileAuthSessionSchema = authSessionSchema.extend({
+  refreshToken: z.string().min(1),
+});
+export type MobileAuthSession = z.infer<typeof mobileAuthSessionSchema>;
+export const refreshTokenBodySchema = z.object({ refreshToken: z.string().min(1) });
+
+/**
  * CHAT-030: what a message says about the file it carries. The bytes themselves are only ever
  * reachable through a short-lived signed URL from `GET /attachments/:id/url`, which re-checks
  * conversation membership on every call.

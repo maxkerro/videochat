@@ -53,7 +53,6 @@ export default ({ config }: ConfigContext): ExpoConfig => {
     ios: { bundleIdentifier: v.id, supportsTablet: false },
     android: { package: v.id },
     plugins: ['expo-router', 'expo-secure-store'],
-    experiments: { typedRoutes: true },
     extra: { variant, apiUrl: v.apiUrl, realtimeUrl: v.realtimeUrl },
   };
 };

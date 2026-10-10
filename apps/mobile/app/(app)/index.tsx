@@ -2,17 +2,20 @@ import { useCallback, useEffect, useState } from 'react';
 import { ActivityIndicator, Pressable, StyleSheet, Text, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { z } from 'zod';
-import { apiGet, config } from '../src/lib/api';
+import { useAuth } from '../../src/auth/AuthContext';
+import { apiGet, config } from '../../src/lib/api';
+import { Button } from '../../src/ui/Form';
 
 type Status = { kind: 'loading' } | { kind: 'ok' } | { kind: 'error'; message: string };
 
-/** Placeholder home screen: proves the app reaches the API through the shared client. Replaced
- *  by the login / inbox flow in CHAT-051 and CHAT-052. */
+/** Placeholder home screen: proves the signed-in app reaches the API with its bearer token. The
+ *  inbox replaces it in CHAT-052. */
 export default function Home() {
+  const { state, logout } = useAuth();
   const [status, setStatus] = useState<Status>({ kind: 'loading' });
 
   const probe = useCallback(() => {
-    apiGet('/ready', z.unknown())
+    apiGet('/me', z.unknown())
       .then(() => setStatus({ kind: 'ok' }))
       .catch((e: unknown) =>
         setStatus({ kind: 'error', message: e instanceof Error ? e.message : String(e) }),
@@ -31,6 +34,9 @@ export default function Home() {
     <SafeAreaView style={styles.screen}>
       <View style={styles.body}>
         <Text style={styles.title}>Chat</Text>
+        {state.status === 'signedIn' && (
+          <Text accessibilityRole="text">Signed in as {state.user.displayName}</Text>
+        )}
         <Text style={styles.muted}>
           {config.variant} · {config.apiUrl}
         </Text>
@@ -44,6 +50,7 @@ export default function Home() {
             </Pressable>
           </>
         )}
+        <Button title="Log out" kind="link" onPress={() => void logout()} />
       </View>
     </SafeAreaView>
   );
