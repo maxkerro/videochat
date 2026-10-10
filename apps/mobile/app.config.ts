@@ -53,6 +53,12 @@ export default ({ config }: ConfigContext): ExpoConfig => {
     ios: { bundleIdentifier: v.id, supportsTablet: false },
     android: { package: v.id },
     plugins: ['expo-router', 'expo-secure-store'],
-    extra: { variant, apiUrl: v.apiUrl, realtimeUrl: v.realtimeUrl },
+    extra: {
+      variant,
+      apiUrl: v.apiUrl,
+      realtimeUrl: v.realtimeUrl,
+      // Links this app to its EAS project (`eas init`, owner maxkerro). Not a secret.
+      eas: { projectId: 'd9871d7c-558e-48d9-a6d7-33c9643a1881' },
+    },
   };
 };
