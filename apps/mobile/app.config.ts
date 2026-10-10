@@ -53,6 +53,10 @@ export default ({ config }: ConfigContext): ExpoConfig => {
     ios: { bundleIdentifier: v.id, supportsTablet: false },
     android: { package: v.id },
     plugins: ['expo-router', 'expo-secure-store'],
+    // EAS Update (the staging/production build channels need expo-updates). A new native build is
+    // only required when the app version changes; JS-only fixes can ship over the air.
+    updates: { url: 'https://u.expo.dev/d9871d7c-558e-48d9-a6d7-33c9643a1881' },
+    runtimeVersion: { policy: 'appVersion' },
     extra: {
       variant,
       apiUrl: v.apiUrl,
