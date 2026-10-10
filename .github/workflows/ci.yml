@@ -69,6 +69,12 @@ jobs:
       # a separate flag, keeps CI and every local run (including the pre-push hook) on one fix.
       - run: pnpm test
       - run: pnpm build
+      # CHAT-050: the mobile app can't be built natively in CI (that's EAS's job), but bundling
+      # it with Metro catches broken imports, a shared package that Metro can't resolve, and
+      # config errors for both platforms. --no-bytecode skips the Hermes step, which isn't
+      # needed to prove the JavaScript compiles.
+      - name: Mobile app bundles (Android and iOS)
+        run: pnpm --filter @videochat/mobile exec expo export --platform android --platform ios --no-bytecode --output-dir /tmp/mobile-export
       - name: Migrations apply cleanly from an empty database
         run: pnpm db:reset -- --empty && pnpm db:migrate
       - name: Dependency audit (fail on critical)

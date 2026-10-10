@@ -7,7 +7,13 @@ import tseslint from 'typescript-eslint';
 
 export default tseslint.config(
   {
-    ignores: ['**/dist/**', '**/coverage/**', '**/node_modules/**', 'apps/api/drizzle/**'],
+    ignores: [
+      '**/dist/**',
+      '**/coverage/**',
+      '**/node_modules/**',
+      'apps/api/drizzle/**',
+      'apps/mobile/.expo/**',
+    ],
   },
   js.configs.recommended,
   ...tseslint.configs.recommended,
@@ -36,6 +42,12 @@ export default tseslint.config(
   {
     files: ['apps/web/**/*.{ts,tsx}'],
     languageOptions: { globals: globals.browser },
+    plugins: { 'react-hooks': reactHooks },
+    rules: reactHooks.configs.recommended.rules,
+  },
+  {
+    files: ['apps/mobile/**/*.{ts,tsx}'],
+    languageOptions: { globals: { ...globals.es2023, __DEV__: 'readonly' } },
     plugins: { 'react-hooks': reactHooks },
     rules: reactHooks.configs.recommended.rules,
   },
