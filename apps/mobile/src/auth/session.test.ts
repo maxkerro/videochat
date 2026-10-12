@@ -181,7 +181,7 @@ describe('session manager', () => {
     expect(stale.mem.peek()).toBe('refresh-0');
   });
 
-  it('logout while a refresh is in flight waits for it, revokes the rotated token and stays logged out', async () => {
+  it('logout during an in-flight refresh signs out at once, never flashes signed-in, and revokes both tokens', async () => {
     let releaseRefresh: (r: ApiResponseLike) => void = () => undefined;
     const { session, mem, calls } = setup('refresh-0', (url) => {
       if (url.endsWith('/auth/refresh')) {
@@ -193,27 +193,36 @@ describe('session manager', () => {
     });
     const hook = vi.fn();
     session.onSignedOut(hook);
+    const signedInSeen = vi.fn();
+    session.subscribe(() => {
+      if (session.isSignedIn()) signedInSeen();
+    });
 
     const restoring = session.restore();
     await vi.waitFor(() => expect(calls.some((c) => c.url.endsWith('/auth/refresh'))).toBe(true));
-    const loggingOut = session.logout(); // user taps "Log out" mid-refresh
-    releaseRefresh(res(200, sessionBody(1)));
-    await restoring;
-    await loggingOut;
+    await session.logout(); // user taps "Log out" while the refresh is still pending
+    expect(session.isSignedIn()).toBe(false);
+    expect(mem.peek()).toBeNull();
+
+    releaseRefresh(res(200, sessionBody(1))); // the refresh finally lands, too late
+    await expect(restoring).resolves.toEqual({ status: 'signedOut' });
 
     expect(session.isSignedIn()).toBe(false);
     expect(mem.peek()).toBeNull();
+    expect(signedInSeen).not.toHaveBeenCalled();
     expect(hook).toHaveBeenCalledTimes(1);
-    // It revoked the token the refresh rotated to, not the one that was already dead.
-    expect(calls.at(-1)).toMatchObject({
-      url: 'https://api.test/auth/logout',
-      body: { refreshToken: 'refresh-1' },
+    await vi.waitFor(() => {
+      const revoked = calls
+        .filter((c) => c.url.endsWith('/auth/logout'))
+        .map((c) => (c.body as { refreshToken: string }).refreshToken);
+      // the token that was stored when the user tapped, and the one the late refresh rotated to
+      expect(revoked.sort()).toEqual(['refresh-0', 'refresh-1']);
     });
   });
 
-  it('a refresh that finishes after a newer login does not overwrite it', async () => {
+  it('a refresh that finishes after a newer login does not overwrite it, and ends its own session', async () => {
     let releaseRefresh: (r: ApiResponseLike) => void = () => undefined;
-    const { session, mem } = setup('refresh-old', (url) => {
+    const { session, mem, calls } = setup('refresh-old', (url) => {
       if (url.endsWith('/auth/refresh')) {
         return new Promise<ApiResponseLike>((resolve) => {
           releaseRefresh = resolve;
@@ -222,8 +231,7 @@ describe('session manager', () => {
       return res(200, sessionBody(9));
     });
     const restoring = session.restore();
-    await vi.waitFor(() => expect(releaseRefresh).not.toBe(undefined));
-    await new Promise((r) => setTimeout(r, 0));
+    await vi.waitFor(() => expect(calls.some((c) => c.url.endsWith('/auth/refresh'))).toBe(true));
     await session.login({ identifier: 'max', password: 'pw' });
     releaseRefresh(res(200, sessionBody(1)));
     await restoring;
@@ -231,5 +239,88 @@ describe('session manager', () => {
     expect(mem.peek()).toBe('refresh-9');
     expect(session.isSignedIn()).toBe(true);
     await expect(session.getAccessToken()).resolves.toBe('access-9');
+    // The session the stale refresh rotated into is revoked on the server, not left dangling.
+    await vi.waitFor(() =>
+      expect(
+        calls.some(
+          (c) =>
+            c.url.endsWith('/auth/logout') &&
+            (c.body as { refreshToken: string }).refreshToken === 'refresh-1',
+        ),
+      ).toBe(true),
+    );
+  });
+
+  it('a request that never answers times out as offline instead of hanging restore()', async () => {
+    const mem = memoryStorage('refresh-0');
+    const hang: ApiFetch = (_url, init) =>
+      new Promise((_resolve, reject) => {
+        (init.signal as AbortSignal).addEventListener('abort', () => {
+          reject(Object.assign(new Error('Aborted'), { name: 'AbortError' }));
+        });
+      });
+    const session = createSessionManager({
+      baseUrl: 'https://api.test',
+      storage: mem.storage,
+      fetch: hang,
+      authTimeoutMs: 20,
+    });
+    await expect(session.restore()).resolves.toEqual({ status: 'offline' });
+    expect(mem.peek()).toBe('refresh-0');
+  });
+
+  it('logout completes locally and returns quickly even if the server never answers', async () => {
+    const mem = memoryStorage('refresh-0');
+    const hang: ApiFetch = () => new Promise(() => undefined);
+    const session = createSessionManager({
+      baseUrl: 'https://api.test',
+      storage: mem.storage,
+      fetch: hang,
+      authTimeoutMs: 60_000,
+      logoutWaitMs: 20,
+    });
+    const hook = vi.fn();
+    session.onSignedOut(hook);
+    await session.logout();
+    expect(mem.peek()).toBeNull();
+    expect(hook).toHaveBeenCalledTimes(1);
+    expect(session.isSignedIn()).toBe(false);
+  });
+
+  it('measures token lifetime from the token itself, so a fast device clock does not cause a refresh per call', async () => {
+    // btoa is global in Node 22 and in React Native; build base64url from it.
+    const b64 = (o: object) =>
+      btoa(JSON.stringify(o)).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+    const jwt = `${b64({ alg: 'HS256' })}.${b64({ iat: 5_000_000, exp: 5_000_900 })}.sig`;
+    let refreshCalls = 0;
+    // The server says the token expires at 5_000_900 s; this device's clock claims it is
+    // already an hour later.
+    const clock = 5_000_000_000 + 3_600_000;
+    const { session } = setup(
+      null,
+      (url) => {
+        if (url.endsWith('/auth/refresh')) refreshCalls += 1;
+        return res(200, {
+          ...sessionBody(1),
+          accessToken: jwt,
+          accessTokenExpiresAt: new Date(5_000_900_000).toISOString(),
+        });
+      },
+      () => clock,
+    );
+    await session.login({ identifier: 'max', password: 'pw' });
+    await session.getAccessToken();
+    await session.getAccessToken();
+    expect(refreshCalls).toBe(0);
+  });
+
+  it('exposes a generation that changes when the session is replaced or ended', async () => {
+    const { session } = setup(null, () => res(200, sessionBody(1)));
+    const g0 = session.generation();
+    await session.login({ identifier: 'max', password: 'pw' });
+    const g1 = session.generation();
+    await session.logout();
+    expect(g1).toBeGreaterThan(g0);
+    expect(session.generation()).toBeGreaterThan(g1);
   });
 });

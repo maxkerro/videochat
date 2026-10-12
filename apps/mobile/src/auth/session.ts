@@ -31,12 +31,64 @@ export type RestoreResult =
 
 /** Refresh a little before the access token actually expires. */
 const REFRESH_MARGIN_MS = 30_000;
+/** React Native's fetch has no timeout of its own and can hang for minutes on a bad network or a
+ *  cell hand-off; the auth calls (login, refresh, logout) are bounded so the UI can never sit on
+ *  a spinner forever. */
+const AUTH_TIMEOUT_MS = 15_000;
+/** How long `logout()` waits for the server to confirm the revoke. The local session is already
+ *  gone by then; this only bounds how long the returned promise can take. */
+const LOGOUT_WAIT_MS = 3_000;
 
 export interface SessionManagerOptions {
   baseUrl: string;
   storage: TokenStorage;
   fetch?: ApiFetch;
   now?: () => number;
+  authTimeoutMs?: number;
+  logoutWaitMs?: number;
+}
+
+/** Decode the payload of a JWT without verifying it (the server did; we only want its timing). */
+function jwtPayload(token: string): { iat?: unknown; exp?: unknown } | null {
+  const part = token.split('.')[1];
+  if (!part) return null;
+  try {
+    const b64 = part.replace(/-/g, '+').replace(/_/g, '/');
+    const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/';
+    let bits = 0;
+    let acc = 0;
+    let out = '';
+    for (const c of b64) {
+      const v = chars.indexOf(c);
+      if (v < 0) continue; // padding
+      acc = (acc << 6) | v;
+      bits += 6;
+      if (bits >= 8) {
+        bits -= 8;
+        out += String.fromCharCode((acc >> bits) & 0xff);
+      }
+    }
+    return JSON.parse(decodeURIComponent(escape(out))) as { iat?: unknown; exp?: unknown };
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * How long the access token lives, measured so it doesn't depend on the device clock being right:
+ * the token's own `exp - iat` (both server-side) when readable, else the server's expiry minus our
+ * clock, clamped to something sane.
+ */
+export function accessTokenTtlMs(session: MobileAuthSession, nowMs: number): number {
+  const payload = jwtPayload(session.accessToken);
+  if (
+    typeof payload?.iat === 'number' &&
+    typeof payload.exp === 'number' &&
+    payload.exp > payload.iat
+  ) {
+    return (payload.exp - payload.iat) * 1000;
+  }
+  return Math.min(Math.max(Date.parse(session.accessTokenExpiresAt) - nowMs, 0), 24 * 60 * 60_000);
 }
 
 /**
@@ -51,12 +103,28 @@ export function createSessionManager(options: SessionManagerOptions) {
   const rawFetch: ApiFetch =
     options.fetch ??
     ((url, init) => (globalThis as unknown as { fetch: ApiFetch }).fetch(url, init));
+  const authTimeoutMs = options.authTimeoutMs ?? AUTH_TIMEOUT_MS;
+  const logoutWaitMs = options.logoutWaitMs ?? LOGOUT_WAIT_MS;
+
+  /** `rawFetch` that gives up after `authTimeoutMs` (an AbortError, which counts as "offline"). */
+  const timedFetch: ApiFetch = (url, init) => {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), authTimeoutMs);
+    return rawFetch(url, { ...init, signal: controller.signal }).finally(() => clearTimeout(timer));
+  };
 
   const authApi = createApiClient({
     baseUrl: options.baseUrl,
-    fetch: rawFetch,
+    fetch: timedFetch,
     getHeaders: () => ({ [REFRESH_MODE_HEADER]: 'body' }),
   });
+
+  /** Ask the server to end the session behind a refresh token. Never throws. */
+  const revoke = (token: string): Promise<void> =>
+    authApi
+      .apiPost('/auth/logout', z.unknown(), { refreshToken: token })
+      .then(() => undefined)
+      .catch(() => undefined);
 
   let accessToken: string | null = null;
   let expiresAt = 0;
@@ -73,7 +141,7 @@ export function createSessionManager(options: SessionManagerOptions) {
 
   function apply(session: MobileAuthSession) {
     accessToken = session.accessToken;
-    expiresAt = Date.parse(session.accessTokenExpiresAt);
+    expiresAt = now() + accessTokenTtlMs(session, now());
     user = session.user;
     notify();
   }
@@ -100,8 +168,12 @@ export function createSessionManager(options: SessionManagerOptions) {
         const session = await authApi.apiPost('/auth/refresh', mobileAuthSessionSchema, {
           refreshToken: stored,
         });
-        // The session ended or was replaced while this was in flight: drop the result.
-        if (generation !== startedAt) throw new NotSignedInError();
+        // The session ended or was replaced while this was in flight: drop the result -- and end
+        // the session the server just rotated into, which nobody holds any more.
+        if (generation !== startedAt) {
+          void revoke(session.refreshToken);
+          throw new NotSignedInError();
+        }
         // Persist the rotated token before anything else: the old one is already dead.
         await storage.setRefreshToken(session.refreshToken);
         apply(session);
@@ -174,18 +246,21 @@ export function createSessionManager(options: SessionManagerOptions) {
       }
     },
 
+    /** Bumped whenever the session is replaced or ended. Anything that writes per-user state after
+     *  an `await` (the message cache, CHAT-053) should capture this first and drop its write if it
+     *  changed, so user A's late response can't land in user B's cache. */
+    generation: () => generation,
+
     async logout(): Promise<void> {
-      // Let a refresh that is already in flight finish first, so we revoke the token it rotated
-      // to (not the dead one) and it can't write a session back after we've cleared it.
-      await inFlight?.catch(() => undefined);
       const stored = await storage.getRefreshToken();
-      if (stored) {
-        // Best effort: even if the server can't be reached, the local session still ends.
-        await authApi
-          .apiPost('/auth/logout', z.unknown(), { refreshToken: stored })
-          .catch(() => undefined);
-      }
+      // End the local session first and unconditionally: the UI is signed out at once, a refresh
+      // still in flight is now stale (it revokes whatever it rotated to), and nothing below can
+      // keep the user signed in -- however badly the network is behaving.
       await clearLocal();
+      if (stored) {
+        // Best effort, and bounded: the revoke can finish after we return.
+        await Promise.race([revoke(stored), new Promise((r) => setTimeout(r, logoutWaitMs))]);
+      }
     },
   };
 }

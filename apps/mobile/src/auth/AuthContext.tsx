@@ -3,6 +3,7 @@ import {
   useCallback,
   useContext,
   useEffect,
+  useRef,
   useMemo,
   useState,
   useSyncExternalStore,
@@ -36,8 +37,14 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   // The session manager owns the truth (login, refresh failures and logout all change it).
   const user = useSyncExternalStore(session.subscribe, session.getUser);
 
+  // Only the latest restore may set the state: a Retry that overlaps an earlier, slower restore
+  // must not be overwritten by it.
+  const restoreSeq = useRef(0);
+
   const restore = useCallback(() => {
+    const seq = ++restoreSeq.current;
     void session.restore().then((result) => {
+      if (seq !== restoreSeq.current) return;
       if (result.status === 'offline') setRestored({ status: 'offline' });
       else if (result.status === 'error')
         setRestored({ status: 'error', message: describeError(result.error) });

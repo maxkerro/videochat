@@ -319,7 +319,19 @@ describe.skipIf(!hasInfra)('auth HTTP flow (CHAT-010)', () => {
       await request(server()).post('/auth/refresh').set('Cookie', cookie).expect(200);
     });
 
-    it('marks responses that carry a refresh token as uncacheable', async () => {
+    it('marks every login/refresh response as uncacheable, cookie mode included', async () => {
+      const user = await signUpAndVerify();
+      const cookieLogin = await request(server())
+        .post('/auth/login')
+        .send({ email: user.email, password: user.password })
+        .expect(200);
+      expect(cookieLogin.headers['cache-control']).toBe('no-store');
+      const cookieRefresh = await request(server())
+        .post('/auth/refresh')
+        .set('Cookie', requireSetCookie(cookieLogin))
+        .expect(200);
+      expect(cookieRefresh.headers['cache-control']).toBe('no-store');
+
       const { res, session } = await bodyLogin();
       expect(res.headers['cache-control']).toBe('no-store');
       const refreshed = await request(server())
@@ -354,6 +366,26 @@ describe.skipIf(!hasInfra)('auth HTTP flow (CHAT-010)', () => {
         .set('X-Refresh-Mode', 'body')
         .send({ refreshToken: second.session.refreshToken })
         .expect(401);
+    });
+
+    it('change-password in body mode without a refreshToken is rejected and changes nothing', async () => {
+      const { user, session } = await bodyLogin();
+      await request(server())
+        .post('/auth/change-password')
+        .set('Authorization', `Bearer ${session.accessToken}`)
+        .set('X-Refresh-Mode', 'body')
+        .send({ currentPassword: user.password, newPassword: 'a-brand-new-password-1' })
+        .expect(400);
+      // Nothing happened: the old password still works and the session is intact.
+      await request(server())
+        .post('/auth/refresh')
+        .set('X-Refresh-Mode', 'body')
+        .send({ refreshToken: session.refreshToken })
+        .expect(200);
+      await request(server())
+        .post('/auth/login')
+        .send({ email: user.email, password: user.password })
+        .expect(200);
     });
 
     it('logs out by body token and invalidates it', async () => {

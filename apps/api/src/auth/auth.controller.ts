@@ -1,4 +1,14 @@
-import { Body, Controller, HttpCode, Inject, Post, Req, Res, UseGuards } from '@nestjs/common';
+import {
+  BadRequestException,
+  Body,
+  Controller,
+  HttpCode,
+  Inject,
+  Post,
+  Req,
+  Res,
+  UseGuards,
+} from '@nestjs/common';
 import {
   changePasswordSchema,
   loginRequestSchema,
@@ -102,7 +112,13 @@ export class AuthController {
     @Body(new ZodValidationPipe(changePasswordSchema)) body: z.infer<typeof changePasswordSchema>,
     @Req() req: Request,
   ): Promise<void> {
-    await this.auth.changePassword(userId, body, readRefreshToken(req));
+    const current = readRefreshToken(req);
+    // Body mode names the calling session by its refresh token. Without it we'd end every session,
+    // including this one, which the client would only discover on its next refresh -- so ask for it.
+    if (wantsBodyToken(req) && !current) {
+      throw new BadRequestException('refreshToken is required with X-Refresh-Mode: body');
+    }
+    await this.auth.changePassword(userId, body, current);
   }
 
   @Post('request-password-reset')

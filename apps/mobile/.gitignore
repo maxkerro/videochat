@@ -8,3 +8,5 @@ expo-env.d.ts
 *.apk
 *.aab
 *.ipa
+# EAS Update code-signing private keys: never commit.
+/keys/

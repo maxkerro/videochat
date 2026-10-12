@@ -75,11 +75,10 @@ export function deliverRefreshToken<T extends object>(
   token: string,
   env: Env,
 ): T | (T & { refreshToken: string }) {
-  if (wantsBodyToken(req)) {
-    // The response now carries a long-lived credential: keep it out of every cache.
-    res.setHeader('Cache-Control', 'no-store');
-    return { ...session, refreshToken: token };
-  }
+  // These responses carry credentials (the access token, and in body mode the refresh token too):
+  // keep them out of every cache.
+  res.setHeader('Cache-Control', 'no-store');
+  if (wantsBodyToken(req)) return { ...session, refreshToken: token };
   setRefreshCookie(res, token, env);
   return session;
 }

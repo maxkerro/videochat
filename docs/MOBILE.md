@@ -26,8 +26,15 @@ JavaScript-only fixes can ship without a new APK: `APP_VARIANT=staging npx eas-c
 staging --message "..."`. The app downloads the update on launch and applies it on the next
 launch. Because `runtimeVersion` uses the `appVersion` policy, an update only reaches binaries with
 the same `version` in `app.config.ts`: **bump `version` and make a new build whenever a native
-dependency or native config changes.** Enabling EAS Update code signing is a sensible hardening
-step before there are real users.
+dependency or native config changes.**
+
+**Before the production channel has real users, turn on EAS Update code signing.** Without it,
+anyone who controls the Expo account can push JavaScript that reads the refresh token from the
+keystore. With it, the app only runs updates signed by a private key you keep off Expo (never
+commit it; `apps/mobile/keys/` is git-ignored). Steps (check the current Expo docs for exact flags):
+generate a key and certificate (`npx expo-updates codesigning:generate ...`), add
+`codeSigningCertificate` and `codeSigningMetadata` to `updates` in `app.config.ts`, make a new
+native build, and publish with `eas update --private-key-path <key>`.
 
 ## Running it
 

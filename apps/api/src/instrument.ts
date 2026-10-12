@@ -37,6 +37,9 @@ if (!globalState[FLAG]) {
         if (event.request) {
           delete event.request.data;
           delete event.request.cookies;
+          delete event.request.query_string; // e.g. the realtime socket's `?token=`
+          if (event.request.url) event.request.url = event.request.url.split('?')[0]!;
+          // Node lowercases incoming header names, so these keys match.
           if (event.request.headers) {
             delete event.request.headers['authorization'];
             delete event.request.headers['cookie'];
