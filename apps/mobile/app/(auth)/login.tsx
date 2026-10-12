@@ -1,11 +1,14 @@
 import { useState } from 'react';
 import { useRouter } from 'expo-router';
 import { ApiError, loginSchema } from '@videochat/shared';
-import { session } from '../../src/lib/api';
+import { config, session } from '../../src/lib/api';
 import { Button, Field, FormScreen, Notice } from '../../src/ui/Form';
+import { Text } from 'react-native';
+import { useTheme } from '../../src/ui/theme';
 import { fieldErrors } from '../../src/ui/useFormErrors';
 
 export default function Login() {
+  const theme = useTheme();
   const router = useRouter();
   const [identifier, setIdentifier] = useState('');
   const [password, setPassword] = useState('');
@@ -63,6 +66,10 @@ export default function Login() {
         onPress={() => router.push('/forgot-password')}
       />
       <Button title="Create an account" kind="link" onPress={() => router.push('/signup')} />
+      {/* Which server this build talks to: the first thing to check when sign-in fails. */}
+      <Text selectable style={{ color: theme.muted, fontSize: 12, textAlign: 'center' }}>
+        {config.variant} · {config.apiUrl}
+      </Text>
     </FormScreen>
   );
 }
