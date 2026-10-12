@@ -37,6 +37,27 @@ generate a key and certificate (`npx expo-updates codesigning:generate ...`), ad
 `codeSigningCertificate` and `codeSigningMetadata` to `updates` in `app.config.ts`, make a new
 native build, and publish with `eas update --private-key-path <key>`.
 
+## Screens, local database and outbox (CHAT-052/053)
+
+Routes (expo-router): `(app)/index` inbox, `c/[id]` conversation, `c/[id]/info` chat info and group
+management, `new` new chat or group, `profile`, `settings`.
+
+- **Data:** TanStack Query over the authenticated API client (`src/data`). Until CHAT-054 lands the
+  realtime socket, the open screens poll: the inbox every 15 s, an open conversation every 6 s, and
+  only while the screen is showing and the app is in the foreground.
+- **Local database** (`expo-sqlite`, `src/db`): conversations, the newest 500 messages per
+  conversation, and the outbox. It is a cache: the server stays the source of truth. The inbox and
+  a conversation render from it first, so chats open instantly and offline. It belongs to one
+  account (`meta.owner`) and is wiped on sign-out and when a different account signs in.
+- **Outbox** (`src/outbox`, `src/data/outboxRunner.ts`): every text message is written to the
+  outbox _before_ the first send attempt and sent in typing order with its `clientMsgId`, so retries
+  are idempotent. It flushes on start, on foreground, when the connection returns, and every 20 s
+  while anything is waiting. A network problem stops the run (nothing overtakes); a 4xx answer marks
+  that message failed ("Not sent", Retry or Delete) and the rest continue. Attachments need the
+  network end to end (presigned upload), so they are not queued.
+- **Native modules:** `expo-sqlite`, `expo-image-picker`, `expo-document-picker` and NetInfo are
+  native, so this version (`0.2.0`) needs a new APK; an OTA update cannot reach the old binary.
+
 ## Running it
 
 It uses a **development build**, not Expo Go: WebRTC and CallKit (M5) need native modules.

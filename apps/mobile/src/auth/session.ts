@@ -252,6 +252,16 @@ export function createSessionManager(options: SessionManagerOptions) {
     authedFetch,
     getAccessToken,
     getUser: () => user,
+
+    /** The profile changed (display name, avatar, settings): keep the signed-in user in step. */
+    setUser(next: User) {
+      if (user === null) return; // signed out meanwhile
+      user = next;
+      notify();
+    },
+
+    /** For the one call that has to name its own session (change-password); never shown or logged. */
+    currentRefreshToken: () => storage.getRefreshToken(),
     isSignedIn: () => user !== null,
 
     subscribe(listener: () => void) {

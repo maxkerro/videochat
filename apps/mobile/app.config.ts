@@ -46,13 +46,22 @@ export default ({ config }: ConfigContext): ExpoConfig => {
     ...config,
     name: v.name,
     slug: 'videochat',
-    version: '0.1.0',
+    version: '0.2.0',
     orientation: 'portrait',
     scheme: v.scheme,
     userInterfaceStyle: 'automatic',
     ios: { bundleIdentifier: v.id, supportsTablet: false },
     android: { package: v.id },
-    plugins: ['expo-router', 'expo-secure-store'],
+    plugins: [
+      'expo-router',
+      'expo-secure-store',
+      'expo-sqlite',
+      [
+        'expo-image-picker',
+        { photosPermission: 'Chat needs access to your photos so you can send them.' },
+      ],
+      'expo-document-picker',
+    ],
     // EAS Update (the staging/production build channels need expo-updates). With the
     // `appVersion` runtime policy an over-the-air update only reaches binaries with the same
     // `version`, so bump `version` (and ship a new native build) whenever a native dependency or

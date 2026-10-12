@@ -1,70 +1,162 @@
-import { useCallback, useEffect, useState } from 'react';
-import { ActivityIndicator, Pressable, StyleSheet, Text, View } from 'react-native';
-import { SafeAreaView } from 'react-native-safe-area-context';
-import { z } from 'zod';
+import { Stack, useRouter } from 'expo-router';
+import type { ConversationSummary } from '@videochat/shared';
+import { useCallback } from 'react';
+import {
+  ActivityIndicator,
+  FlatList,
+  Pressable,
+  RefreshControl,
+  StyleSheet,
+  Text,
+  View,
+} from 'react-native';
 import { useAuth } from '../../src/auth/AuthContext';
-import { apiGet, config } from '../../src/lib/api';
-import { Button } from '../../src/ui/Form';
+import { useConversations } from '../../src/data/hooks';
+import { useIsOnline } from '../../src/data/useLive';
+import { Avatar } from '../../src/ui/Avatar';
+import { Banner } from '../../src/ui/Banner';
+import { describeError } from '../../src/ui/describeError';
+import {
+  conversationTitle,
+  formatListTime,
+  lastMessagePreview,
+  unreadCount,
+} from '../../src/ui/format';
+import { useTheme } from '../../src/ui/theme';
 
-type Status = { kind: 'loading' } | { kind: 'ok' } | { kind: 'error'; message: string };
+function Row({
+  c,
+  myId,
+  onOpen,
+}: {
+  c: ConversationSummary;
+  myId: string;
+  onOpen: (id: string) => void;
+}) {
+  const t = useTheme();
+  const unread = unreadCount(c);
+  const title = conversationTitle(c);
+  return (
+    <Pressable
+      accessibilityRole="button"
+      accessibilityLabel={`${title}${unread ? `, ${unread} unread` : ''}`}
+      onPress={() => onOpen(c.id)}
+      style={[styles.row, { borderBottomColor: t.border }]}
+    >
+      <Avatar name={title} uri={c.type === 'direct' ? c.peer?.avatarUrl : null} />
+      <View style={styles.body}>
+        <View style={styles.line}>
+          <Text numberOfLines={1} style={[styles.title, { color: t.text }]}>
+            {title}
+          </Text>
+          <Text style={{ color: unread ? t.accent : t.muted, fontSize: 12 }}>
+            {formatListTime(c.lastMessageAt)}
+          </Text>
+        </View>
+        <View style={styles.line}>
+          <Text numberOfLines={1} style={[styles.preview, { color: t.muted }]}>
+            {c.muted ? '🔕 ' : ''}
+            {lastMessagePreview(c, myId)}
+          </Text>
+          {unread ? (
+            <View style={[styles.badge, { backgroundColor: c.muted ? t.muted : t.accent }]}>
+              <Text style={{ color: t.accentText, fontSize: 12, fontWeight: '700' }}>
+                {unread > 99 ? '99+' : unread}
+              </Text>
+            </View>
+          ) : null}
+        </View>
+      </View>
+    </Pressable>
+  );
+}
 
-/** Placeholder home screen: proves the signed-in app reaches the API with its bearer token. The
- *  inbox replaces it in CHAT-052. */
-export default function Home() {
-  const { state, logout } = useAuth();
-  const [status, setStatus] = useState<Status>({ kind: 'loading' });
-
-  const probe = useCallback(() => {
-    apiGet('/me', z.unknown())
-      .then(() => setStatus({ kind: 'ok' }))
-      .catch((e: unknown) =>
-        setStatus({ kind: 'error', message: e instanceof Error ? e.message : String(e) }),
-      );
-  }, []);
-
-  const retry = useCallback(() => {
-    setStatus({ kind: 'loading' });
-    probe();
-  }, [probe]);
-
-  // The initial state is already "loading", so the first probe only sets state when it resolves.
-  useEffect(probe, [probe]);
+export default function Inbox() {
+  const t = useTheme();
+  const router = useRouter();
+  const { state } = useAuth();
+  const myId = state.status === 'signedIn' ? state.user.id : '';
+  const online = useIsOnline();
+  const query = useConversations();
+  const open = useCallback((id: string) => router.push(`/c/${id}`), [router]);
 
   return (
-    <SafeAreaView style={styles.screen}>
-      <View style={styles.body}>
-        <Text style={styles.title}>Chat</Text>
-        {state.status === 'signedIn' && (
-          <Text accessibilityRole="text">Signed in as {state.user.displayName}</Text>
-        )}
-        {config.variant !== 'production' && (
-          <Text style={styles.muted}>
-            {config.variant} · {config.apiUrl}
+    <View style={[styles.flex, { backgroundColor: t.bg }]}>
+      <Stack.Screen
+        options={{
+          headerRight: () => (
+            <View style={styles.headerButtons}>
+              <Pressable accessibilityRole="button" onPress={() => router.push('/new')}>
+                <Text style={{ color: t.accent, fontSize: 16, fontWeight: '600' }}>New</Text>
+              </Pressable>
+              <Pressable accessibilityRole="button" onPress={() => router.push('/profile')}>
+                <Text style={{ color: t.accent, fontSize: 16, fontWeight: '600' }}>Me</Text>
+              </Pressable>
+            </View>
+          ),
+        }}
+      />
+      {!online ? <Banner>You’re offline. Showing saved chats.</Banner> : null}
+      {query.data === undefined && query.isPending ? (
+        <View style={styles.center}>
+          <ActivityIndicator accessibilityLabel="Loading chats" />
+        </View>
+      ) : query.data === undefined ? (
+        <View style={styles.center}>
+          <Text style={{ color: t.error, textAlign: 'center', padding: 24 }}>
+            {describeError(query.error)}
           </Text>
-        )}
-        {status.kind === 'loading' && <ActivityIndicator accessibilityLabel="Checking server" />}
-        {status.kind === 'ok' && <Text style={styles.ok}>Server reachable</Text>}
-        {status.kind === 'error' && (
-          <>
-            <Text style={styles.error}>Can't reach the server: {status.message}</Text>
-            <Pressable accessibilityRole="button" onPress={retry} style={styles.button}>
-              <Text style={styles.buttonText}>Try again</Text>
-            </Pressable>
-          </>
-        )}
-        <Button title="Log out" kind="link" onPress={() => void logout()} />
-      </View>
-    </SafeAreaView>
+          <Pressable accessibilityRole="button" onPress={() => void query.refetch()}>
+            <Text style={{ color: t.accent, fontWeight: '600' }}>Try again</Text>
+          </Pressable>
+        </View>
+      ) : (
+        <FlatList
+          data={query.data}
+          keyExtractor={(c) => c.id}
+          renderItem={({ item }) => <Row c={item} myId={myId} onOpen={open} />}
+          refreshControl={
+            <RefreshControl
+              refreshing={query.isRefetching}
+              onRefresh={() => void query.refetch()}
+              tintColor={t.accent}
+            />
+          }
+          ListEmptyComponent={
+            <View style={styles.center}>
+              <Text style={{ color: t.muted, textAlign: 'center', padding: 24 }}>
+                No chats yet. Tap New to start one.
+              </Text>
+            </View>
+          }
+          contentContainerStyle={query.data.length === 0 ? styles.flex : undefined}
+        />
+      )}
+    </View>
   );
 }
 
 const styles = StyleSheet.create({
-  screen: { flex: 1 },
-  body: { flex: 1, alignItems: 'center', justifyContent: 'center', gap: 12, padding: 24 },
-  title: { fontSize: 28, fontWeight: '700' },
-  muted: { color: '#6b6b6b' },
-  ok: { color: '#1a7f37', fontWeight: '600' },
-  error: { color: '#b3261e', textAlign: 'center' },
-  button: { paddingHorizontal: 20, paddingVertical: 10, borderRadius: 8, backgroundColor: '#333' },
-  buttonText: { color: '#fff', fontWeight: '600' },
+  flex: { flex: 1 },
+  center: { flex: 1, alignItems: 'center', justifyContent: 'center' },
+  headerButtons: { flexDirection: 'row', gap: 20, paddingRight: 4 },
+  row: {
+    flexDirection: 'row',
+    gap: 12,
+    padding: 12,
+    alignItems: 'center',
+    borderBottomWidth: StyleSheet.hairlineWidth,
+  },
+  body: { flex: 1, gap: 2 },
+  line: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 8 },
+  title: { flex: 1, fontSize: 16, fontWeight: '600' },
+  preview: { flex: 1, fontSize: 14 },
+  badge: {
+    minWidth: 22,
+    height: 22,
+    borderRadius: 11,
+    paddingHorizontal: 6,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
 });
