@@ -37,9 +37,11 @@ export default function Home() {
         {state.status === 'signedIn' && (
           <Text accessibilityRole="text">Signed in as {state.user.displayName}</Text>
         )}
-        <Text style={styles.muted}>
-          {config.variant} · {config.apiUrl}
-        </Text>
+        {config.variant !== 'production' && (
+          <Text style={styles.muted}>
+            {config.variant} · {config.apiUrl}
+          </Text>
+        )}
         {status.kind === 'loading' && <ActivityIndicator accessibilityLabel="Checking server" />}
         {status.kind === 'ok' && <Text style={styles.ok}>Server reachable</Text>}
         {status.kind === 'error' && (

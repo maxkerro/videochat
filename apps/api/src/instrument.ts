@@ -33,6 +33,12 @@ if (!globalState[FLAG]) {
       tracesSampleRate: 0,
       // Request bodies carry passwords and (for the mobile app) refresh tokens: never send them,
       // nor cookies or the Authorization header, with an error report.
+      // HTTP breadcrumbs record request URLs, which can carry `?token=`.
+      beforeBreadcrumb(breadcrumb) {
+        const url = breadcrumb.data?.['url'];
+        if (typeof url === 'string' && breadcrumb.data) breadcrumb.data['url'] = url.split('?')[0];
+        return breadcrumb;
+      },
       beforeSend(event) {
         if (event.request) {
           delete event.request.data;

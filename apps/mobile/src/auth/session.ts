@@ -48,27 +48,15 @@ export interface SessionManagerOptions {
   logoutWaitMs?: number;
 }
 
-/** Decode the payload of a JWT without verifying it (the server did; we only want its timing). */
+/** Decode the payload of a JWT without verifying it (the server did; we only want its timing).
+ *  `atob` exists on Hermes (RN 0.74+); without it we simply fall back to the server's expiry. */
 function jwtPayload(token: string): { iat?: unknown; exp?: unknown } | null {
   const part = token.split('.')[1];
-  if (!part) return null;
+  const decode = (globalThis as { atob?: (s: string) => string }).atob;
+  if (!part || !decode) return null;
   try {
-    const b64 = part.replace(/-/g, '+').replace(/_/g, '/');
-    const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/';
-    let bits = 0;
-    let acc = 0;
-    let out = '';
-    for (const c of b64) {
-      const v = chars.indexOf(c);
-      if (v < 0) continue; // padding
-      acc = (acc << 6) | v;
-      bits += 6;
-      if (bits >= 8) {
-        bits -= 8;
-        out += String.fromCharCode((acc >> bits) & 0xff);
-      }
-    }
-    return JSON.parse(decodeURIComponent(escape(out))) as { iat?: unknown; exp?: unknown };
+    const bin = decode(part.replace(/-/g, '+').replace(/_/g, '/'));
+    return JSON.parse(bin) as { iat?: unknown; exp?: unknown };
   } catch {
     return null;
   }
@@ -110,7 +98,22 @@ export function createSessionManager(options: SessionManagerOptions) {
   const timedFetch: ApiFetch = (url, init) => {
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), authTimeoutMs);
-    return rawFetch(url, { ...init, signal: controller.signal }).finally(() => clearTimeout(timer));
+    // The timer keeps running until the body has been read: a response whose headers arrive but
+    // whose body stalls would otherwise hang the caller (`handleResponse` awaits `text()`).
+    return rawFetch(url, { ...init, signal: controller.signal }).then(
+      (res) => ({
+        ...res,
+        ok: res.ok,
+        status: res.status,
+        headers: res.headers,
+        clone: () => res.clone(),
+        text: () => res.text().finally(() => clearTimeout(timer)),
+      }),
+      (e: unknown) => {
+        clearTimeout(timer);
+        throw e;
+      },
+    );
   };
 
   const authApi = createApiClient({
@@ -129,11 +132,27 @@ export function createSessionManager(options: SessionManagerOptions) {
   let accessToken: string | null = null;
   let expiresAt = 0;
   let user: User | null = null;
-  let inFlight: Promise<MobileAuthSession> | null = null;
+  let inFlight: { generation: number; promise: Promise<MobileAuthSession> } | null = null;
   // Bumped whenever the session is replaced or ended (login, logout, rejected token). A refresh
   // that started under an older generation must not write its result back: it would resurrect a
   // session the user just logged out of, or overwrite a newer login.
   let generation = 0;
+  // Every keystore mutation goes through one queue, so a late write can never land after the
+  // `clear()` of a logout (or over a newer login's token): each write re-checks `generation`
+  // when its turn comes, and a clear always runs after the writes queued before it.
+  let storageQueue: Promise<unknown> = Promise.resolve();
+  const queued = <T>(task: () => Promise<T>): Promise<T> => {
+    const result = storageQueue.then(task, task);
+    storageQueue = result.catch(() => undefined);
+    return result;
+  };
+  /** Store `token` only if the session generation is still `forGeneration`. */
+  const persist = (token: string, forGeneration: number): Promise<boolean> =>
+    queued(async () => {
+      if (generation !== forGeneration) return false;
+      await storage.setRefreshToken(token);
+      return true;
+    });
   const listeners = new Set<() => void>();
   const signedOutListeners = new Set<() => void | Promise<void>>();
 
@@ -146,19 +165,33 @@ export function createSessionManager(options: SessionManagerOptions) {
     notify();
   }
 
-  async function clearLocal() {
+  /** End the local session. The generation bump is synchronous, so everything in flight is stale
+   *  from this line on. Resolves with the refresh token that was stored (for the server revoke).
+   *  `onSignedOut` listeners run once per ended session, even if a refresh failure and a logout
+   *  race: only the call that actually found a session to end notifies them. */
+  async function clearLocal(): Promise<string | null> {
+    const hadSession = user !== null || accessToken !== null;
     generation += 1;
     accessToken = null;
     expiresAt = 0;
     user = null;
-    await storage.clear();
-    await Promise.allSettled([...signedOutListeners].map((l) => l()));
+    const stored = await queued(async () => {
+      const token = await storage.getRefreshToken();
+      await storage.clear();
+      return token;
+    });
+    if (hadSession || stored) await Promise.allSettled([...signedOutListeners].map((l) => l()));
     notify();
+    return stored;
   }
 
   function refreshNow(): Promise<MobileAuthSession> {
-    inFlight ??= (async () => {
-      const startedAt = generation;
+    // A refresh that belongs to an older generation (logout -> login while it was pending) must
+    // not be joined by the new session's callers.
+    if (inFlight && inFlight.generation !== generation) inFlight = null;
+    if (inFlight) return inFlight.promise;
+    const startedAt = generation;
+    const promise: Promise<MobileAuthSession> = (async () => {
       const stored = await storage.getRefreshToken();
       if (!stored) {
         await clearLocal();
@@ -174,8 +207,14 @@ export function createSessionManager(options: SessionManagerOptions) {
           void revoke(session.refreshToken);
           throw new NotSignedInError();
         }
-        // Persist the rotated token before anything else: the old one is already dead.
-        await storage.setRefreshToken(session.refreshToken);
+        // Persist the rotated token before anything else: the old one is already dead. The write
+        // is skipped if the session ended meanwhile, and checked again afterwards because the
+        // keystore write itself is asynchronous.
+        const written = await persist(session.refreshToken, startedAt);
+        if (!written || generation !== startedAt) {
+          void revoke(session.refreshToken);
+          throw new NotSignedInError();
+        }
         apply(session);
         return session;
       } catch (e) {
@@ -188,9 +227,10 @@ export function createSessionManager(options: SessionManagerOptions) {
         throw e; // offline, timeout, 5xx: keep the token and let the caller decide
       }
     })().finally(() => {
-      inFlight = null;
+      if (inFlight?.promise === promise) inFlight = null;
     });
-    return inFlight;
+    inFlight = { generation: startedAt, promise };
+    return promise;
   }
 
   async function getAccessToken(): Promise<string> {
@@ -228,8 +268,13 @@ export function createSessionManager(options: SessionManagerOptions) {
 
     async login(input: LoginInput): Promise<MobileAuthSession> {
       const session = await authApi.apiPost('/auth/login', mobileAuthSessionSchema, input);
-      generation += 1;
-      await storage.setRefreshToken(session.refreshToken);
+      const mine = (generation += 1);
+      const written = await persist(session.refreshToken, mine);
+      if (!written || generation !== mine) {
+        // Logged out (or logged in again) while the keystore write was pending.
+        void revoke(session.refreshToken);
+        throw new NotSignedInError();
+      }
       apply(session);
       return session;
     },
@@ -252,11 +297,10 @@ export function createSessionManager(options: SessionManagerOptions) {
     generation: () => generation,
 
     async logout(): Promise<void> {
-      const stored = await storage.getRefreshToken();
       // End the local session first and unconditionally: the UI is signed out at once, a refresh
       // still in flight is now stale (it revokes whatever it rotated to), and nothing below can
       // keep the user signed in -- however badly the network is behaving.
-      await clearLocal();
+      const stored = await clearLocal();
       if (stored) {
         // Best effort, and bounded: the revoke can finish after we return.
         await Promise.race([revoke(stored), new Promise((r) => setTimeout(r, logoutWaitMs))]);

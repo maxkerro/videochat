@@ -72,6 +72,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       retry,
       // Also reachable from the offline/error screens, where there is no user yet.
       logout: async () => {
+        // A Retry still in flight must not bring the offline screen back after this.
+        restoreSeq.current++;
         await session.logout();
         setRestored({ status: 'done' });
       },

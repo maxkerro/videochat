@@ -368,6 +368,33 @@ describe.skipIf(!hasInfra)('auth HTTP flow (CHAT-010)', () => {
         .expect(401);
     });
 
+    it("change-password does not treat someone else's refresh token as the caller's session", async () => {
+      const mine = await bodyLogin();
+      const other = await bodyLogin();
+      await request(server())
+        .post('/auth/change-password')
+        .set('Authorization', `Bearer ${mine.session.accessToken}`)
+        .set('X-Refresh-Mode', 'body')
+        .send({
+          currentPassword: mine.user.password,
+          newPassword: 'a-brand-new-password-2',
+          refreshToken: other.session.refreshToken,
+        })
+        .expect(204);
+      // The caller's own session is revoked (the token given is not theirs) ...
+      await request(server())
+        .post('/auth/refresh')
+        .set('X-Refresh-Mode', 'body')
+        .send({ refreshToken: mine.session.refreshToken })
+        .expect(401);
+      // ... and the other user's session is untouched.
+      await request(server())
+        .post('/auth/refresh')
+        .set('X-Refresh-Mode', 'body')
+        .send({ refreshToken: other.session.refreshToken })
+        .expect(200);
+    });
+
     it('change-password in body mode without a refreshToken is rejected and changes nothing', async () => {
       const { user, session } = await bodyLogin();
       await request(server())

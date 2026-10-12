@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
-import type { ApiFetch, ApiResponseLike } from '@videochat/shared';
-import { NotSignedInError, createSessionManager } from './session';
+import type { ApiFetch, ApiResponseLike, MobileAuthSession } from '@videochat/shared';
+import { NotSignedInError, accessTokenTtlMs, createSessionManager } from './session';
 import type { TokenStorage } from './storage';
 
 const USER = {
@@ -322,5 +322,79 @@ describe('session manager', () => {
     await session.logout();
     expect(g1).toBeGreaterThan(g0);
     expect(session.generation()).toBeGreaterThan(g1);
+  });
+
+  /** Storage whose writes can be held back, to interleave a logout with a pending keystore write. */
+  function gatedStorage(initial: string | null) {
+    const mem = memoryStorage(initial);
+    let release: () => void = () => undefined;
+    let writeStarted = false;
+    const gate = new Promise<void>((r) => {
+      release = r;
+    });
+    const storage: TokenStorage = {
+      ...mem.storage,
+      setRefreshToken: async (t) => {
+        writeStarted = true;
+        await gate;
+        await mem.storage.setRefreshToken(t);
+      },
+    };
+    return { storage, peek: mem.peek, release, started: () => writeStarted };
+  }
+
+  it('logout while the rotated token is being written cannot be undone by that write', async () => {
+    const gated = gatedStorage('refresh-0');
+    const revoked: string[] = [];
+    const session = createSessionManager({
+      baseUrl: 'https://api.test',
+      storage: gated.storage,
+      now: () => 1_000_000,
+      fetch: async (url, init) => {
+        if (url.endsWith('/auth/logout')) {
+          revoked.push((JSON.parse(init.body as string) as { refreshToken: string }).refreshToken);
+          return res(200, {});
+        }
+        return res(200, sessionBody(1));
+      },
+    });
+    const signedInSeen = vi.fn();
+    session.subscribe(() => session.isSignedIn() && signedInSeen());
+
+    const restoring = session.restore();
+    await vi.waitFor(() => expect(gated.started()).toBe(true)); // refresh passed its generation check
+    const loggingOut = session.logout();
+    gated.release();
+    await loggingOut;
+
+    await expect(restoring).resolves.toEqual({ status: 'signedOut' });
+    expect(session.isSignedIn()).toBe(false);
+    expect(gated.peek()).toBeNull();
+    expect(signedInSeen).not.toHaveBeenCalled();
+    await vi.waitFor(() => expect(revoked).toContain('refresh-1'));
+  });
+
+  it('logout while login is writing its token leaves the user signed out', async () => {
+    const gated = gatedStorage(null);
+    const session = createSessionManager({
+      baseUrl: 'https://api.test',
+      storage: gated.storage,
+      now: () => 1_000_000,
+      fetch: async () => res(200, sessionBody(1)),
+    });
+    const loggingIn = session.login({ identifier: 'max', password: 'pw' });
+    await vi.waitFor(() => expect(gated.started()).toBe(true));
+    const loggingOut = session.logout();
+    gated.release();
+    await loggingOut;
+    await expect(loggingIn).rejects.toBeInstanceOf(NotSignedInError);
+    expect(session.isSignedIn()).toBe(false);
+    expect(gated.peek()).toBeNull();
+  });
+
+  it('accessTokenTtlMs falls back to the server expiry for a non-JWT token, clamped at 0', () => {
+    const body = sessionBody(1, 600_000, 1_000_000) as unknown as MobileAuthSession;
+    expect(accessTokenTtlMs(body, 1_000_000)).toBe(600_000);
+    expect(accessTokenTtlMs(body, 1_000_000 + 3_600_000)).toBe(0); // clock far ahead
   });
 });

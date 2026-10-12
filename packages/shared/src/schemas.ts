@@ -200,7 +200,6 @@ export const mobileAuthSessionSchema = authSessionSchema.extend({
   refreshToken: z.string().min(1),
 });
 export type MobileAuthSession = z.infer<typeof mobileAuthSessionSchema>;
-export const refreshTokenBodySchema = z.object({ refreshToken: z.string().min(1) });
 
 /**
  * CHAT-030: what a message says about the file it carries. The bytes themselves are only ever
