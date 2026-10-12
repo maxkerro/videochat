@@ -22,9 +22,9 @@ const VARIANTS: Record<
     name: 'Chat (staging)',
     id: 'app.videochat.chat.staging',
     scheme: 'videochat-staging',
-    apiUrl: process.env.EXPO_PUBLIC_API_URL ?? 'https://videochat-api.onrender.com',
+    apiUrl: process.env.EXPO_PUBLIC_API_URL ?? 'https://videochat-api-p6sw.onrender.com',
     realtimeUrl:
-      process.env.EXPO_PUBLIC_REALTIME_URL ?? 'wss://videochat-api.onrender.com/realtime',
+      process.env.EXPO_PUBLIC_REALTIME_URL ?? 'wss://videochat-api-p6sw.onrender.com/realtime',
   },
   production: {
     name: 'Chat',
