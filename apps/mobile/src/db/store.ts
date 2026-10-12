@@ -85,7 +85,10 @@ export function createLocalStore(db: SqlDb, options: { maxMessagesPerConversatio
           ]);
         }
         // Conversations that left the list (removed from a group, deleted) take their cached
-        // messages with them.
+        // messages with them. This relies on `list` being the COMPLETE inbox (GET /conversations
+        // is not paginated); if that ever changes, this cleanup must go or be scoped. A list that
+        // was fetched just before a new conversation was created merely loses that conversation's
+        // cached messages, which the next fetch restores.
         await tx.run(
           'DELETE FROM messages WHERE conversation_id NOT IN (SELECT id FROM conversations)',
         );

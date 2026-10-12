@@ -113,10 +113,11 @@ export function useMessages(id: string): MessagesView {
     const startedAt = session.generation();
     try {
       const page = await api.fetchMessages(id, oldest.seq);
+      // The account may have changed while the page was in flight (the cache was cleared then):
+      // writing now would resurrect the old account's messages in a fresh cache entry.
+      if (!sameSession(startedAt)) return;
       queryClient.setQueryData<MessagesState>(key, (old) => prependOlder(old, page));
-      if (sameSession(startedAt)) {
-        bestEffort(getLocalStore().then((s) => s.saveMessages(id, page.messages)));
-      }
+      bestEffort(getLocalStore().then((s) => s.saveMessages(id, page.messages)));
     } catch {
       // offline or a hiccup: the next scroll to the top tries again
     } finally {

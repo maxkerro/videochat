@@ -52,4 +52,13 @@ describe('prepareStoreForUser', () => {
     expect(await store.loadConversations()).toEqual([]);
     expect(await store.listOutbox()).toEqual([]);
   });
+
+  it('does not wipe or claim the database once the session it was started for has ended', async () => {
+    const store = createLocalStore(await createTestDb());
+    await prepareStoreForUser(store, A);
+    await store.saveConversations([conversation]);
+    await expect(prepareStoreForUser(store, B, () => false)).resolves.toEqual([]);
+    await expect(store.getOwner()).resolves.toBe(A);
+    await expect(store.loadConversations()).resolves.toEqual([conversation]);
+  });
 });

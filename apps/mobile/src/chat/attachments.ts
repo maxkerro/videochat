@@ -61,6 +61,11 @@ export async function sendAttachment(
   onProgress: (fraction: number) => void,
 ): Promise<Message> {
   const startedAt = session.generation();
+  // Cheap early refusal when the picker already knows the size, before reading the file into
+  // memory; the real byte count below stays the authority.
+  if (file.sizeBytes !== null && file.sizeBytes > LIMITS.attachmentMaxBytes) {
+    throw new UploadError(`Files can be up to ${MAX_ATTACHMENT_MB} MB.`);
+  }
   const blob = await (await fetch(file.uri)).blob();
   // The bytes we will actually send, not the picker's idea of the size: the signed upload is
   // bound to the size we ask for.

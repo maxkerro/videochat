@@ -34,12 +34,20 @@ export function Composer({
   // Starting an edit puts the message's text in the box (adjusting state while rendering, the
   // supported way to reset state when a prop changes).
   const [seenEditing, setSeenEditing] = useState<Message | null>(null);
+  // What was typed before an edit began, put back when the edit ends (saved, cancelled, or
+  // replaced by choosing Reply).
+  const [draft, setDraft] = useState('');
   if (editing !== seenEditing) {
     setSeenEditing(editing);
     // Starting an edit loads the message; leaving edit mode (by choosing Reply, say) must not
     // leave the old text behind to be sent as something else.
-    if (editing) setText(editing.body ?? '');
-    else if (seenEditing) setText('');
+    if (editing) {
+      if (!seenEditing) setDraft(text);
+      setText(editing.body ?? '');
+    } else if (seenEditing) {
+      setText(draft);
+      setDraft('');
+    }
   }
 
   const trimmed = text.trim();
@@ -48,7 +56,8 @@ export function Composer({
   function send() {
     if (!canSend) return;
     onSend(trimmed);
-    setText('');
+    // Saving an edit hands the box back to the draft (when the parent ends the edit).
+    if (!editing) setText('');
   }
 
   const context = editing
@@ -69,7 +78,6 @@ export function Composer({
             accessibilityLabel="Cancel"
             onPress={() => {
               onCancelContext();
-              if (editing) setText('');
             }}
           >
             <Text style={{ color: t.accent, fontWeight: '600' }}>Cancel</Text>

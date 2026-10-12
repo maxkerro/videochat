@@ -1,7 +1,7 @@
 import { ApiError, type Message } from '@videochat/shared';
 import { describe, expect, it, vi } from 'vitest';
 import type { OutboxItem } from '../db/store';
-import { createOutboxRunner, flushOutbox, type FlushDeps } from './flush';
+import { MAX_UNAUTHORIZED, createOutboxRunner, flushOutbox, type FlushDeps } from './flush';
 
 const item = (id: string, state: OutboxItem['state'] = 'queued'): OutboxItem => ({
   clientMsgId: id,
@@ -112,6 +112,34 @@ describe('flushOutbox', () => {
   });
 });
 
+describe('flushOutbox 401 handling', () => {
+  const unauthorized = () => Promise.reject(new ApiError(401, 'unauthorized', 'No'));
+
+  it('retries a 401 later, then marks the message failed after repeated 401s', async () => {
+    const s = setup([item('a'), item('b')], unauthorized);
+    const counts = new Map<string, number>();
+    const deps = { ...s.deps, unauthorized: counts };
+    for (let n = 1; n < MAX_UNAUTHORIZED; n++) {
+      await expect(flushOutbox(deps)).resolves.toEqual({ sent: 0, stopped: true });
+      expect(s.failed).toEqual({});
+    }
+    s.deps.send = ok;
+    deps.send = (i) => (i.clientMsgId === 'a' ? unauthorized() : ok(i));
+    await flushOutbox(deps);
+    expect(Object.keys(s.failed)).toEqual(['a']);
+    expect(s.sentOrder).toEqual(['b']);
+  });
+
+  it('forgets earlier 401s once the message goes through', async () => {
+    const s = setup([item('a')], unauthorized);
+    const counts = new Map<string, number>();
+    await flushOutbox({ ...s.deps, unauthorized: counts });
+    expect(counts.get('a')).toBe(1);
+    await flushOutbox({ ...s.deps, send: ok, unauthorized: counts });
+    expect(counts.has('a')).toBe(false);
+  });
+});
+
 describe('createOutboxRunner', () => {
   it('never runs two flushes at once, and picks up what was queued mid-flush', async () => {
     let release: () => void = () => undefined;
@@ -143,5 +171,41 @@ describe('createOutboxRunner', () => {
     await Promise.all([first, second]);
     expect(s.sentOrder).toEqual(['a', 'b']);
     expect(maxConcurrent).toBe(1);
+  });
+
+  it('a second pass never runs under a newer account than the run started under', async () => {
+    let gen = 1;
+    const s = setup([item('a')], ok, () => gen);
+    const runner = createOutboxRunner(s.deps);
+    const first = runner.flush();
+    // asked for again while running, then the account changes before the second pass starts
+    void runner.flush();
+    s.queue.push(item('b'));
+    gen = 2;
+    await first;
+    expect(s.sentOrder).not.toContain('b');
+  });
+
+  it('starts a fresh run for the new account after a previous-generation run ends', async () => {
+    let gen = 1;
+    let release: () => void = () => {};
+    const gate = new Promise<void>((r) => (release = r));
+    const s = setup(
+      [item('a')],
+      async (i) => {
+        await gate;
+        return ok(i);
+      },
+      () => gen,
+    );
+    const runner = createOutboxRunner(s.deps);
+    const old = runner.flush();
+    gen = 2;
+    s.queue.push(item('n'));
+    const fresh = runner.flush();
+    release();
+    await old;
+    await fresh;
+    expect(s.sentOrder).toContain('n');
   });
 });

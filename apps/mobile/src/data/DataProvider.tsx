@@ -35,7 +35,7 @@ export function DataProvider({ children }: { children: ReactNode }) {
     void (async () => {
       try {
         const store = await getLocalStore();
-        const cached = await prepareStoreForUser(store, userId);
+        const cached = await prepareStoreForUser(store, userId, () => sameSession(startedAt));
         if (
           cached.length > 0 &&
           sameSession(startedAt) &&
