@@ -13,7 +13,11 @@ const item = (id: string, state: OutboxItem['state'] = 'queued'): OutboxItem => 
   error: null,
 });
 
-function setup(items: OutboxItem[], send: (i: OutboxItem) => Promise<Message>) {
+function setup(
+  items: OutboxItem[],
+  send: (i: OutboxItem) => Promise<Message>,
+  generation: () => number = () => 1,
+) {
   const queue = [...items];
   const sentOrder: string[] = [];
   const failed: Record<string, string> = {};
@@ -33,6 +37,7 @@ function setup(items: OutboxItem[], send: (i: OutboxItem) => Promise<Message>) {
       if (q) q.state = 'failed';
       return Promise.resolve();
     },
+    generation,
     onSent: (i) => {
       sentOrder.push(i.clientMsgId);
     },
@@ -62,11 +67,32 @@ describe('flushOutbox', () => {
   });
 
   it('treats 5xx and 429 as "try later", not as a refusal', async () => {
-    for (const status of [500, 502, 429, 408]) {
+    for (const status of [500, 502, 429, 408, 401]) {
       const s = setup([item('a')], () => Promise.reject(new ApiError(status, 'x')));
       await expect(flushOutbox(s.deps)).resolves.toEqual({ sent: 0, stopped: true });
       expect(s.failed).toEqual({});
     }
+  });
+
+  it("stops when the account changes mid-run, so the old account's queue is never sent as the new one", async () => {
+    let gen = 1;
+    const send = vi.fn((i: OutboxItem) => {
+      if (i.clientMsgId === 'a') gen = 2; // sign-out, then another sign-in, while 'a' was in flight
+      return ok(i);
+    });
+    const s = setup([item('a'), item('b'), item('c')], send, () => gen);
+    await expect(flushOutbox(s.deps)).resolves.toEqual({ sent: 1, stopped: true });
+    expect(send).toHaveBeenCalledTimes(1); // b and c were never sent
+  });
+
+  it('hands onSent the generation the run started under', async () => {
+    const seen: number[] = [];
+    const s = setup([item('a')], ok, () => 7);
+    s.deps.onSent = (_i, _m, generation) => {
+      seen.push(generation);
+    };
+    await flushOutbox(s.deps);
+    expect(seen).toEqual([7]);
   });
 
   it('marks a refused message failed, keeps it, and carries on with the rest', async () => {

@@ -84,6 +84,11 @@ export function createLocalStore(db: SqlDb, options: { maxMessagesPerConversatio
             JSON.stringify(c),
           ]);
         }
+        // Conversations that left the list (removed from a group, deleted) take their cached
+        // messages with them.
+        await tx.run(
+          'DELETE FROM messages WHERE conversation_id NOT IN (SELECT id FROM conversations)',
+        );
       }),
     upsertConversation: (c: ConversationSummary) =>
       db.transaction(async (tx) => {

@@ -28,6 +28,7 @@ import {
   type UpdateSettingsInput,
 } from '@videochat/shared';
 import { z } from 'zod';
+import { UploadError } from '../lib/errors';
 import { apiDelete, apiGet, apiPatch, apiPost, apiPut, apiUpload, session } from '../lib/api';
 
 // Conversations ------------------------------------------------------------------------------
@@ -129,13 +130,6 @@ export const requestUpload = (conversationId: string, input: CreateAttachmentUpl
 
 export const fetchAttachmentUrl = (attachmentId: string, variant: 'original' | 'thumb') =>
   apiGet(`/attachments/${attachmentId}/url?variant=${variant}`, attachmentUrlSchema);
-
-export class UploadError extends Error {
-  constructor(message: string) {
-    super(message);
-    this.name = 'UploadError';
-  }
-}
 
 /** PUTs a file straight to object storage through the signed URL (never through the API).
  *  XMLHttpRequest rather than fetch, for upload progress. */

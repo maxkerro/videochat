@@ -40,6 +40,15 @@ describe('messagesState', () => {
     expect(seqs(next)).toEqual([10, 11]);
   });
 
+  it('keeps cached history that joins the page exactly at oldest - 1, and its own hasMore', () => {
+    const state = { messages: [msg(1), msg(2), msg(3)], hasMore: false };
+    const next = mergeLatestPage(state, { messages: [msg(4), msg(5)], hasMore: true });
+    expect(seqs(next)).toEqual([1, 2, 3, 4, 5]);
+    // The cache already reaches the start of the conversation: the page's hasMore only describes
+    // what is older than the page, which the cache covers.
+    expect(next.hasMore).toBe(false);
+  });
+
   it('a latest page into an empty state takes the page and its hasMore', () => {
     const next = mergeLatestPage(undefined, { messages: [msg(8), msg(9)], hasMore: true });
     expect(seqs(next)).toEqual([8, 9]);

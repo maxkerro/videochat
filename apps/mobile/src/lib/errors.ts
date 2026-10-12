@@ -9,3 +9,12 @@ export function isNetworkError(e: unknown): boolean {
     /network|failed to fetch|internet|connection|timed? ?out|offline/i.test(e.message)
   );
 }
+
+/** A file that can't be sent (too big, unreadable), or whose upload to storage failed. The message
+ *  is already worded for the person. */
+export class UploadError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'UploadError';
+  }
+}

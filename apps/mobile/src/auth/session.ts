@@ -255,7 +255,9 @@ export function createSessionManager(options: SessionManagerOptions) {
 
     /** The profile changed (display name, avatar, settings): keep the signed-in user in step. */
     setUser(next: User) {
-      if (user === null) return; // signed out meanwhile
+      // Signed out meanwhile, or a different account signed in since the request that produced
+      // `next` began: its result belongs to the old account and must not replace this one.
+      if (user === null || next.id !== user.id) return;
       user = next;
       notify();
     },

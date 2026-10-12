@@ -7,6 +7,7 @@ import { useAuth } from '../auth/AuthContext';
 import { getLocalStore } from '../db/expoDb';
 import { session } from '../lib/api';
 import { useTheme } from '../ui/theme';
+import { prepareStoreForUser } from './hydrate';
 import { keys } from './keys';
 import { outboxRunner } from './outboxRunner';
 import { queryClient, sameSession } from './queryClient';
@@ -34,16 +35,15 @@ export function DataProvider({ children }: { children: ReactNode }) {
     void (async () => {
       try {
         const store = await getLocalStore();
-        if ((await store.getOwner()) !== userId) {
-          await store.wipe();
-          await store.setOwner(userId);
-        } else if (!queryClient.getQueryData(keys.conversations)) {
-          const cached = await store.loadConversations();
-          if (cached.length > 0 && sameSession(startedAt)) {
-            queryClient.setQueryData<ConversationSummary[]>(keys.conversations, cached, {
-              updatedAt: 0,
-            });
-          }
+        const cached = await prepareStoreForUser(store, userId);
+        if (
+          cached.length > 0 &&
+          sameSession(startedAt) &&
+          !queryClient.getQueryData(keys.conversations)
+        ) {
+          queryClient.setQueryData<ConversationSummary[]>(keys.conversations, cached, {
+            updatedAt: 0,
+          });
         }
       } catch {
         // No usable local database: the app still works online, just without the cache.

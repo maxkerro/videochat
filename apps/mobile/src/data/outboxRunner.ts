@@ -8,14 +8,16 @@ import { queryClient, sameSession } from './queryClient';
 import { session } from '../lib/api';
 
 /** Puts a message the server just confirmed into the on-screen list and the on-device copy. */
-export async function recordMessage(message: Message): Promise<void> {
-  const startedAt = session.generation();
+export async function recordMessage(message: Message, startedAt: number): Promise<void> {
+  // `startedAt` is the session generation from *before* the request that produced `message`: if
+  // the account changed while it was in flight, the message belongs to the old account and must
+  // reach neither the on-screen cache nor the new account's on-device copy.
+  if (!sameSession(startedAt)) return;
   queryClient.setQueryData<MessagesState>(keys.messages(message.conversationId), (old) =>
     old ? mergeMessages(old, [message]) : old,
   );
   // The inbox preview and unread state change with every message.
   void queryClient.invalidateQueries({ queryKey: keys.conversations });
-  if (!sameSession(startedAt)) return;
   try {
     await (await getLocalStore()).saveMessages(message.conversationId, [message]);
   } catch {
@@ -38,13 +40,18 @@ export const outboxRunner = createOutboxRunner({
     }),
   remove: async (id) => (await getLocalStore()).removeFromOutbox(id),
   markFailed: async (id, error) => (await getLocalStore()).markOutboxFailed(id, error),
-  onSent: (_item, message) => recordMessage(message),
+  generation: () => session.generation(),
+  onSent: (_item, message, generation) => recordMessage(message, generation),
   onChange: () => void queryClient.invalidateQueries({ queryKey: keys.outbox() }),
 });
 
 export function newClientMsgId(): string {
-  const random = Math.random().toString(36).slice(2, 12);
-  return `m-${Date.now().toString(36)}-${random}`;
+  // A random UUID where the runtime has one (Hermes does on current React Native); otherwise a
+  // timestamp plus random digits. Either is unique per sender in practice -- the server only
+  // needs uniqueness per (sender, clientMsgId) -- and fits the 64-character limit.
+  const uuid = (globalThis as { crypto?: { randomUUID?: () => string } }).crypto?.randomUUID?.();
+  if (uuid) return uuid;
+  return `m-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 12)}`;
 }
 
 /** Queue a text message (durably) and try to send it right away. */

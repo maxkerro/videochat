@@ -36,7 +36,10 @@ export function Composer({
   const [seenEditing, setSeenEditing] = useState<Message | null>(null);
   if (editing !== seenEditing) {
     setSeenEditing(editing);
+    // Starting an edit loads the message; leaving edit mode (by choosing Reply, say) must not
+    // leave the old text behind to be sent as something else.
     if (editing) setText(editing.body ?? '');
+    else if (seenEditing) setText('');
   }
 
   const trimmed = text.trim();

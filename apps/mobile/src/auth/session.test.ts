@@ -397,4 +397,17 @@ describe('session manager', () => {
     expect(accessTokenTtlMs(body, 1_000_000)).toBe(600_000);
     expect(accessTokenTtlMs(body, 1_000_000 + 3_600_000)).toBe(0); // clock far ahead
   });
+
+  it('setUser updates the same account but ignores a different one (a late answer for the old account)', async () => {
+    const { session } = setup(null, () => res(200, sessionBody(1)));
+    await session.login({ identifier: 'max', password: 'pw' });
+    const me = session.getUser()!;
+    session.setUser({ ...me, displayName: 'Renamed' });
+    expect(session.getUser()?.displayName).toBe('Renamed');
+    session.setUser({ ...me, id: '9a1c0c7e-2b2c-4d5a-9f55-0d3b8f1a2b3d', displayName: 'Intruder' });
+    expect(session.getUser()).toMatchObject({ id: me.id, displayName: 'Renamed' });
+    await session.logout();
+    session.setUser({ ...me, displayName: 'Ghost' });
+    expect(session.getUser()).toBeNull();
+  });
 });

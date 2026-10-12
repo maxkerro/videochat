@@ -3,6 +3,8 @@ import * as DocumentPicker from 'expo-document-picker';
 import * as ImagePicker from 'expo-image-picker';
 import { requestUpload, sendMessage, uploadToStorage } from '../data/api';
 import { newClientMsgId, recordMessage } from '../data/outboxRunner';
+import { session } from '../lib/api';
+import { UploadError } from '../lib/errors';
 
 export interface PickedFile {
   uri: string;
@@ -58,13 +60,23 @@ export async function sendAttachment(
   options: { caption?: string; replyToId?: string | null },
   onProgress: (fraction: number) => void,
 ): Promise<Message> {
+  const startedAt = session.generation();
   const blob = await (await fetch(file.uri)).blob();
-  const input = createAttachmentUploadSchema.parse({
+  // The bytes we will actually send, not the picker's idea of the size: the signed upload is
+  // bound to the size we ask for.
+  if (blob.size > LIMITS.attachmentMaxBytes) {
+    throw new UploadError(`Files can be up to ${MAX_ATTACHMENT_MB} MB.`);
+  }
+  if (blob.size === 0) throw new UploadError('That file is empty.');
+  const parsed = createAttachmentUploadSchema.safeParse({
     filename: file.name,
     contentType: file.contentType,
-    sizeBytes: file.sizeBytes ?? blob.size,
+    sizeBytes: blob.size,
   });
-  const upload = await requestUpload(conversationId, input);
+  if (!parsed.success) {
+    throw new UploadError(parsed.error.issues[0]?.message ?? 'That file can’t be sent.');
+  }
+  const upload = await requestUpload(conversationId, parsed.data);
   await uploadToStorage(upload, blob, onProgress);
   const caption = options.caption?.trim();
   const message = await sendMessage(conversationId, {
@@ -73,6 +85,6 @@ export async function sendAttachment(
     ...(caption ? { body: caption } : {}),
     ...(options.replyToId ? { replyToId: options.replyToId } : {}),
   });
-  await recordMessage(message);
+  await recordMessage(message, startedAt);
   return message;
 }

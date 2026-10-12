@@ -1,12 +1,19 @@
 import { ApiError } from '@videochat/shared';
 import { describe, expect, it } from 'vitest';
 import { z } from 'zod';
+import { UploadError } from '../lib/errors';
 import { describeError } from './describeError';
 
 describe('describeError', () => {
   it('uses the API message for an API error', () => {
     expect(describeError(new ApiError(401, 'Invalid email or password'))).toBe(
       'Invalid email or password',
+    );
+  });
+
+  it('shows an upload error as written', () => {
+    expect(describeError(new UploadError('Files can be up to 25 MB.'))).toBe(
+      'Files can be up to 25 MB.',
     );
   });
 

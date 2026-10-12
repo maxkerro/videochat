@@ -118,6 +118,16 @@ describe('local store', () => {
     expect(await store.listOutbox(CONV)).toHaveLength(2);
   });
 
+  it('drops cached messages of conversations that left the list', async () => {
+    const store = await setup();
+    await store.saveConversations([conversation(CONV), conversation(OTHER)]);
+    await store.saveMessages(CONV, [message(1)]);
+    await store.saveMessages(OTHER, [message(1, OTHER)]);
+    await store.saveConversations([conversation(CONV)]); // removed from OTHER
+    expect(await store.loadMessages(OTHER)).toEqual([]);
+    expect(await store.loadMessages(CONV)).toHaveLength(1);
+  });
+
   it('wipe removes everything, unsent messages and the owner included', async () => {
     const store = await setup();
     await store.setOwner(USER);
