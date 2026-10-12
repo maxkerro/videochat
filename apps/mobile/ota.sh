@@ -28,7 +28,11 @@ echo "Building @videochat/shared (the app bundles its compiled output)..."
 pnpm --filter @videochat/shared build
 
 echo "Publishing update to channel '$CHANNEL': $MESSAGE"
-npx eas-cli update --channel "$CHANNEL" --message "$MESSAGE" --non-interactive
+# --environment picks which EAS environment variables apply (we keep none; the app variant is
+# set above). Non-interactive mode requires it: development | preview | production.
+EAS_ENV=preview
+[ "$CHANNEL" = production ] && EAS_ENV=production
+npx eas-cli update --channel "$CHANNEL" --environment "$EAS_ENV" --message "$MESSAGE" --non-interactive
 
 echo
 echo "Done. On the phone: open the app, close it completely, open it again (first launch downloads, second applies)."
