@@ -14,13 +14,18 @@
     "eas-build-post-install": "pnpm --filter @videochat/shared build"
   },
   "dependencies": {
+    "@react-native-community/netinfo": "12.0.1",
+    "@tanstack/react-query": "^5.103.2",
     "@videochat/shared": "workspace:*",
     "expo": "~57.0.27",
     "expo-constants": "~57.0.21",
     "expo-dev-client": "~57.0.19",
+    "expo-document-picker": "~57.0.3",
+    "expo-image-picker": "~57.0.20",
     "expo-linking": "~57.0.12",
     "expo-router": "~57.0.25",
     "expo-secure-store": "~57.0.4",
+    "expo-sqlite": "~57.0.4",
     "expo-status-bar": "~57.0.1",
     "expo-updates": "~57.0.25",
     "react": "19.2.3",
