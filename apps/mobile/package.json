@@ -10,6 +10,7 @@
     "lint": "eslint .",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
+    "ota": "bash ota.sh",
     "eas-build-post-install": "pnpm --filter @videochat/shared build"
   },
   "dependencies": {

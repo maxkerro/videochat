@@ -22,8 +22,9 @@ production host in `app.config.ts` is still a placeholder.
 
 ## Over-the-air updates
 
-JavaScript-only fixes can ship without a new APK: `APP_VARIANT=staging npx eas-cli update --channel
-staging --message "..."`. The app downloads the update on launch and applies it on the next
+JavaScript-only fixes can ship without a new APK: from `apps/mobile` run `pnpm ota "message"`
+(staging by default; `CHANNEL=production pnpm ota "..."` for production). It builds
+`@videochat/shared`, then runs `eas update` for the channel. The app downloads the update on launch and applies it on the next
 launch. Because `runtimeVersion` uses the `appVersion` policy, an update only reaches binaries with
 the same `version` in `app.config.ts`: **bump `version` and make a new build whenever a native
 dependency or native config changes.**
