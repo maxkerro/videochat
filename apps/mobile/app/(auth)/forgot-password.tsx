@@ -1,9 +1,10 @@
 import { useState } from 'react';
 import { useRouter } from 'expo-router';
-import { ApiError, requestPasswordResetSchema } from '@videochat/shared';
+import { requestPasswordResetSchema } from '@videochat/shared';
 import { z } from 'zod';
 import { publicApi } from '../../src/lib/api';
 import { Button, Field, FormScreen, Notice } from '../../src/ui/Form';
+import { describeError } from '../../src/ui/describeError';
 import { fieldErrors } from '../../src/ui/useFormErrors';
 
 export default function ForgotPassword() {
@@ -24,9 +25,7 @@ export default function ForgotPassword() {
       await publicApi.apiPost('/auth/request-password-reset', z.unknown(), parsed.data);
       setSent(true);
     } catch (e) {
-      setFormError(
-        e instanceof ApiError ? e.message : 'Can’t reach the server. Check your connection.',
-      );
+      setFormError(describeError(e));
     } finally {
       setBusy(false);
     }

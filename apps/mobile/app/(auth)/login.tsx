@@ -1,10 +1,11 @@
 import { useState } from 'react';
 import { useRouter } from 'expo-router';
-import { ApiError, loginSchema } from '@videochat/shared';
+import { loginSchema } from '@videochat/shared';
 import { config, session } from '../../src/lib/api';
 import { Button, Field, FormScreen, Notice } from '../../src/ui/Form';
 import { Text } from 'react-native';
 import { useTheme } from '../../src/ui/theme';
+import { describeError } from '../../src/ui/describeError';
 import { fieldErrors } from '../../src/ui/useFormErrors';
 
 export default function Login() {
@@ -26,9 +27,7 @@ export default function Login() {
       await session.login(parsed.data);
       // The root layout swaps to the signed-in stack by itself.
     } catch (e) {
-      setFormError(
-        e instanceof ApiError ? e.message : 'Can’t reach the server. Check your connection.',
-      );
+      setFormError(describeError(e));
     } finally {
       setBusy(false);
     }
