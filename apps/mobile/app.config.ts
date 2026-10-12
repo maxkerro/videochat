@@ -53,8 +53,11 @@ export default ({ config }: ConfigContext): ExpoConfig => {
     ios: { bundleIdentifier: v.id, supportsTablet: false },
     android: { package: v.id },
     plugins: ['expo-router', 'expo-secure-store'],
-    // EAS Update (the staging/production build channels need expo-updates). A new native build is
-    // only required when the app version changes; JS-only fixes can ship over the air.
+    // EAS Update (the staging/production build channels need expo-updates). With the
+    // `appVersion` runtime policy an over-the-air update only reaches binaries with the same
+    // `version`, so bump `version` (and ship a new native build) whenever a native dependency or
+    // native config changes -- otherwise an update could reach a binary that lacks the module it
+    // needs and crash. JS-only fixes ship over the air without a new build.
     updates: { url: 'https://u.expo.dev/d9871d7c-558e-48d9-a6d7-33c9643a1881' },
     runtimeVersion: { policy: 'appVersion' },
     extra: {

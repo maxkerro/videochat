@@ -31,6 +31,19 @@ if (!globalState[FLAG]) {
       // Tracing goes through our own OpenTelemetry SDK below; Sentry only reports errors.
       skipOpenTelemetrySetup: true,
       tracesSampleRate: 0,
+      // Request bodies carry passwords and (for the mobile app) refresh tokens: never send them,
+      // nor cookies or the Authorization header, with an error report.
+      beforeSend(event) {
+        if (event.request) {
+          delete event.request.data;
+          delete event.request.cookies;
+          if (event.request.headers) {
+            delete event.request.headers['authorization'];
+            delete event.request.headers['cookie'];
+          }
+        }
+        return event;
+      },
     });
   }
 

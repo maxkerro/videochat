@@ -250,8 +250,8 @@ describe.skipIf(!hasInfra)('auth HTTP flow (CHAT-010)', () => {
   });
 
   describe('CHAT-051: body-token mode (X-Refresh-Mode: body, for the mobile app)', () => {
-    async function bodyLogin() {
-      const user = await signUpAndVerify();
+    async function bodyLogin(existing?: Awaited<ReturnType<typeof signUpAndVerify>>) {
+      const user = existing ?? (await signUpAndVerify());
       const res = await request(server())
         .post('/auth/login')
         .set('X-Refresh-Mode', 'body')
@@ -299,6 +299,60 @@ describe.skipIf(!hasInfra)('auth HTTP flow (CHAT-010)', () => {
       await request(server())
         .post('/auth/refresh')
         .send({ refreshToken: session.refreshToken })
+        .expect(401);
+    });
+
+    it('never falls back to the cookie: header + cookie + no body token is a 401 with no token issued', async () => {
+      const user = await signUpAndVerify();
+      const login = await request(server())
+        .post('/auth/login')
+        .send({ email: user.email, password: user.password })
+        .expect(200);
+      const cookie = requireSetCookie(login);
+      const res = await request(server())
+        .post('/auth/refresh')
+        .set('X-Refresh-Mode', 'body')
+        .set('Cookie', cookie)
+        .expect(401);
+      expect(res.body).not.toHaveProperty('refreshToken');
+      // ...and the cookie is untouched: it still works in cookie mode.
+      await request(server()).post('/auth/refresh').set('Cookie', cookie).expect(200);
+    });
+
+    it('marks responses that carry a refresh token as uncacheable', async () => {
+      const { res, session } = await bodyLogin();
+      expect(res.headers['cache-control']).toBe('no-store');
+      const refreshed = await request(server())
+        .post('/auth/refresh')
+        .set('X-Refresh-Mode', 'body')
+        .send({ refreshToken: session.refreshToken })
+        .expect(200);
+      expect(refreshed.headers['cache-control']).toBe('no-store');
+    });
+
+    it('change-password keeps the calling session (by body token) and revokes the others', async () => {
+      const first = await bodyLogin();
+      const second = await bodyLogin(first.user);
+      await request(server())
+        .post('/auth/change-password')
+        .set('Authorization', `Bearer ${first.session.accessToken}`)
+        .set('X-Refresh-Mode', 'body')
+        .send({
+          currentPassword: first.user.password,
+          newPassword: 'a-brand-new-password-1',
+          refreshToken: first.session.refreshToken,
+        })
+        .expect(204);
+
+      await request(server())
+        .post('/auth/refresh')
+        .set('X-Refresh-Mode', 'body')
+        .send({ refreshToken: first.session.refreshToken })
+        .expect(200);
+      await request(server())
+        .post('/auth/refresh')
+        .set('X-Refresh-Mode', 'body')
+        .send({ refreshToken: second.session.refreshToken })
         .expect(401);
     });
 

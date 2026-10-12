@@ -65,10 +65,13 @@ export default function Login() {
         onPress={() => router.push('/forgot-password')}
       />
       <Button title="Create an account" kind="link" onPress={() => router.push('/signup')} />
-      {/* Which server this build talks to: the first thing to check when sign-in fails. */}
-      <Text selectable style={{ color: theme.muted, fontSize: 12, textAlign: 'center' }}>
-        {config.variant} · {config.apiUrl}
-      </Text>
+      {/* Which server this build talks to: the first thing to check when sign-in fails. Not shown
+          in the production app, where it would just be noise. */}
+      {config.variant !== 'production' ? (
+        <Text selectable style={{ color: theme.muted, fontSize: 12, textAlign: 'center' }}>
+          {config.variant} · {config.apiUrl}
+        </Text>
+      ) : null}
     </FormScreen>
   );
 }

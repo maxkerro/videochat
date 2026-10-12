@@ -17,7 +17,17 @@ selected by `APP_VARIANT`, which the EAS build profiles in `eas.json` set):
 | `production`  | Chat           | `app.videochat.chat`         | the production API     |
 
 Set `EXPO_PUBLIC_API_URL` / `EXPO_PUBLIC_REALTIME_URL` to override the API for any variant. The
-staging API host in `app.config.ts` is a placeholder until you set it to your real Render API URL.
+staging variant points at the Render API (`https://videochat-api-p6sw.onrender.com`); the
+production host in `app.config.ts` is still a placeholder.
+
+## Over-the-air updates
+
+JavaScript-only fixes can ship without a new APK: `APP_VARIANT=staging npx eas-cli update --channel
+staging --message "..."`. The app downloads the update on launch and applies it on the next
+launch. Because `runtimeVersion` uses the `appVersion` policy, an update only reaches binaries with
+the same `version` in `app.config.ts`: **bump `version` and make a new build whenever a native
+dependency or native config changes.** Enabling EAS Update code signing is a sensible hardening
+step before there are real users.
 
 ## Running it
 

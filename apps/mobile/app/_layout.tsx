@@ -6,7 +6,7 @@ import { Button } from '../src/ui/Form';
 import { useTheme } from '../src/ui/theme';
 
 function Gate() {
-  const { state, retry } = useAuth();
+  const { state, retry, logout } = useAuth();
   const t = useTheme();
 
   if (state.status === 'loading') {
@@ -17,14 +17,18 @@ function Gate() {
     );
   }
 
-  if (state.status === 'offline') {
-    // A stored session exists but the server wasn't reachable: stay signed in, offer a retry.
+  if (state.status === 'offline' || state.status === 'error') {
+    // A stored session exists but the server wasn't usable: stay signed in, offer a retry -- and
+    // a way out, so a broken server can't trap someone on this screen.
     return (
       <View style={[styles.center, { backgroundColor: t.bg }]}>
         <Text style={[styles.message, { color: t.text }]}>
-          Can’t reach the server. Check your connection.
+          {state.status === 'offline'
+            ? 'Can’t reach the server. Check your connection.'
+            : state.message}
         </Text>
         <Button title="Try again" onPress={retry} />
+        <Button title="Log out" kind="link" onPress={() => void logout()} />
       </View>
     );
   }

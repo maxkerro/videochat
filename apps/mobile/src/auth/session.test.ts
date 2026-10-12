@@ -81,13 +81,13 @@ describe('session manager', () => {
 
   it('restore: no stored token means signed out, without calling the server', async () => {
     const { session, calls } = setup(null, () => res(500));
-    await expect(session.restore()).resolves.toBe('signedOut');
+    await expect(session.restore()).resolves.toEqual({ status: 'signedOut' });
     expect(calls).toHaveLength(0);
   });
 
   it('restore: rotates the stored token and signs in', async () => {
     const { session, mem, calls } = setup('refresh-0', () => res(200, sessionBody(1)));
-    await expect(session.restore()).resolves.toBe('signedIn');
+    await expect(session.restore()).resolves.toEqual({ status: 'signedIn' });
     expect(calls[0]?.body).toEqual({ refreshToken: 'refresh-0' });
     expect(mem.peek()).toBe('refresh-1');
   });
@@ -98,7 +98,7 @@ describe('session manager', () => {
     );
     const hook = vi.fn();
     session.onSignedOut(hook);
-    await expect(session.restore()).resolves.toBe('signedOut');
+    await expect(session.restore()).resolves.toEqual({ status: 'signedOut' });
     expect(mem.peek()).toBeNull();
     expect(hook).toHaveBeenCalledTimes(1);
   });
@@ -107,7 +107,7 @@ describe('session manager', () => {
     const { session, mem } = setup('refresh-0', () =>
       Promise.reject(new TypeError('Network request failed')),
     );
-    await expect(session.restore()).resolves.toBe('offline');
+    await expect(session.restore()).resolves.toEqual({ status: 'offline' });
     expect(mem.peek()).toBe('refresh-0');
   });
 
@@ -169,5 +169,67 @@ describe('session manager', () => {
     expect(mem.peek()).toBeNull();
     expect(session.isSignedIn()).toBe(false);
     expect(hook).toHaveBeenCalledTimes(1);
+  });
+
+  it('restore: a 5xx or an unparseable answer is an error (token kept), not "offline"', async () => {
+    const down = setup('refresh-0', () => res(503, { message: 'unavailable' }));
+    await expect(down.session.restore()).resolves.toMatchObject({ status: 'error' });
+    expect(down.mem.peek()).toBe('refresh-0');
+
+    const stale = setup('refresh-0', () => res(200, { accessToken: 'x' })); // no refreshToken: old API
+    await expect(stale.session.restore()).resolves.toMatchObject({ status: 'error' });
+    expect(stale.mem.peek()).toBe('refresh-0');
+  });
+
+  it('logout while a refresh is in flight waits for it, revokes the rotated token and stays logged out', async () => {
+    let releaseRefresh: (r: ApiResponseLike) => void = () => undefined;
+    const { session, mem, calls } = setup('refresh-0', (url) => {
+      if (url.endsWith('/auth/refresh')) {
+        return new Promise<ApiResponseLike>((resolve) => {
+          releaseRefresh = resolve;
+        });
+      }
+      return res(200, {});
+    });
+    const hook = vi.fn();
+    session.onSignedOut(hook);
+
+    const restoring = session.restore();
+    await vi.waitFor(() => expect(calls.some((c) => c.url.endsWith('/auth/refresh'))).toBe(true));
+    const loggingOut = session.logout(); // user taps "Log out" mid-refresh
+    releaseRefresh(res(200, sessionBody(1)));
+    await restoring;
+    await loggingOut;
+
+    expect(session.isSignedIn()).toBe(false);
+    expect(mem.peek()).toBeNull();
+    expect(hook).toHaveBeenCalledTimes(1);
+    // It revoked the token the refresh rotated to, not the one that was already dead.
+    expect(calls.at(-1)).toMatchObject({
+      url: 'https://api.test/auth/logout',
+      body: { refreshToken: 'refresh-1' },
+    });
+  });
+
+  it('a refresh that finishes after a newer login does not overwrite it', async () => {
+    let releaseRefresh: (r: ApiResponseLike) => void = () => undefined;
+    const { session, mem } = setup('refresh-old', (url) => {
+      if (url.endsWith('/auth/refresh')) {
+        return new Promise<ApiResponseLike>((resolve) => {
+          releaseRefresh = resolve;
+        });
+      }
+      return res(200, sessionBody(9));
+    });
+    const restoring = session.restore();
+    await vi.waitFor(() => expect(releaseRefresh).not.toBe(undefined));
+    await new Promise((r) => setTimeout(r, 0));
+    await session.login({ identifier: 'max', password: 'pw' });
+    releaseRefresh(res(200, sessionBody(1)));
+    await restoring;
+
+    expect(mem.peek()).toBe('refresh-9');
+    expect(session.isSignedIn()).toBe(true);
+    await expect(session.getAccessToken()).resolves.toBe('access-9');
   });
 });

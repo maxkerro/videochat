@@ -8,6 +8,7 @@ import {
   type MobileAuthSession,
 } from '@videochat/shared';
 import { z } from 'zod';
+import { isNetworkError } from '../lib/errors';
 import type { TokenStorage } from './storage';
 
 type User = MobileAuthSession['user'];
@@ -19,9 +20,14 @@ export class NotSignedInError extends Error {
   }
 }
 
-/** `offline`: a refresh token is stored but the server couldn't be reached, so we don't know
- *  whether the session is still valid. The user stays signed in; the caller can retry. */
-export type RestoreResult = 'signedIn' | 'signedOut' | 'offline';
+/** `offline`: a refresh token is stored but the network was unreachable, so we don't know whether
+ *  the session is still valid. `error`: the server answered but not usably (5xx, or a response
+ *  the app can't parse). In both cases the token is kept and the caller can retry or log out. */
+export type RestoreResult =
+  | { status: 'signedIn' }
+  | { status: 'signedOut' }
+  | { status: 'offline' }
+  | { status: 'error'; error: unknown };
 
 /** Refresh a little before the access token actually expires. */
 const REFRESH_MARGIN_MS = 30_000;
@@ -56,6 +62,10 @@ export function createSessionManager(options: SessionManagerOptions) {
   let expiresAt = 0;
   let user: User | null = null;
   let inFlight: Promise<MobileAuthSession> | null = null;
+  // Bumped whenever the session is replaced or ended (login, logout, rejected token). A refresh
+  // that started under an older generation must not write its result back: it would resurrect a
+  // session the user just logged out of, or overwrite a newer login.
+  let generation = 0;
   const listeners = new Set<() => void>();
   const signedOutListeners = new Set<() => void | Promise<void>>();
 
@@ -69,6 +79,7 @@ export function createSessionManager(options: SessionManagerOptions) {
   }
 
   async function clearLocal() {
+    generation += 1;
     accessToken = null;
     expiresAt = 0;
     user = null;
@@ -79,6 +90,7 @@ export function createSessionManager(options: SessionManagerOptions) {
 
   function refreshNow(): Promise<MobileAuthSession> {
     inFlight ??= (async () => {
+      const startedAt = generation;
       const stored = await storage.getRefreshToken();
       if (!stored) {
         await clearLocal();
@@ -88,13 +100,17 @@ export function createSessionManager(options: SessionManagerOptions) {
         const session = await authApi.apiPost('/auth/refresh', mobileAuthSessionSchema, {
           refreshToken: stored,
         });
+        // The session ended or was replaced while this was in flight: drop the result.
+        if (generation !== startedAt) throw new NotSignedInError();
         // Persist the rotated token before anything else: the old one is already dead.
         await storage.setRefreshToken(session.refreshToken);
         apply(session);
         return session;
       } catch (e) {
+        if (e instanceof NotSignedInError) throw e;
         if (e instanceof ApiError && (e.status === 401 || e.status === 403)) {
-          await clearLocal();
+          // Only end the session this refresh belongs to, never a newer login.
+          if (generation === startedAt) await clearLocal();
           throw new NotSignedInError();
         }
         throw e; // offline, timeout, 5xx: keep the token and let the caller decide
@@ -140,6 +156,7 @@ export function createSessionManager(options: SessionManagerOptions) {
 
     async login(input: LoginInput): Promise<MobileAuthSession> {
       const session = await authApi.apiPost('/auth/login', mobileAuthSessionSchema, input);
+      generation += 1;
       await storage.setRefreshToken(session.refreshToken);
       apply(session);
       return session;
@@ -147,17 +164,20 @@ export function createSessionManager(options: SessionManagerOptions) {
 
     /** On app start: turn a stored refresh token back into a session. */
     async restore(): Promise<RestoreResult> {
-      if (!(await storage.getRefreshToken())) return 'signedOut';
+      if (!(await storage.getRefreshToken())) return { status: 'signedOut' };
       try {
         await refreshNow();
-        return 'signedIn';
+        return { status: 'signedIn' };
       } catch (e) {
-        if (e instanceof NotSignedInError) return 'signedOut';
-        return 'offline';
+        if (e instanceof NotSignedInError) return { status: 'signedOut' };
+        return isNetworkError(e) ? { status: 'offline' } : { status: 'error', error: e };
       }
     },
 
     async logout(): Promise<void> {
+      // Let a refresh that is already in flight finish first, so we revoke the token it rotated
+      // to (not the dead one) and it can't write a session back after we've cleared it.
+      await inFlight?.catch(() => undefined);
       const stored = await storage.getRefreshToken();
       if (stored) {
         // Best effort: even if the server can't be reached, the local session still ends.

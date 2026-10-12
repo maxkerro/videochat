@@ -174,3 +174,12 @@ revocation are the same code path as for cookies. The app stores that token only
 (iOS Keychain / Android Keystore via `expo-secure-store`, `AFTER_FIRST_UNLOCK_THIS_DEVICE_ONLY`) and
 keeps the access token in memory. Web never sends the header, and a cross-origin page cannot add it
 (CORS only allows our own origins), so the cookie flow and its CSRF mitigations are unchanged.
+
+Accepted trade-off: if `/auth/refresh` rotates the token on the server but the response never
+reaches the phone (timeout, cell hand-off, app killed before the new token is stored), the app
+still holds the previous token. Its next refresh then trips reuse detection and the session is
+revoked, so the person has to log in again. This is more likely on mobile than on web. We accept
+it rather than add a grace window for the previous token, which would weaken theft detection.
+Error reports (Sentry) drop request bodies, cookies and the Authorization header, and the request
+logger only records method and path, so the refresh token never reaches either. Body-mode login
+and refresh responses are sent with `Cache-Control: no-store`.
