@@ -185,7 +185,7 @@ directions.
   video, earpiece for audio, and a connected Bluetooth or wired headset beats both. A headset that
   connects mid-call takes over at once (no pick needed); when it goes away the sound returns to
   the phone. The route button in the call controls swaps speaker and phone with one tap, and opens
-  a row of choices when Bluetooth or a headset is also available. An explicit pick is kept until it
+  a row of choices when Bluetooth or a headset is also available. The system call library can only force the speaker; picking the phone while a headset is connected may not move the sound, so the app reads the real route back shortly after a pick. An explicit pick is kept until it
   becomes impossible. Android 12+ needs `BLUETOOTH_CONNECT` to see a paired headset; the app asks
   when a call is set up and works without it. On iOS the system routes to headsets itself, so only
   speaker vs. phone is offered.
@@ -228,7 +228,7 @@ logic, tested with a fake) and `nativeCallUi.ts` (the library).
   microphone alive in the background (audio-only calls).
 - **Stale answers:** if the caller gave up before a cold-started phone's socket came up, the late
   `call.accept` is answered by the server with `call.ended` (it replies to the losing device), so the
-  call screen closes. Hanging up while still waiting for the socket sends `call.decline`.
+  call screen closes. Hanging up while still waiting for the socket declines the call, and the decline is sent as soon as the socket is up.
 - **Answer failures:** if the microphone cannot be opened for a call answered through the system
   (lock screen, or the in-app Answer button, which goes through the system), the call is declined.
 - **Push content:** the push carries the caller's name and photo and the conversation id

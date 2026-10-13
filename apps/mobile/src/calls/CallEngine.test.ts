@@ -116,7 +116,9 @@ function setUp(overrides: Partial<CallEngineDeps> = {}) {
   const sent: { type: string; payload: Record<string, unknown> }[] = [];
   const pcs: FakePeerConnection[] = [];
   const deps: CallEngineDeps = {
-    send: (type, payload) => sent.push({ type, payload: payload as Record<string, unknown> }),
+    send: (type, payload) => {
+      sent.push({ type, payload: payload as Record<string, unknown> });
+    },
     getConnectionId: () => 'my-conn',
     getIceServers: async () => [{ urls: 'stun:stun.test' }],
     getUserMedia: async () => new FakeStream([new FakeTrack('video')]) as unknown as RtcStream,
@@ -345,6 +347,30 @@ describe('CallEngine (CHAT-042)', () => {
         expect(lastSent(CALL_EVENTS.decline)?.payload).toEqual({ callId: CALL_ID });
         expect(lastSent(CALL_EVENTS.end)).toBeUndefined();
         expect(engine.getSnapshot()?.endCause).toBe('declined');
+      });
+
+      it('still declines once the socket is up when it was down at hang-up', async () => {
+        let open!: (ok: boolean) => void;
+        const waiting = new Promise<boolean>((r) => (open = r));
+        let up = false;
+        const sent: string[] = [];
+        const { engine } = setUp({
+          waitForSignalling: () => waiting,
+          send: (type) => {
+            if (!up) return false;
+            sent.push(type);
+            return true;
+          },
+        });
+        engine.presentIncoming(incoming as never);
+        const accepting = engine.accept(avStream());
+        engine.hangUp();
+        expect(sent).toEqual([]);
+        up = true;
+        open(true);
+        await accepting;
+        await flush();
+        expect(sent).toEqual([CALL_EVENTS.decline]);
       });
 
       it('a timed-out ring ends locally without telling the server "declined"', () => {

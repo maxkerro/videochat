@@ -194,6 +194,17 @@ describe('AudioSession', () => {
     expect(s.getSnapshot().route).toBe('speaker');
   });
 
+  it('shows where the sound really is when the system did not move it', () => {
+    const f = fakeDriver();
+    const s = new AudioSession(f.driver);
+    s.begin('audio');
+    f.devices(['earpiece', 'speaker', 'bluetooth'], 'bluetooth');
+    s.choose('earpiece');
+    expect(s.getSnapshot().route).toBe('earpiece');
+    f.devices(['earpiece', 'speaker', 'bluetooth'], 'bluetooth');
+    expect(s.getSnapshot().route).toBe('bluetooth');
+  });
+
   it('follows the default when video starts and nothing was picked', () => {
     const f = fakeDriver();
     const s = new AudioSession(f.driver);

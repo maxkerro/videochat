@@ -7,11 +7,15 @@ import {
 import { PermissionsAndroid, Platform } from 'react-native';
 import { RouteTracker, type AudioDriver } from './audioRoute';
 
+const ROUTE_READBACK_MS = 400;
+
 /**
  * CHAT-061/062: the audio driver on top of the native call library, which owns the system call
  * audio (CallKit / Telecom). It routes to a connected headset or Bluetooth device by itself;
  * what we add is the loudspeaker switch, and we report which route is in use.
  */
+let refresh: (() => void) | null = null;
+
 export const nativeAudioDriver: AudioDriver = {
   start(media) {
     // iOS: the WebRTC audio session is driven by CallKit, not by WebRTC itself.
@@ -24,16 +28,26 @@ export const nativeAudioDriver: AudioDriver = {
     // The speaker is the only route we can force; every other choice is "the system's own pick"
     // (earpiece, or a headset / Bluetooth device when one is connected).
     setAudioSessionPortOverride(route === 'speaker');
+    // The system may not have done what was asked (earpiece while a headset is connected): read
+    // back where the sound really is, so the route button never claims otherwise.
+    setTimeout(() => refresh?.(), ROUTE_READBACK_MS);
   },
   watch(listener) {
     const tracker = new RouteTracker();
-    try {
-      listener(tracker.update(getAudioSession()));
-    } catch {
-      // No call session yet: the first route event reports it.
-    }
+    const read = () => {
+      try {
+        listener(tracker.update(getAudioSession()));
+      } catch {
+        // No call session yet: the first route event reports it.
+      }
+    };
+    read();
+    refresh = read;
     const subscription = addAudioRouteChangedListener((event) => listener(tracker.update(event)));
-    return () => subscription.remove();
+    return () => {
+      refresh = null;
+      subscription.remove();
+    };
   },
 };
 

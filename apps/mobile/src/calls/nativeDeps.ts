@@ -17,9 +17,7 @@ export const SIGNALLING_WAIT_MS = 20_000;
  */
 export function nativeCallDeps(): CallEngineDeps {
   return {
-    send: (type, payload) => {
-      sendRealtimeEvent(type, payload);
-    },
+    send: (type, payload) => sendRealtimeEvent(type, payload),
     getConnectionId,
     getIceServers: () => fetchIceServers().then((r) => r.iceServers),
     getUserMedia: (constraints) =>
