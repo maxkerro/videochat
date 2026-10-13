@@ -242,8 +242,21 @@ export class CallEngine {
 
   decline(): void {
     if (!this.snap || this.snap.phase !== 'incoming') return;
-    this.deps.send(CALL_EVENTS.decline, { callId: this.snap.callId });
+    this.sendDecline(this.snap.callId);
     this.finish('declined');
+  }
+
+  /**
+   * A decline must reach the server, or the caller rings on until the timeout. On a phone started
+   * by the call (CHAT-061) the socket is often not up yet: then it goes out once it is.
+   */
+  private sendDecline(callId: string): void {
+    const payload = { callId };
+    if (this.deps.send(CALL_EVENTS.decline, payload) !== false || !this.deps.waitForSignalling)
+      return;
+    void this.deps.waitForSignalling().then((up) => {
+      if (up) this.deps.send(CALL_EVENTS.decline, payload);
+    });
   }
 
   /** Hangs up whatever state the call is in. */
@@ -253,14 +266,7 @@ export class CallEngine {
     if (snap.phase === 'incoming') return this.decline();
     if (snap.direction === 'incoming' && snap.phase === 'connecting' && !this.acceptSent) {
       // Hung up while still waiting for the socket to answer: it is a decline, not an end.
-      const decline = { callId: snap.callId };
-      // The socket is usually still down here (that is what we were waiting for): once it is up,
-      // tell the server so the caller stops ringing.
-      if (this.deps.send(CALL_EVENTS.decline, decline) === false && this.deps.waitForSignalling) {
-        void this.deps.waitForSignalling().then((up) => {
-          if (up) this.deps.send(CALL_EVENTS.decline, decline);
-        });
-      }
+      this.sendDecline(snap.callId);
       return this.finish('declined');
     }
     if (snap.phase === 'outgoing') {

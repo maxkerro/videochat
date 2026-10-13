@@ -17,7 +17,9 @@ export const SIGNALLING_WAIT_MS = 20_000;
  */
 export function nativeCallDeps(): CallEngineDeps {
   return {
-    send: (type, payload) => sendRealtimeEvent(type, payload),
+    // Only once the server has registered the socket (`realtime.ready`): before that it drops
+    // every event, so "sent" would be a lie and a decline would be lost.
+    send: (type, payload) => getConnectionId() !== null && sendRealtimeEvent(type, payload),
     getConnectionId,
     getIceServers: () => fetchIceServers().then((r) => r.iceServers),
     getUserMedia: (constraints) =>

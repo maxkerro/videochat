@@ -373,6 +373,39 @@ describe('CallEngine (CHAT-042)', () => {
         expect(sent).toEqual([CALL_EVENTS.decline]);
       });
 
+      it('a decline from the ringing screen also waits for the socket when it is down', async () => {
+        let open!: (ok: boolean) => void;
+        const waiting = new Promise<boolean>((r) => (open = r));
+        let up = false;
+        const sent: string[] = [];
+        const { engine } = setUp({
+          getConnectionId: () => null,
+          waitForSignalling: () => waiting,
+          send: (type) => {
+            if (!up) return false;
+            sent.push(type);
+            return true;
+          },
+        });
+        engine.presentIncoming(incoming as never);
+        engine.decline();
+        expect(engine.getSnapshot()?.endCause).toBe('declined');
+        expect(sent).toEqual([]);
+        up = true;
+        open(true);
+        await flush();
+        expect(sent).toEqual([CALL_EVENTS.decline]);
+      });
+
+      it('does not send the decline twice when the socket was up', () => {
+        const waitForSignalling = vi.fn(async () => true);
+        const { engine, sent } = setUp({ waitForSignalling });
+        engine.presentIncoming(incoming as never);
+        engine.decline();
+        expect(sent.filter((m) => m.type === CALL_EVENTS.decline)).toHaveLength(1);
+        expect(waitForSignalling).not.toHaveBeenCalled();
+      });
+
       it('a timed-out ring ends locally without telling the server "declined"', () => {
         const { engine, lastSent } = setUp();
         engine.presentIncoming(incoming as never);

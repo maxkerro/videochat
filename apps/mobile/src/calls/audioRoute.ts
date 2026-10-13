@@ -40,7 +40,9 @@ interface NativeRouteInfo {
  * Remembers what the phone can route to. Android only reports the route in use (not the list),
  * so a route seen earlier is kept: the earpiece stays on offer while the speaker is in use, and a
  * headset stays on offer until the system falls back to the earpiece (which it only does once the
- * headset is gone, because it prefers a connected one over the earpiece).
+ * headset is gone, because it prefers a connected one over the earpiece). Known gap: a headset that
+ * disconnects while the speaker is forced stays on offer until the route next changes; picking it
+ * then just falls back to the system's choice, and the read-back shows the real route.
  */
 export class RouteTracker {
   private readonly seen = new Set<AudioRoute>();

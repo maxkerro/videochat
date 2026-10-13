@@ -12,6 +12,7 @@ vi.mock('../db/calls.js', () => ({
   findOpenCallForUser: vi.fn(),
   insertCall: vi.fn(),
   endCall: vi.fn(),
+  getCall: vi.fn(),
 }));
 vi.mock('../db/blocks.js', () => ({ isBlocked: vi.fn() }));
 vi.mock('../db/users.js', () => ({
@@ -23,6 +24,7 @@ import {
   endExpiredCalls,
   findDirectPeer,
   findOpenCallForUser,
+  getCall,
   insertCall,
 } from '../db/calls.js';
 
@@ -214,5 +216,28 @@ describe('CallSignalingService invite -> incoming-call listener (CHAT-061)', () 
   it('does not wait for a slow push before returning', async () => {
     listener.mockReturnValue(new Promise(() => undefined));
     await expect(invite()).resolves.toBeUndefined();
+  });
+});
+
+describe('CallSignalingService: a late decline (CHAT-061)', () => {
+  it('leaves a call that already rang out as missed', async () => {
+    vi.clearAllMocks();
+    const service = new CallSignalingService(
+      {} as Database,
+      { CALL_RING_TIMEOUT_SEC: 30, CALL_RECONNECT_GRACE_SEC: 20 } as Env,
+      { publishToUser: vi.fn() } as unknown as RealtimeService,
+      {} as S3Service,
+    );
+    vi.mocked(getCall).mockResolvedValue({ ...expiredCall('a'), endReason: 'missed' });
+    await service.handle(
+      { userId: 'callee', connectionId: 'c2' } as never,
+      {
+        type: 'call.decline',
+        id: 'e',
+        ts: new Date().toISOString(),
+        payload: { callId: '11111111-1111-4111-8111-111111111111' },
+      } as never,
+    );
+    expect(endCall).not.toHaveBeenCalled();
   });
 });

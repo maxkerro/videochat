@@ -14,6 +14,8 @@ const ROUTE_READBACK_MS = 400;
  * audio (CallKit / Telecom). It routes to a connected headset or Bluetooth device by itself;
  * what we add is the loudspeaker switch, and we report which route is in use.
  */
+/** Re-reads the route of the one call there can be. The app has a single AudioSession (one call
+ *  at a time), so a single module-level hook is enough; a second watcher would replace it. */
 let refresh: (() => void) | null = null;
 
 export const nativeAudioDriver: AudioDriver = {

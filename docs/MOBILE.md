@@ -228,7 +228,7 @@ logic, tested with a fake) and `nativeCallUi.ts` (the library).
   microphone alive in the background (audio-only calls).
 - **Stale answers:** if the caller gave up before a cold-started phone's socket came up, the late
   `call.accept` is answered by the server with `call.ended` (it replies to the losing device), so the
-  call screen closes. Hanging up while still waiting for the socket declines the call, and the decline is sent as soon as the socket is up.
+  call screen closes. Hanging up while still waiting for the socket declines the call. Any decline (lock screen, in-app, or a failed answer) made before the socket is registered is sent as soon as it is (`realtime.ready`); before that the server ignores events, so the app does not count them as sent.
 - **Answer failures:** if the microphone cannot be opened for a call answered through the system
   (lock screen, or the in-app Answer button, which goes through the system), the call is declined.
 - **Push content:** the push carries the caller's name and photo and the conversation id
@@ -241,7 +241,7 @@ logic, tested with a fake) and `nativeCallUi.ts` (the library).
   (Android `minSdkVersion` 26). Still version `0.5.0` (unreleased).
 - **Known limits:** (0) **No proximity sensor:** the previous audio manager turned the screen off
   against the ear on the earpiece; the native call library does not, so on an audio call a cheek can
-  press the screen (mute / hang up). To do: a proximity wake lock while the route is the earpiece.
+  press the screen (mute / hang up). Tracked as CHAT-083 (a proximity wake lock while the route is the earpiece).
   (1) Declining from the lock screen while the app is _killed_ only reaches the
   server once the app is running; otherwise the caller keeps ringing until the 30 s timeout. (2) A
   caller cancelling while the phone is ringing with the app killed does not dismiss the system
