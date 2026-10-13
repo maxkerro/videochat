@@ -10,6 +10,7 @@ import {
 } from 'react';
 import type { ReactNode } from 'react';
 import { session } from '../lib/api';
+import { unregisterToken } from '../push/registration';
 import { describeError } from '../ui/describeError';
 
 type User = NonNullable<ReturnType<typeof session.getUser>>;
@@ -74,6 +75,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       logout: async () => {
         // A Retry still in flight must not bring the offline screen back after this.
         restoreSeq.current++;
+        // While the session can still authenticate: stop pushing this account to this phone.
+        await unregisterToken();
         await session.logout();
         setRestored({ status: 'done' });
       },

@@ -58,6 +58,29 @@ management, `new` new chat or group, `profile`, `settings`.
 - **Native modules:** `expo-sqlite`, `expo-image-picker`, `expo-document-picker` and NetInfo are
   native, so this version (`0.2.0`) needs a new APK; an OTA update cannot reach the old binary.
 
+## Realtime and push (CHAT-054/055)
+
+**Socket.** While the person is signed in, online and in the app, one WebSocket (`/realtime`, the
+same endpoint as the web) delivers new, edited and deleted messages, reactions, read receipts,
+typing and presence straight into the caches the screens read (`src/realtime/events.ts`). It is
+closed 30 s after the app goes to the background and reopened on return, and it follows the network:
+airplane mode closes it, coming back reconnects it. "Open" means the server confirmed the
+registration (`realtime.ready`); only then do screens drop to slow polling (60 s inbox, 30 s open
+chat) as a safety net. On every reconnect and every return to the app the inbox, open chats and
+presence are re-read, which fills any gap. An event that would leave a hole in the loaded messages
+triggers a refetch instead of being shown. Events from an earlier session are dropped.
+
+**Typing and "viewing".** The composer sends a typing signal at most every 3 s. The open chat tells
+the server it is being viewed so no notification is sent for it.
+
+**Push.** After sign-in the app asks for notification permission, registers its FCM token with
+`POST /push/devices`, re-registers if the token rotates, and removes it on sign-out. A tap on a
+notification opens `/c/<id>` (only a well-formed conversation id is accepted), including when the
+tap launched the app. The icon badge shows the unread total (muted chats excluded; whether it shows
+depends on the phone's launcher). Server setup is in `DEPLOYMENT.md`. Push needs `google-services.json`
+in `apps/mobile/` and a native build (version `0.3.0`); iOS needs an Apple developer account and is
+not wired yet.
+
 ## Running it
 
 It uses a **development build**, not Expo Go: WebRTC and CallKit (M5) need native modules.

@@ -14,7 +14,7 @@ const bestEffort = (p: Promise<unknown>) => void p.catch(() => undefined);
 
 /** The inbox. Shows the on-device copy at once, then the server's list. */
 export function useConversations(): UseQueryResult<ConversationSummary[]> {
-  const refetchInterval = useLiveInterval(15_000);
+  const refetchInterval = useLiveInterval(15_000, 60_000);
   return useQuery({
     queryKey: keys.conversations,
     refetchInterval,
@@ -31,7 +31,7 @@ export function useConversations(): UseQueryResult<ConversationSummary[]> {
 
 /** One conversation, refreshed often while it is open (the peer's read position, the title ...). */
 export function useConversation(id: string): UseQueryResult<ConversationSummary> {
-  const refetchInterval = useLiveInterval(6_000);
+  const refetchInterval = useLiveInterval(6_000, 30_000);
   return useQuery({
     queryKey: keys.conversation(id),
     refetchInterval,
@@ -67,11 +67,12 @@ const HYDRATE_COUNT = 200;
 /**
  * A conversation's messages: the on-device copy appears immediately (even offline), the newest
  * server page replaces it, and while the screen is open the newest page is re-read every few
- * seconds so new messages, edits, deletes and reactions show up (CHAT-054 swaps this for the socket).
+ * seconds so new messages, edits, deletes and reactions show up -- or, while the live socket is
+ * connected (CHAT-054), the socket delivers them and this only runs as a slow safety net.
  */
 export function useMessages(id: string): MessagesView {
   const key = keys.messages(id);
-  const refetchInterval = useLiveInterval(6_000);
+  const refetchInterval = useLiveInterval(6_000, 30_000);
   const [loadingOlder, setLoadingOlder] = useState(false);
   const busy = useRef(false);
 

@@ -190,3 +190,14 @@ export const fetchBlockedUsers = () => apiGet('/users/blocked', blockedUsersList
 const messageResponse = z.object({ message: z.string() });
 export const blockUser = (userId: string) => apiPost(`/users/${userId}/block`, messageResponse);
 export const unblockUser = (userId: string) => apiDelete(`/users/${userId}/block`, messageResponse);
+
+// Push notifications (CHAT-055) --------------------------------------------------------------
+
+export const registerPushDevice = (platform: 'android' | 'ios', token: string) =>
+  apiPost('/push/devices', z.undefined(), { platform, token });
+
+export const unregisterPushDevice = (token: string) =>
+  apiDelete('/push/devices', z.undefined(), {
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ token }),
+  });

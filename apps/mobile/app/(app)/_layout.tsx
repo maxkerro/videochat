@@ -3,6 +3,8 @@ import { useEffect } from 'react';
 import { Appearance } from 'react-native';
 import { useAuth } from '../../src/auth/AuthContext';
 import { DataProvider } from '../../src/data/DataProvider';
+import { PushProvider } from '../../src/push/PushProvider';
+import { RealtimeProvider } from '../../src/realtime/RealtimeProvider';
 import { useTheme } from '../../src/ui/theme';
 
 function ThemedStack() {
@@ -37,7 +39,11 @@ function ThemedStack() {
 export default function AppLayout() {
   return (
     <DataProvider>
-      <ThemedStack />
+      <RealtimeProvider>
+        <PushProvider>
+          <ThemedStack />
+        </PushProvider>
+      </RealtimeProvider>
     </DataProvider>
   );
 }

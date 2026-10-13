@@ -2,6 +2,7 @@ import { useIsFocused } from 'expo-router';
 import NetInfo from '@react-native-community/netinfo';
 import { useEffect, useState } from 'react';
 import { AppState } from 'react-native';
+import { useRealtimeStatus } from '../realtime/status';
 
 /** True while the app is in the foreground. */
 export function useAppActive(): boolean {
@@ -15,12 +16,14 @@ export function useAppActive(): boolean {
 
 /**
  * Polling interval for a screen's queries: `ms` while the screen is showing and the app is in the
- * foreground, off otherwise. CHAT-054 replaces this polling with the realtime socket.
+ * foreground, off otherwise. While the live socket is connected (CHAT-054) the socket delivers the
+ * updates, so polling only stays as a slow safety net (`whileLiveMs`).
  */
-export function useLiveInterval(ms: number): number | false {
+export function useLiveInterval(ms: number, whileLiveMs: number = ms): number | false {
   const focused = useIsFocused();
   const active = useAppActive();
-  return focused && active ? ms : false;
+  const live = useRealtimeStatus() === 'open';
+  return focused && active ? (live ? whileLiveMs : ms) : false;
 }
 
 /** Whether the device reports a usable connection (unknown counts as online). */

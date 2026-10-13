@@ -9,3 +9,8 @@ declare module 'node:sqlite' {
     };
   }
 }
+
+/** app.config.ts runs in Node (at build time) and checks whether google-services.json exists. */
+declare module 'node:fs' {
+  export function existsSync(path: string): boolean;
+}

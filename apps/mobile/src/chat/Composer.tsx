@@ -10,6 +10,8 @@ export interface ComposerProps {
   uploading: { name: string; progress: number } | null;
   uploadError: string | null;
   onSend: (text: string) => void;
+  /** Called on every change of the text, for the "typing…" signal. */
+  onTyping?: () => void;
   onAttach: () => void;
   onCancelContext: () => void;
 }
@@ -25,6 +27,7 @@ export function Composer({
   uploading,
   uploadError,
   onSend,
+  onTyping,
   onAttach,
   onCancelContext,
 }: ComposerProps) {
@@ -112,7 +115,10 @@ export function Composer({
         <TextInput
           accessibilityLabel="Message"
           value={text}
-          onChangeText={setText}
+          onChangeText={(value) => {
+            setText(value);
+            if (!editing && value.trim().length > 0) onTyping?.();
+          }}
           placeholder="Message"
           placeholderTextColor={t.muted}
           multiline

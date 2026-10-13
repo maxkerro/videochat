@@ -1,3 +1,4 @@
+import { existsSync } from 'node:fs';
 import type { ConfigContext, ExpoConfig } from 'expo/config';
 
 /**
@@ -39,6 +40,11 @@ function variantFromEnv(value: string | undefined): Variant {
   return value === 'staging' || value === 'production' ? value : 'development';
 }
 
+/** `GOOGLE_SERVICES_JSON` (an EAS file variable) or `google-services.json` beside this file. */
+const googleServicesFile =
+  process.env.GOOGLE_SERVICES_JSON ??
+  (existsSync('./google-services.json') ? './google-services.json' : undefined);
+
 export default ({ config }: ConfigContext): ExpoConfig => {
   const variant = variantFromEnv(process.env.APP_VARIANT);
   const v = VARIANTS[variant];
@@ -46,12 +52,17 @@ export default ({ config }: ConfigContext): ExpoConfig => {
     ...config,
     name: v.name,
     slug: 'videochat',
-    version: '0.2.0',
+    version: '0.3.0',
     orientation: 'portrait',
     scheme: v.scheme,
     userInterfaceStyle: 'automatic',
     ios: { bundleIdentifier: v.id, supportsTablet: false },
-    android: { package: v.id },
+    android: {
+      package: v.id,
+      // Firebase Cloud Messaging (CHAT-055): the file from the Firebase console, holding one entry
+      // per app id above. Without it the build still works, just without push on Android.
+      ...(googleServicesFile ? { googleServicesFile } : {}),
+    },
     plugins: [
       'expo-router',
       'expo-secure-store',
@@ -61,6 +72,7 @@ export default ({ config }: ConfigContext): ExpoConfig => {
         { photosPermission: 'Chat needs access to your photos so you can send them.' },
       ],
       'expo-document-picker',
+      'expo-notifications',
     ],
     // EAS Update (the staging/production build channels need expo-updates). With the
     // `appVersion` runtime policy an over-the-air update only reaches binaries with the same

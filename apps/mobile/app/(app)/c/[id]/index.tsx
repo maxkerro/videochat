@@ -32,6 +32,9 @@ import {
   retryOutboxMessage,
 } from '../../../../src/data/outboxRunner';
 import { useAppActive, useIsOnline } from '../../../../src/data/useLive';
+import { useTypingSender, useViewingReporter } from '../../../../src/realtime/hooks';
+import { presenceLabel, usePresence } from '../../../../src/realtime/presence';
+import { useTypingLabel } from '../../../../src/realtime/typing';
 import { Banner } from '../../../../src/ui/Banner';
 import { describeError } from '../../../../src/ui/describeError';
 import { canDeleteMessage, canEditMessage, conversationTitle } from '../../../../src/ui/format';
@@ -58,6 +61,12 @@ export default function ConversationScreen() {
   const members = useMembers(id, isGroup);
   const online = useIsOnline();
   const appActive = useAppActive();
+  useViewingReporter(id);
+  const sendTyping = useTypingSender(id);
+  const typing = useTypingLabel(id);
+  const peerId = !isGroup ? (conversation.data?.peer?.id ?? null) : null;
+  const presence = usePresence(peerId ? [peerId] : []);
+  const subtitle = typing ?? (peerId ? presenceLabel(presence.get(peerId)) : null);
 
   const [replyTo, setReplyTo] = useState<Message | null>(null);
   const [editing, setEditing] = useState<Message | null>(null);
@@ -262,6 +271,15 @@ export default function ConversationScreen() {
           <Text numberOfLines={1} style={[styles.title, { color: t.text }]}>
             {title}
           </Text>
+          {subtitle ? (
+            <Text
+              numberOfLines={1}
+              accessibilityLiveRegion="polite"
+              style={[styles.subtitle, { color: typing ? t.accent : t.muted }]}
+            >
+              {subtitle}
+            </Text>
+          ) : null}
         </Pressable>
       </View>
       {!online ? (
@@ -309,6 +327,7 @@ export default function ConversationScreen() {
             uploading={uploading}
             uploadError={uploadError}
             onSend={onSend}
+            onTyping={sendTyping}
             onAttach={onAttach}
             onCancelContext={() => {
               setReplyTo(null);
@@ -337,8 +356,9 @@ const styles = StyleSheet.create({
     minHeight: 52,
   },
   back: { width: 48, height: 52, alignItems: 'center', justifyContent: 'center' },
-  titleWrap: { flex: 1, justifyContent: 'center', height: 52 },
+  titleWrap: { flex: 1, justifyContent: 'center', minHeight: 52 },
   title: { fontSize: 17, fontWeight: '700' },
+  subtitle: { fontSize: 12 },
   listContent: { paddingVertical: 8 },
   day: { alignSelf: 'center', fontSize: 12, marginVertical: 8 },
   older: { padding: 12 },

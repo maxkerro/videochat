@@ -127,3 +127,26 @@ How it behaves:
   (the conversation menu's "Mute notifications").
 
 The service worker is served from `/sw.js` (apps/web/public).
+
+## Push notifications on Android (CHAT-055)
+
+Phones get pushes through Firebase Cloud Messaging (FCM). One-time setup:
+
+1. In the [Firebase console](https://console.firebase.google.com) create a project (Analytics is not
+   needed). Add an **Android app** for each variant you install, using its package name:
+   `app.videochat.chat.staging` (staging), `app.videochat.chat` (production), `app.videochat.chat.dev`.
+2. Download **`google-services.json`** (it contains every app you added) into `apps/mobile/` and commit
+   it. It is not a secret; it only names the project, and Firebase restricts it to the registered
+   package names.
+3. Project settings -> **Service accounts** -> _Generate new private key_. Paste the whole JSON file as
+   the value of **`FCM_SERVICE_ACCOUNT_JSON`** on `videochat-api` in Render (this one _is_ a secret:
+   never commit it). Without it the API simply sends no phone pushes.
+4. Build a new APK (`apps/mobile/apk_update.sh`): the push module is native, so an over-the-air update
+   cannot add it. The version is `0.3.0`.
+
+How it behaves: the app asks for notification permission after sign-in and registers its FCM token
+(`POST /push/devices`); sign-out removes it (`DELETE /push/devices`). The same rules as the web apply
+(no push for muted chats, for the conversation you are looking at, or when the person turned
+notifications off); tokens FCM reports as unregistered are deleted. A new message for a conversation
+replaces its earlier notification, tapping one opens that conversation, and opening a conversation
+clears its notifications.
