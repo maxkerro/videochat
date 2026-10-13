@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "896483278245",
+    "project_id": "video-chat-app-claude",
+    "storage_bucket": "video-chat-app-claude.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:896483278245:android:6dc87e9463954493f77c4c",
+        "android_client_info": {
+          "package_name": "app.videochat.chat.staging"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyBWLEGa477f7sJNdS54JRiE2Bpoy7hOd2A"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}
