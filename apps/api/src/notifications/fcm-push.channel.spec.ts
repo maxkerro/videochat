@@ -53,6 +53,7 @@ describe('buildFcmMessage', () => {
 describe('buildFcmCallMessage', () => {
   const call = {
     callId: '3f0c9c7e-2b2c-4d5a-9f55-0d3b8f1a2b3c',
+    conversationId: '9a1b2c3d-0000-4000-8000-000000000001',
     hasVideo: true,
     startedAt: '2026-10-13T10:00:00.000Z',
     caller: { id: 'u1', displayName: 'Anna', avatarUrl: null },
@@ -68,9 +69,12 @@ describe('buildFcmCallMessage', () => {
       hasVideo: true,
       startedAt: call.startedAt,
       caller: call.caller,
+      metadata: { conversationId: call.conversationId },
     });
     // A `notification` block would show a plain notification instead of waking the app.
-    expect(message).not.toHaveProperty('message.android.notification');
+    const whole = buildFcmCallMessage('tok', call);
+    expect(whole.message).not.toHaveProperty('notification');
+    expect(message.android).not.toHaveProperty('notification');
     expect(message.android.priority).toBe('HIGH');
     expect(message.android.ttl).toBe('30s');
   });

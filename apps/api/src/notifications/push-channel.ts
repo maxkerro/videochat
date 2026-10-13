@@ -20,6 +20,8 @@ export interface PushChannel {
  *  `IncomingCallEvent`). `callId` doubles as the event id and the server call id. */
 export interface IncomingCallPush {
   callId: string;
+  /** The phone needs it to open the right conversation when it is started by the push. */
+  conversationId: string;
   hasVideo: boolean;
   startedAt: string;
   caller: { id: string; displayName: string; avatarUrl: string | null };

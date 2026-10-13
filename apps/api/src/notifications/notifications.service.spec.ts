@@ -86,6 +86,7 @@ describe('NotificationsService', () => {
   describe('notifyIncomingCall', () => {
     const call = {
       callId: 'c1',
+      conversationId: 'conv',
       hasVideo: false,
       startedAt: '2026-10-13T10:00:00.000Z',
       caller: { id: 'anna', displayName: 'Anna', avatarUrl: null },

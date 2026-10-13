@@ -130,6 +130,8 @@ export class CallBridge {
   private readonly endHandled = new Set<string>();
   private readonly localEnd = new Set<string>();
   private readonly lastMuted = new Map<string, boolean>();
+  /** What the person asked for when answering in the app ("audio only" on a video call). */
+  private readonly requestedMedia = new Map<string, CallMedia>();
   private stopListening: (() => void) | null = null;
   private answerer: (media: CallMedia) => Promise<boolean> = async () => false;
 
@@ -166,12 +168,14 @@ export class CallBridge {
 
   /** Answer through the system so it knows the call was taken; the answer event then comes back
    *  here. False if the system does not have this call (answer directly then). */
-  requestAnswer(): boolean {
+  requestAnswer(media?: CallMedia): boolean {
     const snap = this.deps.engine.getSnapshot();
     const osId = snap ? this.osIds.get(snap.callId) : undefined;
     if (!snap || !osId || snap.phase !== 'incoming') return false;
+    const kind = media ?? snap.media;
+    this.requestedMedia.set(snap.callId, kind);
     // If the system will not take the answer, answer directly.
-    void this.deps.api.answer(osId).catch(() => this.answerer(snap.media));
+    void this.deps.api.answer(osId).catch(() => this.answerer(kind));
     return true;
   }
 
@@ -279,6 +283,7 @@ export class CallBridge {
     this.endHandled.delete(id);
     this.localEnd.delete(id);
     this.lastMuted.delete(id);
+    this.requestedMedia.delete(id);
   }
 
   // --- system -> engine ---------------------------------------------------------------------
@@ -302,8 +307,9 @@ export class CallBridge {
     if (session.origin !== 'incoming') return;
     const info = incomingInfoOf(session);
     if (info && this.deps.engine.getSnapshot() === null) {
-      const startedAt = Date.parse(session.incomingCallEvent?.startedAt ?? '');
-      this.ringStart.set(info.callId, Number.isFinite(startedAt) ? startedAt : this.deps.now());
+      // Local time, not the push's `startedAt`: the two clocks may differ. (A ring picked up late
+      // is judged as if it began now, which only errs towards "declined".)
+      this.ringStart.set(info.callId, this.deps.now());
       this.deps.engine.presentIncoming(info);
     }
   }
@@ -323,7 +329,11 @@ export class CallBridge {
       snap = this.deps.engine.getSnapshot();
     }
     if (!snap || snap.phase !== 'incoming') return;
-    const ok = await this.answerer(snap.media).catch(() => false);
+    // An answer asked for in the app keeps its choice (audio only); one from the system screen
+    // follows the call.
+    const ok = await this.answerer(this.requestedMedia.get(callId) ?? snap.media).catch(
+      () => false,
+    );
     if (!ok) this.failAnswer(event);
   }
 

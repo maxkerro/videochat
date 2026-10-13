@@ -197,6 +197,32 @@ describe('CallBridge: incoming', () => {
     expect(t.accept).toHaveBeenCalledWith('audio');
   });
 
+  it('keeps "audio only" when answering a video call from the app', async () => {
+    const t = setUp();
+    await t.bridge.start();
+    t.handlers().sessionAdded(
+      pushSession({ incomingCallEvent: { ...pushSession().incomingCallEvent!, hasVideo: true } }),
+    );
+    t.set(snapshot({ media: 'video' }));
+    await flush();
+    expect(t.bridge.requestAnswer('audio')).toBe(true);
+    t.handlers().answered({ id: 'os-1', requestId: 'req-1' });
+    await flush();
+    expect(t.accept).toHaveBeenCalledWith('audio');
+  });
+
+  it('answers audio only directly when the system refuses the answer', async () => {
+    const t = setUp();
+    await t.bridge.start();
+    t.handlers().sessionAdded(pushSession());
+    t.set(snapshot({ media: 'video' }));
+    await flush();
+    t.api.answer.mockRejectedValue(new Error('no'));
+    t.bridge.requestAnswer('audio');
+    await flush();
+    expect(t.accept).toHaveBeenCalledWith('audio');
+  });
+
   it('fails the system answer when the call cannot be answered', async () => {
     const t = setUp();
     await t.bridge.start();
@@ -316,6 +342,36 @@ describe('CallBridge: incoming', () => {
     t.set(snapshot({ phase: 'ended', endCause: 'answered-elsewhere' }));
     await flush();
     expect(t.api.reportEnded).toHaveBeenCalledWith('os-1', 'answeredElsewhere');
+  });
+});
+
+describe('the push payload the server sends', () => {
+  // Same shape as buildFcmCallMessage's `incomingCall` JSON (apps/api fcm-push.channel.spec.ts).
+  const pushed = JSON.parse(
+    JSON.stringify({
+      eventId: CALL,
+      serverCallId: CALL,
+      hasVideo: true,
+      startedAt: '2026-10-13T10:00:00.000Z',
+      caller: { id: 'ben', displayName: 'Ben', avatarUrl: null },
+      metadata: { conversationId: CONV },
+    }),
+  );
+
+  it('is enough to show the call when the app is started by it', () => {
+    expect(
+      incomingInfoOf({
+        id: 'os',
+        origin: 'incoming',
+        status: 'ringing',
+        incomingCallEvent: pushed,
+      }),
+    ).toEqual({
+      callId: CALL,
+      conversationId: CONV,
+      media: 'video',
+      caller: { id: 'ben', displayName: 'Ben', avatarUrl: null },
+    });
   });
 });
 

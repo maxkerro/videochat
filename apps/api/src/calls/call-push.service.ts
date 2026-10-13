@@ -21,6 +21,7 @@ export class CallPushService implements OnModuleInit {
     this.signaling.onCallIncoming((call, caller) =>
       this.notifications.notifyIncomingCall(call.calleeId, {
         callId: call.id,
+        conversationId: call.conversationId,
         hasVideo: call.media === 'video',
         startedAt: call.createdAt.toISOString(),
         caller,

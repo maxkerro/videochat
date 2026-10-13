@@ -226,12 +226,23 @@ logic, tested with a fake) and `nativeCallUi.ts` (the library).
   a fallback; its Answer button goes through the system so both stay in step.
 - **Outgoing calls** are registered too, which gives Android the foreground service that keeps the
   microphone alive in the background (audio-only calls).
+- **Stale answers:** if the caller gave up before a cold-started phone's socket came up, the late
+  `call.accept` is answered by the server with `call.ended` (it replies to the losing device), so the
+  call screen closes. Hanging up while still waiting for the socket sends `call.decline`.
+- **Answer failures:** if the microphone cannot be opened for a call answered through the system
+  (lock screen, or the in-app Answer button, which goes through the system), the call is declined.
+- **Push content:** the push carries the caller's name and photo and the conversation id
+  (`metadata.conversationId`, which the app needs to start from the push alone); "previews off"
+  does not apply to a call screen.
 - **Missed calls:** unchanged -- the server posts the "Missed call" chat message and notification
   (CHAT-044/055).
 - **Native modules:** WebRTC is now `@livekit/react-native-webrtc` (same API as `react-native-webrtc`;
-  the iOS call audio needs this build), plus `expo-callkit-telecom`, `expo-build-properties`
-  (Android `minSdkVersion` 26) and `expo-task-manager`. Still version `0.5.0` (unreleased).
-- **Known limits:** (1) Declining from the lock screen while the app is _killed_ only reaches the
+  the iOS call audio needs this build), plus `expo-callkit-telecom`, and `expo-build-properties`
+  (Android `minSdkVersion` 26). Still version `0.5.0` (unreleased).
+- **Known limits:** (0) **No proximity sensor:** the previous audio manager turned the screen off
+  against the ear on the earpiece; the native call library does not, so on an audio call a cheek can
+  press the screen (mute / hang up). To do: a proximity wake lock while the route is the earpiece.
+  (1) Declining from the lock screen while the app is _killed_ only reaches the
   server once the app is running; otherwise the caller keeps ringing until the 30 s timeout. (2) A
   caller cancelling while the phone is ringing with the app killed does not dismiss the system
   call screen until its own 30 s timeout (the app is not running to hear `call.ended`). (3) **iOS

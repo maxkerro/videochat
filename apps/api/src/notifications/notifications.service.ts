@@ -123,8 +123,9 @@ export class NotificationsService implements OnModuleInit {
   /**
    * CHAT-061: rings the callee's phones (Android, through FCM) so the system call screen shows
    * even when the app is closed. Ignores the muted/viewing rules -- a call is not a message --
-   * but respects the person's "notifications off" switch and blocking (the caller handles
-   * silencing). Web tabs and open apps are rung over the realtime socket instead.
+   * but respects the person's "notifications off" switch (blocking is handled by the caller,
+   * which never rings a silenced call). "Previews off" does not apply: a call screen has to show
+   * who is calling. Web tabs and open apps are rung over the realtime socket instead.
    */
   async notifyIncomingCall(calleeId: string, call: IncomingCallPush): Promise<void> {
     if (!this.enabled) return;

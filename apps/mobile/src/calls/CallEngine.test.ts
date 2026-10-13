@@ -341,6 +341,10 @@ describe('CallEngine (CHAT-042)', () => {
         open(true);
         await accepting;
         expect(lastSent(CALL_EVENTS.accept)).toBeUndefined();
+        // Never accepted, so it is a decline -- not an "end" of a call this phone never took.
+        expect(lastSent(CALL_EVENTS.decline)?.payload).toEqual({ callId: CALL_ID });
+        expect(lastSent(CALL_EVENTS.end)).toBeUndefined();
+        expect(engine.getSnapshot()?.endCause).toBe('declined');
       });
 
       it('a timed-out ring ends locally without telling the server "declined"', () => {

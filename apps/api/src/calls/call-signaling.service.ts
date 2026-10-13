@@ -187,12 +187,13 @@ export class CallSignalingService implements OnModuleInit, OnModuleDestroy {
         randomUUID(),
       ),
     );
+    // Fire and forget: the push (FCM token + HTTP call) must not delay signalling.
     for (const listener of this.incomingListeners) {
-      try {
-        await listener(call, caller);
-      } catch (err) {
-        this.logger.warn(`Incoming-call listener failed for ${call.id}: ${(err as Error).message}`);
-      }
+      void Promise.resolve()
+        .then(() => listener(call, caller))
+        .catch((err: Error) =>
+          this.logger.warn(`Incoming-call listener failed for ${call.id}: ${err.message}`),
+        );
     }
   }
 

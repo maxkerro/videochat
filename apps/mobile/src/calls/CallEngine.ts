@@ -136,6 +136,8 @@ export class CallEngine {
   private reconnects = 0;
   private hadVideo = false;
   private everConnected = false;
+  /** `call.accept` has gone out for the incoming call (answering waits for the socket). */
+  private acceptSent = false;
 
   constructor(private readonly deps: CallEngineDeps) {}
 
@@ -203,6 +205,7 @@ export class CallEngine {
     this.polite = true;
     this.iceServers = this.fetchIceServers();
     const callId = this.snap.callId;
+    this.acceptSent = false;
     this.update({
       phase: 'connecting',
       localStream: stream,
@@ -215,6 +218,7 @@ export class CallEngine {
     }
     // The call may have ended (the caller gave up) while the socket was coming up.
     if (!this.isCurrent(callId) || (this.snap as CallSnapshot | null)?.phase === 'ended') return;
+    this.acceptSent = true;
     this.deps.send(CALL_EVENTS.accept, { callId });
     await this.startPeer();
   }
@@ -246,6 +250,11 @@ export class CallEngine {
     const snap = this.snap;
     if (!snap || snap.phase === 'ended') return;
     if (snap.phase === 'incoming') return this.decline();
+    if (snap.direction === 'incoming' && snap.phase === 'connecting' && !this.acceptSent) {
+      // Hung up while still waiting for the socket to answer: it is a decline, not an end.
+      this.deps.send(CALL_EVENTS.decline, { callId: snap.callId });
+      return this.finish('declined');
+    }
     if (snap.phase === 'outgoing') {
       this.deps.send(CALL_EVENTS.cancel, { callId: snap.callId });
       return this.finish('cancelled');

@@ -64,6 +64,9 @@ export function buildFcmCallMessage(token: string, call: IncomingCallPush) {
           hasVideo: call.hasVideo,
           startedAt: call.startedAt,
           caller: call.caller,
+          // The app is started by this push with nothing else to go on: the conversation travels
+          // here (read back by `incomingInfoOf` in apps/mobile/src/calls/callBridge.ts).
+          metadata: { conversationId: call.conversationId },
         }),
       },
       android: {

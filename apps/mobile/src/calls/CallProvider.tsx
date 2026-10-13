@@ -279,7 +279,9 @@ export function CallProvider({
         if (cameraMissing) explainCameraOff();
         return true;
       } catch (error) {
-        // Could not get the microphone: leave the call ringing so it can still be declined.
+        // Could not get the microphone. Answered in the app's own screen (no system call) the call
+        // stays ringing so it can still be declined; answered through the system, the bridge
+        // declines it, as the system has already been told it was answered.
         explainMediaProblem(error);
         return false;
       }
@@ -291,7 +293,7 @@ export function CallProvider({
   const accept = useCallback(
     async (kind: CallMedia) => {
       // Through the system when it has this call (it then needs to know it was answered).
-      if (bridge.requestAnswer()) return;
+      if (bridge.requestAnswer(kind)) return;
       await answerNow(kind);
     },
     [bridge, answerNow],
