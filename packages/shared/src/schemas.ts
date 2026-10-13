@@ -447,6 +447,14 @@ export const pushSubscriptionSchema = z.object({
 export type PushSubscriptionInput = z.infer<typeof pushSubscriptionSchema>;
 export const pushUnsubscribeSchema = z.object({ endpoint: z.string().max(2048) });
 
+/** CHAT-055: a phone's native push token (FCM on Android, APNs on iOS) for the signed-in user. */
+export const nativePushRegistrationSchema = z.object({
+  platform: z.enum(['android', 'ios']),
+  token: z.string().min(1).max(4096),
+});
+export type NativePushRegistrationInput = z.infer<typeof nativePushRegistrationSchema>;
+export const nativePushUnregisterSchema = z.object({ token: z.string().min(1).max(4096) });
+
 /** CHAT-035: null when the server has no VAPID keys (push switched off). */
 export const vapidKeySchema = z.object({ publicKey: z.string().nullable() });
 

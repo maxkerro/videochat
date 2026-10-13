@@ -123,6 +123,11 @@ const envSchema = z.object({
   /** Contact for push services, `mailto:` or an https URL. */
   VAPID_SUBJECT: z.string().default('mailto:admin@videochat.local'),
 
+  // --- Mobile push (CHAT-055) ---
+  /** A Firebase service-account key (the JSON file's contents, as one string) allowed to send
+   *  Cloud Messaging. Unset = no push to Android phones. */
+  FCM_SERVICE_ACCOUNT_JSON: z.string().default(''),
+
   /** Login attempts, tracked per client IP (there's no authenticated user yet at this endpoint).
    *  Distinct from CHAT-010's per-account lockout after 5 *failed* attempts -- this limits the
    *  *rate* of attempts against the endpoint itself, successful or not, and by IP rather than by

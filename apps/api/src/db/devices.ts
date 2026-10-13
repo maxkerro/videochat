@@ -29,6 +29,25 @@ export async function upsertWebPushDevice(
     });
 }
 
+/** CHAT-055: saves a phone's native push token for `userId`. A token is unique per app install;
+ *  if someone else was signed in on this phone before, it moves to this user. */
+export async function upsertNativePushDevice(
+  db: DbExecutor,
+  userId: string,
+  platform: 'ios' | 'android',
+  token: string,
+  userAgent: string | null,
+): Promise<void> {
+  await db
+    .insert(devices)
+    .values({ userId, platform, pushToken: token, pushKeys: null, userAgent })
+    .onConflictDoUpdate({
+      target: devices.pushToken,
+      targetWhere: sql`${devices.pushToken} IS NOT NULL`,
+      set: { userId, platform, pushKeys: null, userAgent, lastSeenAt: sql`now()` },
+    });
+}
+
 export async function deletePushDevice(
   db: DbExecutor,
   endpoint: string,

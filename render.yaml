@@ -78,6 +78,9 @@ services:
         sync: false
       - key: VAPID_SUBJECT
         sync: false
+      # CHAT-055: Android push. The Firebase service-account key (JSON), pasted as one value.
+      - key: FCM_SERVICE_ACCOUNT_JSON
+        sync: false
 
   - type: web
     name: videochat-web

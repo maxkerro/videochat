@@ -107,6 +107,7 @@ const env: Env = {
   VAPID_PUBLIC_KEY: '',
   VAPID_PRIVATE_KEY: '',
   VAPID_SUBJECT: 'mailto:test@example.com',
+  FCM_SERVICE_ACCOUNT_JSON: '',
 };
 
 function makeService() {
