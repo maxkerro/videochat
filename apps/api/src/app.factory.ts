@@ -1,7 +1,7 @@
 import type { INestApplication } from '@nestjs/common';
 import { WsAdapter } from '@nestjs/platform-ws';
 import cookieParser from 'cookie-parser';
-import type { Express } from 'express';
+import type { Express, NextFunction, Request, Response } from 'express';
 import helmet from 'helmet';
 import { Logger } from 'nestjs-pino';
 import type { Env } from './config/env.js';
@@ -56,6 +56,14 @@ export function configureApp(app: INestApplication): Env {
   // Reads the httpOnly refresh-token cookie (see auth/refresh-cookie.ts); it is never readable
   // from client JS, only parsed here on the way in.
   app.use(cookieParser());
+  // Every response here is per-user JSON (and attachment links are signed URLs that expire), so
+  // nothing may be stored by the browser or by a shared cache in front of the API (the web app's
+  // static host proxies /attachments through a CDN that otherwise caches it for minutes, and a
+  // 304 then replays a dead signed URL -- or another user's). A handler can still set its own.
+  app.use((_req: Request, res: Response, next: NextFunction) => {
+    res.setHeader('Cache-Control', 'no-store');
+    next();
+  });
   app.enableCors({
     origin: env.CORS_ORIGINS,
     credentials: true,

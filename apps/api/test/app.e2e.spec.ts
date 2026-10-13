@@ -54,6 +54,11 @@ describe.skipIf(!hasInfra)('HTTP app (e2e)', () => {
     expect(denied.headers['access-control-allow-origin']).toBeUndefined();
   });
 
+  it('marks responses uncacheable (signed attachment URLs must never be replayed from a cache)', async () => {
+    const res = await request(app.getHttpServer()).get('/health').expect(200);
+    expect(res.headers['cache-control']).toBe('no-store');
+  });
+
   /** CHAT-022 AC: "CSP blocks inline script injection". The literal test is on `script-src`: no
    *  `'unsafe-inline'` (and no `'unsafe-eval'`) means a `<script>` tag or inline event handler
    *  smuggled into a response a browser somehow rendered as HTML would never execute -- the
