@@ -107,7 +107,13 @@ export default ({ config }: ConfigContext): ExpoConfig => {
     orientation: 'portrait',
     scheme: v.scheme,
     userInterfaceStyle: 'automatic',
-    ios: { bundleIdentifier: v.id, supportsTablet: false },
+    ios: {
+      bundleIdentifier: v.id,
+      supportsTablet: false,
+      // CHAT-062: a call keeps its sound when the app is left, and the video can continue in the
+      // picture-in-picture window.
+      infoPlist: { UIBackgroundModes: ['audio'] },
+    },
     android: {
       package: v.id,
       // Firebase Cloud Messaging (CHAT-055): the file from the Firebase console, holding one entry
@@ -116,6 +122,8 @@ export default ({ config }: ConfigContext): ExpoConfig => {
       // The WebRTC config plugin (CHAT-060) also declares "draw over other apps", which a chat app
       // does not need and which Google Play questions; calls work without it.
       blockedPermissions: ['android.permission.SYSTEM_ALERT_WINDOW'],
+      // CHAT-062: lets the call move its sound to a paired Bluetooth headset (Android 12+).
+      permissions: ['android.permission.BLUETOOTH_CONNECT'],
     },
     plugins: [
       'expo-router',
@@ -134,6 +142,9 @@ export default ({ config }: ConfigContext): ExpoConfig => {
       ],
       'expo-document-picker',
       'expo-notifications',
+      // CHAT-062: lets a video call continue in a small window (Android picture-in-picture).
+      // (The plugin reads its options unconditionally, so it needs the empty object.)
+      ['expo-pip', {}],
       // CHAT-060: native WebRTC for calls. The texts are what iOS shows in its permission prompts.
       [
         '@config-plugins/react-native-webrtc',

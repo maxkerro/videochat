@@ -1,9 +1,11 @@
 import { useEffect } from 'react';
-import { BackHandler, Pressable, StyleSheet, Text, Vibration, View } from 'react-native';
-import { RTCView } from 'react-native-webrtc';
+import { useState } from 'react';
+import { BackHandler, Platform, Pressable, StyleSheet, Text, Vibration, View } from 'react-native';
+import { RTCPIPView, RTCView } from 'react-native-webrtc';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { activateKeepAwakeAsync, deactivateKeepAwake } from 'expo-keep-awake';
 import { Avatar } from '../ui/Avatar';
+import { ROUTE_LABEL, type AudioRoute } from './audioRoute';
 import { useCalls } from './CallProvider';
 import type { CallSnapshot } from './CallEngine';
 import type { RtcStream } from './rtc';
@@ -14,6 +16,29 @@ const RING_PATTERN = [0, 900, 1_100];
 
 function streamUrl(stream: RtcStream | null): string | null {
   return stream?.toURL?.() ?? null;
+}
+
+/** The other person's picture. On iOS it is the view that becomes the picture-in-picture window
+ *  when the app is left. */
+function RemoteVideo({ url }: { url: string }) {
+  return (
+    <RTCPIPView
+      streamURL={url}
+      objectFit="cover"
+      style={StyleSheet.absoluteFill}
+      zOrder={0}
+      {...(Platform.OS === 'ios'
+        ? {
+            iosPIP: {
+              enabled: true,
+              startAutomatically: true,
+              stopAutomatically: true,
+              preferredSize: { width: 360, height: 640 },
+            },
+          }
+        : {})}
+    />
+  );
 }
 
 function statusLine(call: CallSnapshot, timer: string): string {
@@ -97,25 +122,65 @@ function Incoming({ call }: { call: CallSnapshot }) {
   );
 }
 
+const ROUTE_GLYPH: Record<AudioRoute, string> = {
+  earpiece: '📱',
+  speaker: '🔊',
+  bluetooth: 'ᛒ',
+  headset: '🎧',
+};
+
+/** Speaker / phone / Bluetooth / headset: with two choices one tap swaps them, with more a row of
+ *  choices opens above the buttons. */
+function RouteChooser({ open, onClose }: { open: boolean; onClose: () => void }) {
+  const { audio, chooseAudioRoute } = useCalls();
+  if (!open) return null;
+  return (
+    <View style={styles.routes} accessibilityRole="menu">
+      {audio.choices.map((route) => (
+        <Pressable
+          key={route}
+          accessibilityRole="menuitem"
+          accessibilityLabel={ROUTE_LABEL[route]}
+          accessibilityState={{ selected: audio.route === route }}
+          onPress={() => {
+            chooseAudioRoute(route);
+            onClose();
+          }}
+          style={[styles.route, audio.route === route && styles.routeSelected]}
+        >
+          <Text style={[styles.routeText, audio.route === route && styles.routeTextSelected]}>
+            {ROUTE_GLYPH[route]} {ROUTE_LABEL[route]}
+          </Text>
+        </Pressable>
+      ))}
+    </View>
+  );
+}
+
 function InCall({ call }: { call: CallSnapshot }) {
   const calls = useCalls();
   const timer = useCallTimer(call.startedAt);
+  const [routesOpen, setRoutesOpen] = useState(false);
   const live = call.phase === 'active' || call.phase === 'reconnecting';
   const remoteUrl = streamUrl(call.remoteStream);
   const localUrl = streamUrl(call.localStream);
   const showRemoteVideo = live && remoteUrl !== null && call.remoteVideoEnabled;
-  const showLocalVideo = call.videoEnabled && localUrl !== null;
+  const showLocalVideo = call.videoEnabled && !call.videoPaused && localUrl !== null;
+  const { audio } = calls;
+  const current = audio.route ?? (call.videoEnabled ? 'speaker' : 'earpiece');
+
+  function onRoutePress() {
+    if (audio.choices.length <= 2) {
+      const other = audio.choices.find((r) => r !== current) ?? 'speaker';
+      calls.chooseAudioRoute(other);
+    } else {
+      setRoutesOpen((open) => !open);
+    }
+  }
 
   return (
     <>
-      {showRemoteVideo ? (
-        <RTCView
-          streamURL={remoteUrl}
-          objectFit="cover"
-          style={StyleSheet.absoluteFill}
-          zOrder={0}
-        />
-      ) : null}
+      {showRemoteVideo ? <RemoteVideo url={remoteUrl} /> : null}
       <View style={styles.top}>
         <Text style={styles.topName} numberOfLines={1}>
           {call.peer.displayName}
@@ -127,6 +192,16 @@ function InCall({ call }: { call: CallSnapshot }) {
           <Text style={styles.warning}>Poor connection</Text>
         ) : null}
       </View>
+      {calls.enterPip ? (
+        <Pressable
+          accessibilityRole="button"
+          accessibilityLabel="Minimise"
+          onPress={calls.enterPip}
+          style={styles.minimise}
+        >
+          <Text style={styles.minimiseGlyph}>⌄</Text>
+        </Pressable>
+      ) : null}
       {!showRemoteVideo ? (
         <View style={styles.centre}>
           <Avatar name={call.peer.displayName} uri={call.peer.avatarUrl} size={120} />
@@ -160,12 +235,19 @@ function InCall({ call }: { call: CallSnapshot }) {
           </Text>
         </Pressable>
       ) : null}
+      <RouteChooser open={routesOpen} onClose={() => setRoutesOpen(false)} />
       <View style={styles.controls}>
         <CircleButton
           label={call.audioEnabled ? 'Mute' : 'Unmute'}
           glyph={call.audioEnabled ? '🎤' : '🔇'}
           active={!call.audioEnabled}
           onPress={calls.toggleAudio}
+        />
+        <CircleButton
+          label={ROUTE_LABEL[current]}
+          glyph={ROUTE_GLYPH[current]}
+          active={current === 'speaker'}
+          onPress={onRoutePress}
         />
         <CircleButton
           label={call.videoEnabled ? 'Camera off' : 'Camera on'}
@@ -182,21 +264,37 @@ function InCall({ call }: { call: CallSnapshot }) {
   );
 }
 
+/** What the small picture-in-picture window shows: only the other person (or their photo). */
+function PipContent({ call }: { call: CallSnapshot }) {
+  const remoteUrl = streamUrl(call.remoteStream);
+  return remoteUrl !== null && call.remoteVideoEnabled ? (
+    <RemoteVideo url={remoteUrl} />
+  ) : (
+    <View style={styles.centre}>
+      <Avatar name={call.peer.displayName} uri={call.peer.avatarUrl} size={64} />
+    </View>
+  );
+}
+
 /**
  * CHAT-060: the call screen, drawn over whatever the app is showing. Ringing (incoming), calling
  * (outgoing), the live call, and a moment of "Call ended".
  */
 export function CallOverlay() {
-  const { call, endedText, hangUp } = useCalls();
+  const { call, endedText, hangUp, isInPip, enterPip } = useCalls();
   const visible = call !== null;
   const ongoing = call !== null && call.phase !== 'ended';
 
   // The call screen is modal: Android's back button must not drop the app behind a live call.
   useEffect(() => {
     if (!visible) return;
-    const sub = BackHandler.addEventListener('hardwareBackPress', () => true);
+    const sub = BackHandler.addEventListener('hardwareBackPress', () => {
+      // Back on a video call shrinks it into the small window, like leaving the app would.
+      enterPip?.();
+      return true;
+    });
     return () => sub.remove();
-  }, [visible]);
+  }, [visible, enterPip]);
 
   useEffect(() => {
     if (!ongoing) return;
@@ -207,6 +305,13 @@ export function CallOverlay() {
   }, [ongoing]);
 
   if (!call) return null;
+  if (isInPip && call.phase !== 'incoming') {
+    return (
+      <View style={styles.root}>
+        <PipContent call={call} />
+      </View>
+    );
+  }
   return (
     <SafeAreaView style={styles.root} accessibilityViewIsModal>
       {call.phase === 'incoming' ? (
@@ -290,7 +395,34 @@ const styles = StyleSheet.create({
     paddingBottom: 24,
     paddingTop: 12,
   },
-  buttonWrap: { alignItems: 'center', gap: 6, minWidth: 72 },
+  minimise: {
+    position: 'absolute',
+    top: 8,
+    left: 8,
+    width: 44,
+    height: 44,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  minimiseGlyph: { color: '#ffffff', fontSize: 28 },
+  routes: {
+    flexDirection: 'row',
+    justifyContent: 'center',
+    flexWrap: 'wrap',
+    gap: 8,
+    paddingHorizontal: 12,
+    paddingBottom: 8,
+  },
+  route: {
+    paddingVertical: 8,
+    paddingHorizontal: 14,
+    borderRadius: 999,
+    backgroundColor: '#ffffff33',
+  },
+  routeSelected: { backgroundColor: '#ffffff' },
+  routeText: { color: '#ffffff', fontSize: 14 },
+  routeTextSelected: { color: '#111111', fontWeight: '600' },
+  buttonWrap: { alignItems: 'center', gap: 6, minWidth: 60 },
   circle: {
     width: 64,
     height: 64,

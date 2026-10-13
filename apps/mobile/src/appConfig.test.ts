@@ -29,4 +29,10 @@ describe('app config for calls (CHAT-060)', () => {
   it('keeps "draw over other apps" out of the app', () => {
     expect(config.android?.blockedPermissions).toContain('android.permission.SYSTEM_ALERT_WINDOW');
   });
+
+  it('allows picture-in-picture, background sound and Bluetooth routing (CHAT-062)', () => {
+    expect(plugin('expo-pip')).toBeDefined();
+    expect(config.android?.permissions).toContain('android.permission.BLUETOOTH_CONNECT');
+    expect(config.ios?.infoPlist?.UIBackgroundModes).toContain('audio');
+  });
 });

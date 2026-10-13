@@ -410,6 +410,51 @@ describe('CallEngine (CHAT-042)', () => {
       expect(sent.find((m) => m.type === CALL_EVENTS.offer)).toBeUndefined();
     });
 
+    it('holds the camera off in the background and brings it back, telling the other side', async () => {
+      const { engine, stream, sent } = await liveCall();
+      const video = stream.getVideoTracks()[0] as unknown as FakeTrack;
+      sent.length = 0;
+
+      engine.setVideoPaused(true);
+
+      expect(video.enabled).toBe(false);
+      expect(engine.getSnapshot()).toMatchObject({ videoPaused: true, videoEnabled: true });
+      expect(sent.find((m) => m.type === CALL_EVENTS.media)?.payload).toMatchObject({
+        video: false,
+      });
+
+      engine.setVideoPaused(false);
+
+      expect(video.enabled).toBe(true);
+      expect(sent.at(-1)?.payload).toMatchObject({ video: true });
+    });
+
+    it('keeps a camera the person switched off off when the app comes back', async () => {
+      const { engine, stream } = await liveCall();
+      const video = stream.getVideoTracks()[0] as unknown as FakeTrack;
+      await engine.toggleVideo(); // off
+      engine.setVideoPaused(true);
+
+      engine.setVideoPaused(false);
+
+      expect(video.enabled).toBe(false);
+      expect(engine.getSnapshot()?.videoEnabled).toBe(false);
+    });
+
+    it('does nothing to a call without a camera', async () => {
+      const ctx = setUp();
+      ctx.engine.startOutgoing({
+        conversationId: CONV_ID,
+        peer: PEER,
+        media: 'audio',
+        stream: audioStream(),
+      });
+      ctx.sent.length = 0;
+      ctx.engine.setVideoPaused(true);
+      expect(ctx.engine.getSnapshot()?.videoPaused).toBe(false);
+      expect(ctx.sent).toEqual([]);
+    });
+
     it('shows the remote stream the native side hands over with the first track', async () => {
       const { engine, pc } = await liveCall();
       expect(engine.getSnapshot()?.remoteStream).toBeNull();

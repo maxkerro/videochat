@@ -62,6 +62,9 @@ export interface CallSnapshot {
   frontCamera: boolean;
   audioEnabled: boolean;
   videoEnabled: boolean;
+  /** The camera is held off because the app is in the background (CHAT-062); `videoEnabled`
+   *  stays what the person chose, and the camera comes back when the app does. */
+  videoPaused: boolean;
   /** The other side's mute/camera state, relayed via `call.media`. */
   remoteAudioEnabled: boolean;
   remoteVideoEnabled: boolean;
@@ -163,6 +166,7 @@ export class CallEngine {
       frontCamera: true,
       audioEnabled: true,
       videoEnabled: args.stream.getVideoTracks().length > 0,
+      videoPaused: false,
       remoteAudioEnabled: true,
       remoteVideoEnabled: args.media === 'video',
       endCause: null,
@@ -252,8 +256,9 @@ export class CallEngine {
     if (!snap?.localStream || snap.phase === 'ended') return;
     const existing = snap.localStream.getVideoTracks()[0];
     if (existing) {
-      existing.enabled = !snap.videoEnabled;
-      this.update({ videoEnabled: existing.enabled });
+      const next = !snap.videoEnabled;
+      existing.enabled = next && !snap.videoPaused;
+      this.update({ videoEnabled: next });
     } else {
       const camera = await this.deps.getUserMedia({ video: constraints, audio: false });
       const track = camera.getVideoTracks()[0];
@@ -276,6 +281,21 @@ export class CallEngine {
     if (!snap || !track?._switchCamera) return;
     track._switchCamera();
     this.update({ frontCamera: !snap.frontCamera });
+  }
+
+  /**
+   * CHAT-062: holds the camera off while the app cannot show it (in the background, not in
+   * picture-in-picture) and brings it back afterwards. The other side sees "camera off" meanwhile.
+   * Does nothing when there is no camera on.
+   */
+  setVideoPaused(paused: boolean): void {
+    const snap = this.snap;
+    if (!snap?.localStream || snap.phase === 'ended' || snap.videoPaused === paused) return;
+    const track = snap.localStream.getVideoTracks()[0];
+    if (!track) return;
+    track.enabled = snap.videoEnabled && !paused;
+    this.update({ videoPaused: paused });
+    this.sendMediaState();
   }
 
   /** Feeds a realtime envelope in. Anything not about this device's call is ignored. */
@@ -347,6 +367,7 @@ export class CallEngine {
       frontCamera: true,
       audioEnabled: true,
       videoEnabled: false,
+      videoPaused: false,
       remoteAudioEnabled: true,
       remoteVideoEnabled: media === 'video',
       endCause: null,
@@ -548,7 +569,7 @@ export class CallEngine {
     this.deps.send(CALL_EVENTS.media, {
       callId: snap.callId,
       audio: snap.audioEnabled,
-      video: snap.videoEnabled,
+      video: snap.videoEnabled && !snap.videoPaused,
     });
   }
 

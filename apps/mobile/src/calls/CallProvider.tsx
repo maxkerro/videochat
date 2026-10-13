@@ -6,15 +6,23 @@ import {
   useContext,
   useEffect,
   useMemo,
+  useRef,
   useState,
   useSyncExternalStore,
   type ReactNode,
 } from 'react';
-import { Alert, Linking } from 'react-native';
+import { Alert, AppState, Linking } from 'react-native';
 import { useAuth } from '../auth/AuthContext';
 import { getRealtimeStatus } from '../realtime/status';
 import { getConnectionId, subscribeRealtime } from '../realtime/connection';
 import { setCallActive } from './activity';
+import { AudioSession, type AudioRoute, type AudioSnapshot } from './audioRoute';
+import {
+  BACKGROUND_PAUSE_DELAY_MS,
+  hasLiveAudio,
+  isVideoCall,
+  wantsPictureInPicture,
+} from './callMode';
 import { CallBusyError, CallEngine, type CallPeer, type CallSnapshot } from './CallEngine';
 import { endMessage } from './endMessage';
 import {
@@ -25,7 +33,9 @@ import {
   MediaAccessError,
   type MediaSource,
 } from './media';
+import { nativeAudioDriver, requestBluetoothPermission } from './nativeAudio';
 import { nativeCallDeps, nativeMedia } from './nativeDeps';
+import { pip, useIsInPip } from './nativePip';
 import type { RtcStream } from './rtc';
 
 /** How long "Call ended" stays up before the call screen goes away. */
@@ -43,6 +53,13 @@ export interface CallController {
   toggleAudio: () => void;
   toggleVideo: () => Promise<void>;
   switchCamera: () => void;
+  /** CHAT-062: where the sound goes, and what else it could. */
+  audio: AudioSnapshot;
+  chooseAudioRoute: (route: AudioRoute) => void;
+  /** CHAT-062: the app is shown in the small picture-in-picture window (Android). */
+  isInPip: boolean;
+  /** Shrinks the call into picture-in-picture (Android, video calls). */
+  enterPip: (() => void) | null;
 }
 
 const CallContext = createContext<CallController | null>(null);
@@ -114,6 +131,64 @@ export function CallProvider({
         engine.onNetworkChange();
       previous = key;
     });
+  }, [engine]);
+
+  // CHAT-062 audio routing: the platform audio manager runs from connecting until the call ends.
+  const [audioSession] = useState(() => new AudioSession(nativeAudioDriver));
+  const audio = useSyncExternalStore(audioSession.subscribe, audioSession.getSnapshot);
+  const liveAudio = hasLiveAudio(call);
+  const videoCall = call !== null && isVideoCall(call);
+  const kindRef = useRef<CallMedia>('audio');
+  useEffect(() => {
+    kindRef.current = videoCall ? 'video' : 'audio';
+  }, [videoCall]);
+  useEffect(() => {
+    if (!liveAudio) return;
+    let cancelled = false;
+    void requestBluetoothPermission().then(() => {
+      if (!cancelled) audioSession.begin(kindRef.current);
+    });
+    return () => {
+      cancelled = true;
+      audioSession.end();
+    };
+  }, [liveAudio, audioSession]);
+  useEffect(() => {
+    audioSession.setMedia(videoCall ? 'video' : 'audio');
+  }, [videoCall, audioSession]);
+
+  // CHAT-062 picture-in-picture: a connected video call shrinks into a window when the app is
+  // left (Android; iOS does the same through the video view itself).
+  const inPip = useIsInPip();
+  const inPipRef = useRef(false);
+  useEffect(() => {
+    inPipRef.current = inPip;
+  }, [inPip]);
+  const wantsPip = wantsPictureInPicture(call);
+  useEffect(() => {
+    if (!wantsPip) return;
+    pip.setAutoEnter(true);
+    return () => pip.setAutoEnter(false);
+  }, [wantsPip]);
+
+  // CHAT-062: out of sight and not in the small window means nobody sees the camera: switch it
+  // off until the app is back (the other side sees "camera off" meanwhile).
+  useEffect(() => {
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const subscription = AppState.addEventListener('change', (next) => {
+      clearTimeout(timer);
+      if (next === 'active') {
+        engine.setVideoPaused(false);
+      } else if (next === 'background') {
+        timer = setTimeout(() => {
+          if (!inPipRef.current) engine.setVideoPaused(true);
+        }, BACKGROUND_PAUSE_DELAY_MS);
+      }
+    });
+    return () => {
+      clearTimeout(timer);
+      subscription.remove();
+    };
   }, [engine]);
 
   // The realtime provider keeps the socket open in the background while this is true.
@@ -205,8 +280,12 @@ export function CallProvider({
         }
       },
       switchCamera: () => engine.switchCamera(),
+      audio,
+      chooseAudioRoute: (route) => audioSession.choose(route),
+      isInPip: inPip,
+      enterPip: wantsPip && pip.isAvailable() ? () => pip.enter() : null,
     }),
-    [call, endedText, startCall, accept, engine],
+    [call, endedText, startCall, accept, engine, audio, audioSession, inPip, wantsPip],
   );
 
   return <CallContext.Provider value={value}>{children}</CallContext.Provider>;

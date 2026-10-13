@@ -176,6 +176,33 @@ directions.
   manifest (guarded by `src/appConfig.test.ts`).
 - **Native modules:** `react-native-webrtc` and `expo-keep-awake` are native, so this is version
   `0.5.0` and needs a new APK.
-- **Not yet:** ringing when the app is closed or the phone is locked (CHAT-061), audio routing
-  (speaker/earpiece/Bluetooth), the proximity sensor and picture-in-picture (CHAT-062). Until then
-  an incoming call rings (vibrates) only while the app is open.
+- **Not yet:** ringing when the app is closed or the phone is locked (CHAT-061). Until then an
+  incoming call rings (vibrates) only while the app is open.
+
+## Audio routing and picture-in-picture (CHAT-062)
+
+- **Routing** (`audioRoute.ts`, `nativeAudio.ts`): `react-native-incall-manager` runs the phone's
+  audio manager from the moment media starts to connect until the call ends. Defaults: speaker for
+  video, earpiece for audio, and a connected Bluetooth or wired headset beats both. A headset that
+  connects mid-call takes over at once (no pick needed); when it goes away the sound returns to
+  the phone. The route button in the call controls swaps speaker and phone with one tap, and opens
+  a row of choices when Bluetooth or a headset is also available. An explicit pick is kept until it
+  becomes impossible. Android 12+ needs `BLUETOOTH_CONNECT` to see a paired headset; the app asks
+  when a call is set up and works without it. On iOS the system routes to headsets itself, so only
+  speaker vs. phone is offered.
+- **Proximity:** the audio manager turns the screen off against the ear, and only while the sound
+  is on the earpiece (so never on a video call with the speaker).
+- **Picture-in-picture:** on Android (`expo-pip`) a connected video call shrinks into a small
+  window when the app is left (Home, recents, back); the Minimise button does the same on demand.
+  On iOS the other person's video view (`RTCPIPView`) becomes the PiP window (iOS 15+; the app
+  declares the `audio` background mode). In the small window only the other person (or their photo)
+  is shown.
+- **Camera in the background:** when the app is out of sight and not in the small window, the
+  camera is switched off (`CallEngine.setVideoPaused`) and the other side sees "camera off"; it
+  returns with the app. What the person chose (`videoEnabled`) is not changed by this.
+- **Native modules:** `react-native-incall-manager` and `expo-pip` are native (still version
+  `0.5.0` -- 0.5.0 has not been released yet).
+- **Android audio in the background:** since Android 11 the microphone is silenced for an app that
+  is in the background unless it runs a foreground service. A video call is fine (the small window
+  keeps the app visible); an _audio-only_ call that is left for another app needs the foreground
+  service that CHAT-061 adds with the native call UI.
