@@ -14,3 +14,7 @@ coverage/
 .pnpm-store/
 # Local command output shared with Claude for debugging (not source).
 last_command*
+
+# Firebase service-account keys (secret: paste into Render, never commit)
+*-firebase-adminsdk-*.json
+video-chat-app-claude-firebase-adminsdk-fbsvc-4606a40ada.json
