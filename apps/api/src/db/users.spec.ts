@@ -42,3 +42,13 @@ describe('searchUsersByUsernamePrefix', () => {
     expect(empty).toEqual(omitted);
   });
 });
+
+describe('searchUsersByUsernamePrefix display names', () => {
+  it('still builds a single where clause when the term can match a display name word', async () => {
+    const { db, whereCalls } = fakeDb([{ id: 'maria' }]);
+    await expect(searchUsersByUsernamePrefix(db, 'ann', 'me', 20)).resolves.toEqual([
+      { id: 'maria' },
+    ]);
+    expect(whereCalls).toHaveLength(1);
+  });
+});

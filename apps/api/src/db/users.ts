@@ -1,4 +1,4 @@
-import { sql, eq, and, isNull, ne, notInArray } from 'drizzle-orm';
+import { sql, eq, and, or, isNull, ne, notInArray } from 'drizzle-orm';
 import { LIMITS } from '@videochat/shared';
 import type { DbExecutor } from './client.js';
 import { memberships, users, type NewUser, type User } from './schema.js';
@@ -66,7 +66,13 @@ export async function searchUsersByUsernamePrefix(
   // literally, not as a pattern -- otherwise a query like "a%" would match far more than intended.
   const escaped = prefix.replace(/[\\%_]/g, (c) => `\\${c}`);
   const conditions = [
-    sql`${users.username} ILIKE ${escaped + '%'}`,
+    // The username starts with the term, or any word of the display name does ("ann" finds
+    // "anna" and "Maria Annenkova"). Still prefix-only: no substring scans, no browsing by "e".
+    or(
+      sql`${users.username} ILIKE ${escaped + '%'}`,
+      sql`${users.displayName} ILIKE ${escaped + '%'}`,
+      sql`${users.displayName} ILIKE ${'% ' + escaped + '%'}`,
+    ),
     ne(users.id, excludeUserId),
     // CHAT-037: deleted accounts can't be found or messaged.
     isNull(users.deletedAt),

@@ -120,12 +120,12 @@ export default function NewChat() {
         </Text>
       ) : null}
       <TextInput
-        accessibilityLabel="Find people by username or email"
+        accessibilityLabel="Find people by name, username or email"
         value={text}
         onChangeText={setText}
         autoCapitalize="none"
         autoCorrect={false}
-        placeholder="Find people by username or email"
+        placeholder="Find people by name, username or email"
         placeholderTextColor={t.muted}
         style={[styles.input, { color: t.text, backgroundColor: t.card, borderColor: t.border }]}
       />

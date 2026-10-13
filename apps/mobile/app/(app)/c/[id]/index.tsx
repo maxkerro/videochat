@@ -342,7 +342,8 @@ const styles = StyleSheet.create({
   listContent: { paddingVertical: 8 },
   day: { alignSelf: 'center', fontSize: 12, marginVertical: 8 },
   older: { padding: 12 },
-  empty: { textAlign: 'center', padding: 24, transform: [{ scaleY: -1 }] },
+  // No scaleY here: the list already flips its empty component back upright.
+  empty: { textAlign: 'center', padding: 24 },
   pendingWrap: {
     alignSelf: 'flex-end',
     alignItems: 'flex-end',
