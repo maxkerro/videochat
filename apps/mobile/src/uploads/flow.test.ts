@@ -168,6 +168,39 @@ describe('runUpload', () => {
   });
 });
 
+describe('cancellation', () => {
+  it('never asks for a slot when cancelled while the photo was being prepared', async () => {
+    const controller = new AbortController();
+    const deps = makeDeps({
+      prepare: vi.fn(async () => {
+        controller.abort(); // sign-out while the photo is shrunk
+        return { blob: 'b', name: 'p.jpg', contentType: 'image/jpeg', sizeBytes: 5 };
+      }),
+    });
+    await expect(
+      runUpload(job, deps, newUploadProgress(), { ...hooks(), signal: controller.signal }),
+    ).rejects.toThrow(/cancelled/);
+    expect(deps.requestUpload).not.toHaveBeenCalled();
+    expect(deps.upload).not.toHaveBeenCalled();
+    expect(deps.send).not.toHaveBeenCalled();
+  });
+
+  it('does not call the API after a retry pause during which it was cancelled', async () => {
+    const controller = new AbortController();
+    const deps = makeDeps({
+      upload: vi.fn(async () => {
+        throw new UploadError('Upload failed -- check your connection', true);
+      }),
+      sleep: vi.fn(async () => controller.abort()), // sign-out during the pause
+    });
+    await expect(
+      runUpload(job, deps, newUploadProgress(), { ...hooks(), signal: controller.signal }),
+    ).rejects.toThrow(/cancelled/);
+    expect(deps.requestUpload).toHaveBeenCalledTimes(1); // not again after the pause
+    expect(deps.upload).toHaveBeenCalledTimes(1);
+  });
+});
+
 describe('isRetryable', () => {
   it('classifies failures', () => {
     expect(isRetryable(new UploadError('x', true))).toBe(true);

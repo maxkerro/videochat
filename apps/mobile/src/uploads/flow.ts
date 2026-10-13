@@ -95,6 +95,12 @@ export async function attemptUpload<B>(
   progress: UploadProgress<B>,
   hooks: UploadHooks,
 ): Promise<Message> {
+  // A file belongs to the account that picked it: once cancelled (sign-out), nothing may touch the
+  // API, however long ago the attempt started (a retry pause, a slow image shrink).
+  const stopIfCancelled = () => {
+    if (hooks.signal?.aborted) throw new UploadError('Upload cancelled');
+  };
+  stopIfCancelled();
   if (!progress.prepared) {
     hooks.onPhase('preparing');
     const prepared = await deps.prepare(job.file);
@@ -105,6 +111,7 @@ export async function attemptUpload<B>(
     }
     if (prepared.sizeBytes === 0) throw new UploadError('That file is empty.');
     progress.prepared = prepared;
+    stopIfCancelled();
   }
   const { blob, name, contentType, sizeBytes } = progress.prepared;
 
@@ -132,7 +139,7 @@ export async function attemptUpload<B>(
   }
 
   // Cancelled (or the account changed) while the bytes were going up: do not post the message.
-  if (hooks.signal?.aborted) throw new UploadError('Upload cancelled');
+  stopIfCancelled();
   hooks.onPhase('sending');
   return deps.send(job.conversationId, {
     clientMsgId: job.clientMsgId,

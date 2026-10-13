@@ -64,17 +64,38 @@ describe.skipIf(!hasInfra)('report a message (CHAT-058)', () => {
     });
   });
 
-  it('keeps the report after the sender deletes the message', async () => {
+  it('keeps the report and its copy of the text after the sender deletes the message', async () => {
     const { anna, ben, conversationId, messageId } = await setUp();
     await report(ben, conversationId, messageId, { reason: 'inappropriate' }).expect(204);
     await request(server())
       .delete(`/conversations/${conversationId}/messages/${messageId}`)
       .set(bearer(anna.token))
       .expect(200);
-    const stored = await rows('SELECT body_snapshot FROM message_reports WHERE reporter_id = $1', [
-      ben.id,
-    ]);
-    expect(stored).toHaveLength(1);
+    const stored = await rows(
+      'SELECT body_snapshot, reason FROM message_reports WHERE reporter_id = $1',
+      [ben.id],
+    );
+    expect(stored).toEqual([{ body_snapshot: 'rude text', reason: 'inappropriate' }]);
+
+    // Reporting it again now is refused (nothing left to review) and changes nothing.
+    await report(ben, conversationId, messageId, { reason: 'spam' }).expect(400);
+    const after = await rows(
+      'SELECT body_snapshot, reason FROM message_reports WHERE reporter_id = $1',
+      [ben.id],
+    );
+    expect(after).toEqual([{ body_snapshot: 'rude text', reason: 'inappropriate' }]);
+  });
+
+  it('refuses to report a message that is already deleted', async () => {
+    const { anna, ben, conversationId, messageId } = await setUp();
+    await request(server())
+      .delete(`/conversations/${conversationId}/messages/${messageId}`)
+      .set(bearer(anna.token))
+      .expect(200);
+    await report(ben, conversationId, messageId, { reason: 'spam' }).expect(400);
+    expect(await rows('SELECT 1 FROM message_reports WHERE reporter_id = $1', [ben.id])).toEqual(
+      [],
+    );
   });
 
   it('refuses your own message, bad reasons, outsiders and unknown messages', async () => {

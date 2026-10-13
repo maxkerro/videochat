@@ -57,6 +57,22 @@ describe('upload manager', () => {
     expect(record).toHaveBeenCalledWith(message, 1);
   });
 
+  it('drops the bubble only after the sent message is recorded (no gap in the list)', async () => {
+    let finishRecording!: () => void;
+    const { manager, record } = setup();
+    record.mockImplementation(
+      () => new Promise<undefined>((r) => (finishRecording = () => r(undefined))),
+    );
+    manager.start('c1', file);
+    await tick();
+    await tick();
+    expect(record).toHaveBeenCalledTimes(1);
+    expect(manager.getSnapshot()).toHaveLength(1); // still shown while the message is being added
+    finishRecording();
+    await tick();
+    expect(manager.getSnapshot()).toHaveLength(0);
+  });
+
   it('keeps going with no screen subscribed (leaving the chat does not cancel)', async () => {
     const { manager, record } = setup();
     const unsubscribe = manager.subscribe(() => undefined);

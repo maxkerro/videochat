@@ -17,6 +17,7 @@ export function MessageActions({
   actions,
   onReact,
   onClose,
+  onDismissed,
   title,
 }: {
   message: Message | null;
@@ -24,6 +25,8 @@ export function MessageActions({
   /** Omit for a menu without the reaction bar (the report reasons). */
   onReact?: (emoji: string) => void;
   onClose: () => void;
+  /** After the sheet has fully closed (iOS only fires it; see the screen's `openAfterClose`). */
+  onDismissed?: () => void;
   title?: string;
 }) {
   const t = useTheme();
@@ -33,7 +36,13 @@ export function MessageActions({
     if (visible) tick();
   }, [visible]);
   return (
-    <Modal visible={visible} transparent animationType="fade" onRequestClose={onClose}>
+    <Modal
+      visible={visible}
+      transparent
+      animationType="fade"
+      onRequestClose={onClose}
+      onDismiss={onDismissed}
+    >
       <Pressable
         accessibilityLabel="Close"
         onPress={onClose}

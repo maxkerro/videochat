@@ -27,8 +27,20 @@ export function shouldCompress(contentType: string): boolean {
   return type.startsWith('image/') && type !== 'image/gif' && !type.includes('svg');
 }
 
+/** What a photo is re-encoded as: PNGs stay PNG (JPEG would flatten their transparency into
+ *  black), everything else (JPEG, HEIC, WebP ...) becomes JPEG. */
+export function outputFormat(contentType: string): {
+  format: 'png' | 'jpeg';
+  mime: string;
+  ext: string;
+} {
+  return contentType.toLowerCase() === 'image/png'
+    ? { format: 'png', mime: 'image/png', ext: 'png' }
+    : { format: 'jpeg', mime: 'image/jpeg', ext: 'jpg' };
+}
+
 /** `IMG_0001.HEIC` -> `IMG_0001.jpg`: the name has to follow the bytes we actually send. */
-export function jpegName(name: string): string {
+export function renamedWithExtension(name: string, ext: string): string {
   const base = name.replace(/\.[^./\\]+$/, '');
-  return `${base || 'photo'}.jpg`;
+  return `${base || 'photo'}.${ext}`;
 }

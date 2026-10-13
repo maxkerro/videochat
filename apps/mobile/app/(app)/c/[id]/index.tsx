@@ -129,6 +129,14 @@ export default function ConversationScreen() {
     [id],
   );
 
+  // iOS cannot present a Modal while another one is still dismissing, so the report sheet waits
+  // for the actions sheet's `onDismiss`. Android has no such event and shows it straight away.
+  const [pendingReport, setPendingReport] = useState<Message | null>(null);
+  const onActionsDismissed = useCallback(() => {
+    if (pendingReport) setReportFor(pendingReport);
+    setPendingReport(null);
+  }, [pendingReport]);
+
   const onReply = useCallback((m: Message) => {
     setEditing(null);
     setReplyTo(m);
@@ -181,7 +189,7 @@ export default function ConversationScreen() {
       list.push({
         label: 'Report',
         destructive: true,
-        onPress: () => setReportFor(m),
+        onPress: () => (Platform.OS === 'ios' ? setPendingReport(m) : setReportFor(m)),
       });
     }
     return list;
@@ -411,6 +419,7 @@ export default function ConversationScreen() {
         actions={sheetActions}
         onReact={(emoji) => actionsFor && onReact(actionsFor, emoji)}
         onClose={() => setActionsFor(null)}
+        onDismissed={onActionsDismissed}
       />
     </SafeAreaView>
   );

@@ -54,7 +54,10 @@ describe.skipIf(!hasInfra)('HTTP app (e2e)', () => {
     expect(denied.headers['access-control-allow-origin']).toBeUndefined();
   });
 
-  it('marks responses uncacheable', async () => {
+  /** Responses are per-user JSON and attachment links are short-lived signed URLs. The web app's
+   *  static host proxies /attachments through a CDN that would otherwise cache them for minutes
+   *  and replay a dead (or another user's) link via 304. Don't "optimise" this away. */
+  it('marks responses uncacheable (signed attachment URLs must never be replayed)', async () => {
     const res = await request(app.getHttpServer()).get('/health').expect(200);
     expect(res.headers['cache-control']).toBe('no-store');
   });

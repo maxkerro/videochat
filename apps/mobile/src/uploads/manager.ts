@@ -80,8 +80,13 @@ export function createUploadManager<B>(options: UploadManagerOptions<B>) {
         onProgress: (fraction) => update(id, { progress: fraction }),
         onRetry: () => update(id, { retrying: true, progress: 0 }),
       });
-      remove(id);
-      await options.record(message, r.generation);
+      // Record first, then drop the bubble: the real message is already on screen when it goes, so
+      // the list never shows a gap.
+      try {
+        await options.record(message, r.generation);
+      } finally {
+        remove(id);
+      }
     } catch (e) {
       if (r.controller.signal.aborted) {
         remove(id);

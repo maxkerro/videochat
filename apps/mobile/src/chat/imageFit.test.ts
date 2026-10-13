@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { fitWithin, jpegName, shouldCompress } from './imageFit';
+import { fitWithin, outputFormat, renamedWithExtension, shouldCompress } from './imageFit';
 
 describe('fitWithin', () => {
   it('scales a 12 MP landscape photo to 2048 on the long side', () => {
@@ -33,11 +33,20 @@ describe('shouldCompress', () => {
   });
 });
 
-describe('jpegName', () => {
+describe('outputFormat', () => {
+  it('keeps PNG (transparency) and turns everything else into JPEG', () => {
+    expect(outputFormat('image/png')).toEqual({ format: 'png', mime: 'image/png', ext: 'png' });
+    expect(outputFormat('IMAGE/PNG').format).toBe('png');
+    expect(outputFormat('image/heic')).toEqual({ format: 'jpeg', mime: 'image/jpeg', ext: 'jpg' });
+    expect(outputFormat('image/webp').format).toBe('jpeg');
+  });
+});
+
+describe('renamedWithExtension', () => {
   it('swaps the extension', () => {
-    expect(jpegName('IMG_0001.HEIC')).toBe('IMG_0001.jpg');
-    expect(jpegName('a.b.png')).toBe('a.b.jpg');
-    expect(jpegName('noext')).toBe('noext.jpg');
-    expect(jpegName('.png')).toBe('photo.jpg');
+    expect(renamedWithExtension('IMG_0001.HEIC', 'jpg')).toBe('IMG_0001.jpg');
+    expect(renamedWithExtension('a.b.png', 'jpg')).toBe('a.b.jpg');
+    expect(renamedWithExtension('noext', 'jpg')).toBe('noext.jpg');
+    expect(renamedWithExtension('.png', 'png')).toBe('photo.png');
   });
 });
