@@ -1,6 +1,6 @@
-import { and, eq, isNull, ne } from 'drizzle-orm';
+import { and, eq, gt, isNotNull, isNull, ne } from 'drizzle-orm';
 import type { DbExecutor } from './client.js';
-import { refreshTokens, type RefreshTokenRow } from './schema.js';
+import { devices, refreshTokens, type RefreshTokenRow } from './schema.js';
 
 export interface CreateRefreshTokenInput {
   userId: string;
@@ -48,20 +48,41 @@ export async function revokeRefreshToken(db: DbExecutor, id: string): Promise<bo
   return rows.length > 0;
 }
 
-/** Ends every token descended from the same login (a whole session) at once. */
+/** CHAT-055: whether this login session still has a usable (unrevoked, unexpired) token. */
+export async function isFamilyLive(db: DbExecutor, familyId: string): Promise<boolean> {
+  const [row] = await db
+    .select({ id: refreshTokens.id })
+    .from(refreshTokens)
+    .where(
+      and(
+        eq(refreshTokens.familyId, familyId),
+        isNull(refreshTokens.revokedAt),
+        gt(refreshTokens.expiresAt, new Date()),
+      ),
+    )
+    .limit(1);
+  return row !== undefined;
+}
+
+/** Ends every token descended from the same login (a whole session) at once -- and the phone push
+ *  tokens registered under that session (CHAT-055). */
 export async function revokeFamily(db: DbExecutor, familyId: string): Promise<void> {
   await db
     .update(refreshTokens)
     .set({ revokedAt: new Date() })
     .where(and(eq(refreshTokens.familyId, familyId), isNull(refreshTokens.revokedAt)));
+  await db.delete(devices).where(eq(devices.sessionFamilyId, familyId));
 }
 
-/** Ends every session for a user (e.g. after a password reset). */
+/** Ends every session for a user (e.g. after a password reset), with their phones' push tokens. */
 export async function revokeAllForUser(db: DbExecutor, userId: string): Promise<void> {
   await db
     .update(refreshTokens)
     .set({ revokedAt: new Date() })
     .where(and(eq(refreshTokens.userId, userId), isNull(refreshTokens.revokedAt)));
+  await db
+    .delete(devices)
+    .where(and(eq(devices.userId, userId), isNotNull(devices.sessionFamilyId)));
 }
 
 /** CHAT-037: after a password change, every other session ends; this one (if known) stays. */
@@ -78,6 +99,15 @@ export async function revokeAllForUserExcept(
         eq(refreshTokens.userId, userId),
         isNull(refreshTokens.revokedAt),
         ...(keepFamilyId ? [ne(refreshTokens.familyId, keepFamilyId)] : []),
+      ),
+    );
+  await db
+    .delete(devices)
+    .where(
+      and(
+        eq(devices.userId, userId),
+        isNotNull(devices.sessionFamilyId),
+        ...(keepFamilyId ? [ne(devices.sessionFamilyId, keepFamilyId)] : []),
       ),
     );
 }

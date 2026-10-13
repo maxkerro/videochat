@@ -120,7 +120,8 @@ export function createLocalStore(db: SqlDb, options: { maxMessagesPerConversatio
         await tx.run('DELETE FROM messages WHERE conversation_id = ?', [id]);
       }),
 
-    /** Adds or updates messages, then trims the conversation to its newest `cap`. */
+    /** Adds or updates messages (an older page loaded while scrolling back), then trims the
+     *  conversation to its newest `cap`. */
     saveMessages: (conversationId: string, messages: Message[]) =>
       db.transaction(async (tx) => {
         for (const m of messages) {
@@ -128,6 +129,72 @@ export function createLocalStore(db: SqlDb, options: { maxMessagesPerConversatio
             'INSERT OR REPLACE INTO messages (conversation_id, id, seq, json) VALUES (?, ?, ?, ?)',
             [conversationId, m.id, m.seq, JSON.stringify(m)],
           );
+        }
+        await tx.run(
+          `DELETE FROM messages WHERE conversation_id = ? AND id NOT IN (
+             SELECT id FROM messages WHERE conversation_id = ? ORDER BY seq DESC LIMIT ?)`,
+          [conversationId, conversationId, cap],
+        );
+      }),
+    /**
+     * The newest page the server returned for a conversation. Cached messages that do not join it
+     * (the phone was away long enough that older rows are separated from this page by a gap) are
+     * dropped, so the cache is always one contiguous run and the offline view can never present a
+     * hole as if it were complete history.
+     */
+    saveLatestPage: (conversationId: string, messages: Message[]) =>
+      db.transaction(async (tx) => {
+        const oldestInPage = messages.reduce<number | null>(
+          (min, m) => (min === null || m.seq < min ? m.seq : min),
+          null,
+        );
+        if (oldestInPage !== null) {
+          const [stored] = await tx.all<{ newest: number | null }>(
+            'SELECT MAX(seq) AS newest FROM messages WHERE conversation_id = ?',
+            [conversationId],
+          );
+          const newest = stored?.newest ?? null;
+          if (newest !== null && newest < oldestInPage - 1) {
+            await tx.run('DELETE FROM messages WHERE conversation_id = ?', [conversationId]);
+          }
+        }
+        for (const m of messages) {
+          await tx.run(
+            'INSERT OR REPLACE INTO messages (conversation_id, id, seq, json) VALUES (?, ?, ?, ?)',
+            [conversationId, m.id, m.seq, JSON.stringify(m)],
+          );
+        }
+        await tx.run(
+          `DELETE FROM messages WHERE conversation_id = ? AND id NOT IN (
+             SELECT id FROM messages WHERE conversation_id = ? ORDER BY seq DESC LIMIT ?)`,
+          [conversationId, conversationId, cap],
+        );
+      }),
+    /**
+     * Messages that arrived on their own (the live socket, a message this phone just sent). A
+     * message already cached is replaced (an edit, a delete, a preview); a new one is added only if
+     * it directly follows the newest cached message (or is the conversation's very first). Anything
+     * else would leave a gap, so it is not cached -- the next fetch of the conversation fills it.
+     */
+    appendLive: (conversationId: string, messages: Message[]) =>
+      db.transaction(async (tx) => {
+        const [stored] = await tx.all<{ newest: number | null }>(
+          'SELECT MAX(seq) AS newest FROM messages WHERE conversation_id = ?',
+          [conversationId],
+        );
+        let newest = stored?.newest ?? null;
+        for (const m of [...messages].sort((a, b) => a.seq - b.seq)) {
+          const [existing] = await tx.all<{ id: string }>(
+            'SELECT id FROM messages WHERE conversation_id = ? AND id = ?',
+            [conversationId, m.id],
+          );
+          const joins = newest === null ? m.seq === 1 : m.seq === newest + 1;
+          if (!existing && !joins) continue;
+          await tx.run(
+            'INSERT OR REPLACE INTO messages (conversation_id, id, seq, json) VALUES (?, ?, ?, ?)',
+            [conversationId, m.id, m.seq, JSON.stringify(m)],
+          );
+          if (newest === null || m.seq > newest) newest = m.seq;
         }
         await tx.run(
           `DELETE FROM messages WHERE conversation_id = ? AND id NOT IN (

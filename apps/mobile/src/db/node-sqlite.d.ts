@@ -13,4 +13,9 @@ declare module 'node:sqlite' {
 /** app.config.ts runs in Node (at build time) and checks whether google-services.json exists. */
 declare module 'node:fs' {
   export function existsSync(path: string): boolean;
+  export function readFileSync(path: string, encoding: 'utf8'): string;
 }
+declare module 'node:path' {
+  export function join(...parts: string[]): string;
+}
+declare const __dirname: string;

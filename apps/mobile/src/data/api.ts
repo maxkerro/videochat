@@ -193,8 +193,12 @@ export const unblockUser = (userId: string) => apiDelete(`/users/${userId}/block
 
 // Push notifications (CHAT-055) --------------------------------------------------------------
 
-export const registerPushDevice = (platform: 'android' | 'ios', token: string) =>
-  apiPost('/push/devices', z.undefined(), { platform, token });
+export async function registerPushDevice(platform: 'android' | 'ios', token: string) {
+  // The refresh token names this login session, so the server ends the registration with it.
+  const refreshToken = await session.currentRefreshToken();
+  if (!refreshToken) throw new Error('Not signed in');
+  return apiPost('/push/devices', z.undefined(), { platform, token, refreshToken });
+}
 
 export const unregisterPushDevice = (token: string) =>
   apiDelete('/push/devices', z.undefined(), {

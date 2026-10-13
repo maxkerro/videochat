@@ -2,13 +2,17 @@ import { useQueryClient } from '@tanstack/react-query';
 import type { ConversationSummary } from '@videochat/shared';
 import * as Notifications from 'expo-notifications';
 import { useRouter } from 'expo-router';
-import { useEffect, useRef, type ReactNode } from 'react';
+import { useEffect, type ReactNode } from 'react';
 import { Platform } from 'react-native';
 import { useAuth } from '../auth/AuthContext';
 import { keys } from '../data/keys';
 import { configureNotifications, ensurePermission } from './notifications';
 import { routeForNotification, totalUnread } from './payload';
 import { registerToken, forgetRegistration } from './registration';
+
+/** The last notification tap acted on. Module-level: it must survive this provider remounting
+ * (sign-out/in), or the same stale tap would navigate again. */
+let handledNotificationId: string | null = null;
 
 /**
  * CHAT-055: push notifications on the phone. After sign-in it asks for permission (once), registers
@@ -21,7 +25,6 @@ export function PushProvider({ children }: { children: ReactNode }) {
   const userId = state.status === 'signedIn' ? state.user.id : null;
   const router = useRouter();
   const queryClient = useQueryClient();
-  const handled = useRef<string | null>(null);
 
   // Registration -------------------------------------------------------------------------------
   useEffect(() => {
@@ -58,8 +61,8 @@ export function PushProvider({ children }: { children: ReactNode }) {
     if (!userId || !last) return;
     if (last.actionIdentifier !== Notifications.DEFAULT_ACTION_IDENTIFIER) return;
     const id = last.notification.request.identifier;
-    if (handled.current === id) return;
-    handled.current = id;
+    if (handledNotificationId === id) return;
+    handledNotificationId = id;
     const route = routeForNotification(last.notification.request.content.data);
     if (route) router.push(route);
   }, [userId, last, router]);

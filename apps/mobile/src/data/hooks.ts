@@ -99,7 +99,7 @@ export function useMessages(id: string): MessagesView {
       const startedAt = session.generation();
       const page = await api.fetchMessages(id);
       if (sameSession(startedAt)) {
-        bestEffort(getLocalStore().then((s) => s.saveMessages(id, page.messages)));
+        bestEffort(getLocalStore().then((s) => s.saveLatestPage(id, page.messages)));
       }
       return mergeLatestPage(queryClient.getQueryData<MessagesState>(key), page);
     },

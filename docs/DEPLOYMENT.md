@@ -135,9 +135,11 @@ Phones get pushes through Firebase Cloud Messaging (FCM). One-time setup:
 1. In the [Firebase console](https://console.firebase.google.com) create a project (Analytics is not
    needed). Add an **Android app** for each variant you install, using its package name:
    `app.videochat.chat.staging` (staging), `app.videochat.chat` (production), `app.videochat.chat.dev`.
-2. Download **`google-services.json`** (it contains every app you added) into `apps/mobile/` and commit
-   it. It is not a secret; it only names the project, and Firebase restricts it to the registered
-   package names.
+2. Download **`google-services.json`** (it lists the apps you had added when you downloaded it) into
+   `apps/mobile/` and commit it. It is not a secret, but restrict its API key in Google Cloud. Each
+   build variant gets the file only if it lists that variant's package (the Google Services Gradle plugin
+   fails otherwise); a variant that is missing builds without Firebase, with a warning, and has no push.
+   Add a new variant in Firebase, then download and commit the file again.
 3. Project settings -> **Service accounts** -> _Generate new private key_. Paste the whole JSON file as
    the value of **`FCM_SERVICE_ACCOUNT_JSON`** on `videochat-api` in Render (this one _is_ a secret:
    never commit it). Without it the API simply sends no phone pushes.
@@ -145,7 +147,9 @@ Phones get pushes through Firebase Cloud Messaging (FCM). One-time setup:
    cannot add it. The version is `0.3.0`.
 
 How it behaves: the app asks for notification permission after sign-in and registers its FCM token
-(`POST /push/devices`); sign-out removes it (`DELETE /push/devices`). The same rules as the web apply
+(`POST /push/devices`, which also sends the login's refresh token: the token is bound to that login
+session and is deleted when the session ends, and a registration for an ended session is refused;
+migration `0011` adds this and deploys with the API); sign-out removes it (`DELETE /push/devices`). The same rules as the web apply
 (no push for muted chats, for the conversation you are looking at, or when the person turned
 notifications off); tokens FCM reports as unregistered are deleted. A new message for a conversation
 replaces its earlier notification, tapping one opens that conversation, and opening a conversation

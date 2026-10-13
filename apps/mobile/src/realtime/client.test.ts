@@ -1,6 +1,12 @@
 import { makeEnvelope } from '@videochat/shared';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { RealtimeClient, reconnectDelayMs, type RealtimeStatus, type SocketLike } from './client';
+import {
+  HANDSHAKE_TIMEOUT_MS,
+  RealtimeClient,
+  reconnectDelayMs,
+  type RealtimeStatus,
+  type SocketLike,
+} from './client';
 
 class FakeSocket implements SocketLike {
   readyState = 0;
@@ -30,13 +36,16 @@ class FakeSocket implements SocketLike {
   }
 }
 
-function setup(token: string | null = 'tok') {
+function setup(
+  token: string | null = 'tok',
+  getAccessToken: () => Promise<string | null> = () => Promise.resolve(token),
+) {
   const sockets: FakeSocket[] = [];
   const statuses: RealtimeStatus[] = [];
   const events: string[] = [];
   const client = new RealtimeClient({
     url: 'wss://api.example/realtime',
-    getAccessToken: () => Promise.resolve(token),
+    getAccessToken,
     onEvent: (e) => events.push(e.type),
     onStatus: (s) => statuses.push(s),
     createSocket: (url) => {
@@ -103,14 +112,18 @@ describe('RealtimeClient', () => {
     const { client, sockets } = setup();
     client.connect();
     await flush();
-    for (let i = 0; i < 3; i++) {
-      sockets.at(-1)!.open(); // handshake ok, but no realtime.ready before the close
-      sockets.at(-1)!.drop();
-      await vi.advanceTimersByTimeAsync(40_000);
-    }
-    // Delays 250, 500, 1000 ms (random = 0): still only a handful of sockets after 40 s each.
-    expect(sockets.length).toBeLessThanOrEqual(5);
-    expect(sockets.length).toBeGreaterThanOrEqual(4);
+    // Handshake ok but no realtime.ready before each close: the delay (random = 0) grows 250, 500, 1000.
+    sockets[0]!.open();
+    sockets[0]!.drop();
+    await vi.advanceTimersByTimeAsync(250);
+    expect(sockets).toHaveLength(2);
+    sockets[1]!.open();
+    sockets[1]!.drop();
+    await vi.advanceTimersByTimeAsync(300);
+    expect(sockets).toHaveLength(2); // still waiting: the delay doubled
+    await vi.advanceTimersByTimeAsync(200);
+    expect(sockets).toHaveLength(3);
+    client.close();
   });
 
   it('retries later when there is no token yet (signed out)', async () => {
@@ -150,5 +163,48 @@ describe('RealtimeClient', () => {
     sockets[0]!.onmessage?.({ data: JSON.stringify({ nope: true }) });
     sockets[0]!.receive('message.new');
     expect(events).toEqual(['message.new']);
+  });
+
+  it('a connect() that was still fetching its token when close() + connect() ran never opens a socket with the stale token', async () => {
+    // Account A's token takes a while (a slow refresh); the app then switches to account B.
+    const resolvers: Array<(t: string | null) => void> = [];
+    const { client, sockets } = setup('unused', () => new Promise((r) => resolvers.push(r)));
+    client.connect(); // A's open(), waiting for A's token
+    client.close(); // account switch: cleanup
+    client.connect(); // B's connect()
+    expect(resolvers).toHaveLength(2);
+    resolvers[1]!('token-B');
+    await flush();
+    resolvers[0]!('token-A'); // A's token arrives late
+    await flush();
+    expect(sockets.map((s) => s.url)).toEqual(['wss://api.example/realtime?token=token-B']);
+  });
+
+  it('a close() while the token is being fetched leaves nothing connected', async () => {
+    const resolvers: Array<(t: string | null) => void> = [];
+    const { client, sockets } = setup('unused', () => new Promise((r) => resolvers.push(r)));
+    client.connect();
+    client.close();
+    resolvers[0]!('late');
+    await flush();
+    expect(sockets).toHaveLength(0);
+    expect(client.getStatus()).toBe('closed');
+  });
+
+  it('abandons a handshake that never completes and tries again', async () => {
+    const { client, sockets } = setup();
+    client.connect();
+    await flush();
+    expect(sockets).toHaveLength(1);
+    await vi.advanceTimersByTimeAsync(HANDSHAKE_TIMEOUT_MS);
+    expect(sockets[0]!.closed).toBe(true);
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(sockets).toHaveLength(2);
+    // A confirmed connection is left alone.
+    sockets[1]!.open();
+    sockets[1]!.receive('realtime.ready');
+    await vi.advanceTimersByTimeAsync(HANDSHAKE_TIMEOUT_MS * 2);
+    expect(sockets[1]!.closed).toBe(false);
+    expect(client.getStatus()).toBe('open');
   });
 });

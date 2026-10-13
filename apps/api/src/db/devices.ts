@@ -37,14 +37,15 @@ export async function upsertNativePushDevice(
   platform: 'ios' | 'android',
   token: string,
   userAgent: string | null,
+  sessionFamilyId: string,
 ): Promise<void> {
   await db
     .insert(devices)
-    .values({ userId, platform, pushToken: token, pushKeys: null, userAgent })
+    .values({ userId, platform, pushToken: token, pushKeys: null, userAgent, sessionFamilyId })
     .onConflictDoUpdate({
       target: devices.pushToken,
       targetWhere: sql`${devices.pushToken} IS NOT NULL`,
-      set: { userId, platform, pushKeys: null, userAgent, lastSeenAt: sql`now()` },
+      set: { userId, platform, pushKeys: null, userAgent, sessionFamilyId, lastSeenAt: sql`now()` },
     });
 }
 

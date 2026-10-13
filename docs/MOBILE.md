@@ -74,11 +74,11 @@ triggers a refetch instead of being shown. Events from an earlier session are dr
 the server it is being viewed so no notification is sent for it.
 
 **Push.** After sign-in the app asks for notification permission, registers its FCM token with
-`POST /push/devices`, re-registers if the token rotates, and removes it on sign-out. A tap on a
+`POST /push/devices` (with the login's refresh token, so the device is bound to that session and removed when it ends), re-registers if the token rotates, and removes it on sign-out. A tap on a
 notification opens `/c/<id>` (only a well-formed conversation id is accepted), including when the
 tap launched the app. The icon badge shows the unread total (muted chats excluded; whether it shows
 depends on the phone's launcher). Server setup is in `DEPLOYMENT.md`. Push needs `google-services.json`
-in `apps/mobile/` and a native build (version `0.3.0`); iOS needs an Apple developer account and is
+in `apps/mobile/` listing the variant's package and a native build (version `0.3.0`); iOS needs an Apple developer account and is
 not wired yet.
 
 ## Running it

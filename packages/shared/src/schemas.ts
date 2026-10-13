@@ -451,6 +451,9 @@ export const pushUnsubscribeSchema = z.object({ endpoint: z.string().max(2048) }
 export const nativePushRegistrationSchema = z.object({
   platform: z.enum(['android', 'ios']),
   token: z.string().min(1).max(4096),
+  /** The session's refresh token: ties the push token to this login, so ending the session (logout,
+   *  revocation) also ends the notifications. Verified server-side, never stored. */
+  refreshToken: z.string().min(1).max(512),
 });
 export type NativePushRegistrationInput = z.infer<typeof nativePushRegistrationSchema>;
 export const nativePushUnregisterSchema = z.object({ token: z.string().min(1).max(4096) });

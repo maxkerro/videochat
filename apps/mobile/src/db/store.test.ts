@@ -74,6 +74,49 @@ describe('local store', () => {
     expect(all.map((m) => m.body)).toEqual(['m1', 'm2', 'edited']);
   });
 
+  it('saveLatestPage drops cached rows that do not join the new page, so no hole is ever cached', async () => {
+    const store = await setup();
+    await store.saveLatestPage(
+      CONV,
+      [1, 2, 3].map((n) => message(n)),
+    );
+    // Joins (seq 4 directly follows 3), even with overlap: nothing is dropped.
+    await store.saveLatestPage(
+      CONV,
+      [3, 4, 5].map((n) => message(n)),
+    );
+    expect((await store.loadMessages(CONV)).map((m) => m.seq)).toEqual([1, 2, 3, 4, 5]);
+    // The phone was away: the newest page starts at 50, so 1..5 would hide the missing middle.
+    await store.saveLatestPage(
+      CONV,
+      [50, 51].map((n) => message(n)),
+    );
+    expect((await store.loadMessages(CONV)).map((m) => m.seq)).toEqual([50, 51]);
+  });
+
+  it('appendLive adds only messages that directly follow the cache, and updates cached ones', async () => {
+    const store = await setup();
+    await store.appendLive(CONV, [message(3)]); // empty cache, not the first message: skipped
+    expect(await store.loadMessages(CONV)).toEqual([]);
+    await store.appendLive(CONV, [message(1)]); // the conversation's first message
+    await store.appendLive(CONV, [message(2)]);
+    await store.appendLive(CONV, [message(5)]); // skips ahead: would leave a hole
+    await store.appendLive(CONV, [message(2, CONV, 'edited')]); // an edit of a cached message
+    await store.appendLive(CONV, [message(9, CONV, 'edit of an uncached message')]);
+    const all = await store.loadMessages(CONV);
+    expect(all.map((m) => [m.seq, m.body])).toEqual([
+      [1, 'm1'],
+      [2, 'edited'],
+    ]);
+  });
+
+  it('appendLive takes a batch in order', async () => {
+    const store = await setup();
+    await store.saveLatestPage(CONV, [message(1)]);
+    await store.appendLive(CONV, [message(3), message(2)]);
+    expect((await store.loadMessages(CONV)).map((m) => m.seq)).toEqual([1, 2, 3]);
+  });
+
   it('caps the cache at the newest N messages per conversation, independently', async () => {
     const store = await setup(3);
     await store.saveMessages(

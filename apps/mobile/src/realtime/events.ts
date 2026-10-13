@@ -46,9 +46,10 @@ export function resetInboxThrottle(): void {
   lastInboxRefresh = 0;
 }
 
+// Live messages only extend the on-device copy when they join it without a gap (see appendLive).
 const saveLocally = (conversationId: string, messages: Parameters<typeof mergeMessages>[1]) =>
   void getLocalStore()
-    .then((s) => s.saveMessages(conversationId, messages))
+    .then((s) => s.appendLive(conversationId, messages))
     .catch(() => undefined);
 
 /**

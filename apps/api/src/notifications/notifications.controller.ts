@@ -1,4 +1,14 @@
-import { Body, Controller, Delete, Get, HttpCode, Post, Req, UseGuards } from '@nestjs/common';
+import {
+  Body,
+  Controller,
+  Delete,
+  Get,
+  HttpCode,
+  Post,
+  Req,
+  UnauthorizedException,
+  UseGuards,
+} from '@nestjs/common';
 import {
   nativePushRegistrationSchema,
   nativePushUnregisterSchema,
@@ -8,10 +18,12 @@ import {
 import type { Request } from 'express';
 import { z } from 'zod';
 import { AccessTokenGuard, CurrentUserId } from '../auth/access-token.guard.js';
+import { hashToken } from '../auth/tokens.js';
 import { ZodValidationPipe } from '../common/zod-validation.pipe.js';
 import { Inject } from '@nestjs/common';
 import type { Database } from '../db/client.js';
 import { deletePushDevice, upsertNativePushDevice, upsertWebPushDevice } from '../db/devices.js';
+import { findRefreshTokenByHash, isFamilyLive } from '../db/refresh-tokens.js';
 import { DB } from '../infra/tokens.js';
 import { WebPushChannel } from './web-push.channel.js';
 
@@ -62,8 +74,14 @@ export class NotificationsController {
     body: z.infer<typeof nativePushRegistrationSchema>,
     @Req() req: Request,
   ): Promise<void> {
+    // The refresh token proves which login session this phone belongs to (and that it is still
+    // alive); the token is only looked up here, never stored.
+    const session = await findRefreshTokenByHash(this.db, hashToken(body.refreshToken));
+    if (!session || session.userId !== userId || !(await isFamilyLive(this.db, session.familyId))) {
+      throw new UnauthorizedException('Invalid session');
+    }
     const ua = req.headers['user-agent']?.slice(0, 255) ?? null;
-    await upsertNativePushDevice(this.db, userId, body.platform, body.token, ua);
+    await upsertNativePushDevice(this.db, userId, body.platform, body.token, ua, session.familyId);
   }
 
   /** CHAT-055: sign-out on the phone removes its token so the next person gets no pushes meant

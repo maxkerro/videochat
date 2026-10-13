@@ -158,11 +158,17 @@ export const devices = pgTable(
     /** CHAT-035: a web push subscription's encryption keys (`push_token` holds its endpoint). */
     pushKeys: jsonb('push_keys').$type<{ p256dh: string; auth: string }>(),
     userAgent: text('user_agent'),
+    /** CHAT-055: the login session (refresh-token family) a phone's push token belongs to. Ending
+     *  that session -- logout, a reuse alarm, a password change -- deletes the row, so a signed-out
+     *  phone stops receiving the account's notifications even if it never got to say goodbye. Null
+     *  for browsers, which are tied to their service worker instead. */
+    sessionFamilyId: uuid('session_family_id'),
     lastSeenAt: timestamp('last_seen_at', { withTimezone: true }).notNull().defaultNow(),
     ...timestamps,
   },
   (t) => [
     index('devices_user_idx').on(t.userId),
+    index('devices_session_family_idx').on(t.sessionFamilyId),
     uniqueIndex('devices_push_token_uq')
       .on(t.pushToken)
       .where(sql`${t.pushToken} IS NOT NULL`),

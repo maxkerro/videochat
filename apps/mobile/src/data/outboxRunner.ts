@@ -19,7 +19,7 @@ export async function recordMessage(message: Message, startedAt: number): Promis
   // The inbox preview and unread state change with every message.
   void queryClient.invalidateQueries({ queryKey: keys.conversations });
   try {
-    await (await getLocalStore()).saveMessages(message.conversationId, [message]);
+    await (await getLocalStore()).appendLive(message.conversationId, [message]);
   } catch {
     // the cache is best effort
   }

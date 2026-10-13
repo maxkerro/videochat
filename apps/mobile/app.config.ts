@@ -1,5 +1,46 @@
-import { existsSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
+import { join } from 'node:path';
 import type { ConfigContext, ExpoConfig } from 'expo/config';
+
+/** The part of Firebase's `google-services.json` this check reads. */
+interface GoogleServicesFile {
+  client?: Array<{ client_info?: { android_client_info?: { package_name?: string } } }>;
+}
+
+interface GoogleServicesEnv {
+  /** Where the file is (an EAS file variable, or the committed one beside app.config.ts). */
+  path: string;
+  exists: (path: string) => boolean;
+  read: (path: string) => string;
+}
+
+/**
+ * CHAT-055: the Google Services Gradle plugin fails a build whose package name has no entry in
+ * `google-services.json`. So the file is handed to a variant only if it lists that variant's
+ * package; otherwise the variant builds without Firebase (no push on it) instead of not at all.
+ * Returns the path to use, or why not.
+ */
+function pickGoogleServicesFile(
+  packageId: string,
+  env: GoogleServicesEnv,
+): { file: string } | { file: null; reason: string } {
+  if (!env.exists(env.path)) return { file: null, reason: 'no google-services.json' };
+  let parsed: GoogleServicesFile;
+  try {
+    parsed = JSON.parse(env.read(env.path)) as GoogleServicesFile;
+  } catch {
+    return { file: null, reason: 'google-services.json is not valid JSON' };
+  }
+  const listed = parsed.client?.some(
+    (c) => c.client_info?.android_client_info?.package_name === packageId,
+  );
+  return listed
+    ? { file: env.path }
+    : {
+        file: null,
+        reason: `google-services.json has no Android app "${packageId}" (add it in the Firebase console and download the file again)`,
+      };
+}
 
 /**
  * CHAT-050: one codebase, three installable variants that can live side by side on a phone.
@@ -40,14 +81,24 @@ function variantFromEnv(value: string | undefined): Variant {
   return value === 'staging' || value === 'production' ? value : 'development';
 }
 
-/** `GOOGLE_SERVICES_JSON` (an EAS file variable) or `google-services.json` beside this file. */
-const googleServicesFile =
-  process.env.GOOGLE_SERVICES_JSON ??
-  (existsSync('./google-services.json') ? './google-services.json' : undefined);
+/** `GOOGLE_SERVICES_JSON` (an EAS file variable) or the `google-services.json` beside this file. */
+const googleServicesPath =
+  process.env.GOOGLE_SERVICES_JSON ?? join(__dirname, 'google-services.json');
 
 export default ({ config }: ConfigContext): ExpoConfig => {
   const variant = variantFromEnv(process.env.APP_VARIANT);
   const v = VARIANTS[variant];
+  // Push needs this variant's package in the file; without it the build still works (see the
+  // helper), just without Firebase.
+  const googleServices = pickGoogleServicesFile(v.id, {
+    path: googleServicesPath,
+    exists: existsSync,
+    read: (path) => readFileSync(path, 'utf8'),
+  });
+  if (googleServices.file === null && existsSync(googleServicesPath)) {
+    console.warn(`[app.config] Android push is off for ${v.id}: ${googleServices.reason}`);
+  }
+  const googleServicesFile = googleServices.file ?? undefined;
   return {
     ...config,
     name: v.name,

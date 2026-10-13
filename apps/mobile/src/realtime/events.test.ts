@@ -64,8 +64,9 @@ describe('applyRealtimeEvent', () => {
     h.store = createLocalStore(await createTestDb());
   });
 
-  it('adds a new message to the open conversation and the on-device copy', async () => {
+  it('adds a new message to the open conversation and, when it joins the cache, the on-device copy', async () => {
     const { queryClient, events, keys } = await load();
+    await h.store!.saveLatestPage(CONV, [msg(1), msg(2)]);
     queryClient.setQueryData(keys.messages(CONV), { messages: [msg(1), msg(2)], hasMore: false });
     events.applyRealtimeEvent(env('message.new', msg(3)), ctx());
     expect(
@@ -74,8 +75,16 @@ describe('applyRealtimeEvent', () => {
         .messages.map((m) => m.seq),
     ).toEqual([1, 2, 3]);
     await vi.waitFor(async () =>
-      expect((await h.store!.loadMessages(CONV, 10)).map((m) => m.seq)).toEqual([3]),
+      expect((await h.store!.loadMessages(CONV, 10)).map((m) => m.seq)).toEqual([1, 2, 3]),
     );
+  });
+
+  it('does not put a message into the on-device copy when it would leave a gap', async () => {
+    const { events } = await load();
+    events.applyRealtimeEvent(env('message.new', msg(3)), ctx());
+    events.applyRealtimeEvent(env('message.updated', msg(7)), ctx());
+    await new Promise((r) => setTimeout(r, 50));
+    expect(await h.store!.loadMessages(CONV, 10)).toEqual([]);
   });
 
   it('refetches instead of showing a hole when a message skips ahead', async () => {
