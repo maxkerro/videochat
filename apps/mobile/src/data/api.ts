@@ -131,6 +131,13 @@ export const requestUpload = (conversationId: string, input: CreateAttachmentUpl
 export const fetchAttachmentUrl = (attachmentId: string, variant: 'original' | 'thumb') =>
   apiGet(`/attachments/${attachmentId}/url?variant=${variant}`, attachmentUrlSchema);
 
+/** Object storage answers failures with XML like `<Code>SignatureDoesNotMatch</Code>`; showing the
+ *  code turns a bare "403" into something diagnosable (wrong headers, expired URL, bad key...). */
+export function storageErrorCode(body: string | null | undefined): string {
+  const code = /<Code>([A-Za-z0-9_.-]{1,64})<\/Code>/.exec(body ?? '')?.[1];
+  return code ? `: ${code}` : '';
+}
+
 /** PUTs a file straight to object storage through the signed URL (never through the API).
  *  XMLHttpRequest rather than fetch, for upload progress. */
 export function uploadToStorage(
@@ -150,7 +157,9 @@ export function uploadToStorage(
     xhr.onload = () =>
       xhr.status >= 200 && xhr.status < 300
         ? resolve()
-        : reject(new UploadError(`Upload failed (${xhr.status})`));
+        : reject(
+            new UploadError(`Upload failed (${xhr.status}${storageErrorCode(xhr.responseText)})`),
+          );
     xhr.onerror = () => reject(new UploadError('Upload failed -- check your connection'));
     xhr.send(file);
   });
