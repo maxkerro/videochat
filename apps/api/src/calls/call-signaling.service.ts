@@ -51,6 +51,9 @@ export const CALL_SWEEP_INTERVAL_MS = 1_000;
 /** Fired after a call ends, once, by whichever node ended it (CHAT-044 posts call history). */
 export type CallEndedListener = (call: CallRow) => Promise<void>;
 
+/** Fired when a call starts ringing the callee (never for busy or silenced calls). */
+export type CallIncomingListener = (call: CallRow, caller: CallIncoming['caller']) => Promise<void>;
+
 /**
  * CHAT-041: WebRTC call signalling over the existing realtime socket.
  *
@@ -70,6 +73,7 @@ export class CallSignalingService implements OnModuleInit, OnModuleDestroy {
   private sweepTimer?: NodeJS.Timeout;
   private sweepFailing = false;
   private readonly endedListeners: CallEndedListener[] = [];
+  private readonly incomingListeners: CallIncomingListener[] = [];
 
   constructor(
     @Inject(DB) private readonly db: Database,
@@ -93,6 +97,10 @@ export class CallSignalingService implements OnModuleInit, OnModuleDestroy {
 
   onCallEnded(listener: CallEndedListener): void {
     this.endedListeners.push(listener);
+  }
+
+  onCallIncoming(listener: CallIncomingListener): void {
+    this.incomingListeners.push(listener);
   }
 
   async handle(client: RealtimeSocket, envelope: WsEnvelope): Promise<void> {
@@ -179,6 +187,13 @@ export class CallSignalingService implements OnModuleInit, OnModuleDestroy {
         randomUUID(),
       ),
     );
+    for (const listener of this.incomingListeners) {
+      try {
+        await listener(call, caller);
+      } catch (err) {
+        this.logger.warn(`Incoming-call listener failed for ${call.id}: ${(err as Error).message}`);
+      }
+    }
   }
 
   /** A callee device is ringing: let the caller know (it shows "Ringing..." instead of "Calling..."). */

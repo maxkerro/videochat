@@ -9,7 +9,7 @@ import type { CallRow, MessageRow } from '../db/schema.js';
 import { findUserById } from '../db/users.js';
 import { DB, REDIS } from '../infra/tokens.js';
 import { RealtimeService, type RealtimeSocket } from '../realtime/realtime.service.js';
-import { PUSH_CHANNELS, type PushChannel } from './push-channel.js';
+import { PUSH_CHANNELS, type IncomingCallPush, type PushChannel } from './push-channel.js';
 
 const VIEWING_TTL_SEC = 2 * 60 * 60;
 const viewingKey = (userId: string) => `viewing:${userId}`;
@@ -117,6 +117,31 @@ export class NotificationsService implements OnModuleInit {
       );
     } catch (err) {
       this.logger.warn(`Notifying about missed call ${call.id} failed: ${(err as Error).message}`);
+    }
+  }
+
+  /**
+   * CHAT-061: rings the callee's phones (Android, through FCM) so the system call screen shows
+   * even when the app is closed. Ignores the muted/viewing rules -- a call is not a message --
+   * but respects the person's "notifications off" switch and blocking (the caller handles
+   * silencing). Web tabs and open apps are rung over the realtime socket instead.
+   */
+  async notifyIncomingCall(calleeId: string, call: IncomingCallPush): Promise<void> {
+    if (!this.enabled) return;
+    try {
+      const prefs = await getNotificationPrefs(this.db, [calleeId]);
+      if (prefs.get(calleeId)?.enabled === false) return;
+      const devices = await listPushDevices(this.db, [calleeId]);
+      await Promise.all(
+        devices.map(async (device) => {
+          const channel = this.channels.get(device.platform);
+          if (!channel?.enabled || !channel.sendIncomingCall) return;
+          const result = await channel.sendIncomingCall(device, call);
+          if (result === 'gone') await deletePushDevice(this.db, device.token);
+        }),
+      );
+    } catch (err) {
+      this.logger.warn(`Ringing call ${call.callId} by push failed: ${(err as Error).message}`);
     }
   }
 

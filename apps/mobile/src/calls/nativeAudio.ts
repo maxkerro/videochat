@@ -1,36 +1,38 @@
-import { DeviceEventEmitter, PermissionsAndroid, Platform } from 'react-native';
-import InCallManager from 'react-native-incall-manager';
-import { NATIVE_ROUTE, parseDeviceStatus, type AudioDriver } from './audioRoute';
+import {
+  addAudioRouteChangedListener,
+  getAudioSession,
+  setAudioSessionPortOverride,
+  setRTCAudioSessionConfiguration,
+} from 'expo-callkit-telecom';
+import { PermissionsAndroid, Platform } from 'react-native';
+import { RouteTracker, type AudioDriver } from './audioRoute';
 
 /**
- * CHAT-062: the audio driver on top of react-native-incall-manager. On Android its audio manager
- * picks the route (earpiece/speaker/wired/Bluetooth), reports every change, and turns the screen
- * off against the ear while the sound is on the earpiece. On iOS the system routes to a connected
- * headset or Bluetooth device itself; only speaker vs. phone is ours to set.
+ * CHAT-061/062: the audio driver on top of the native call library, which owns the system call
+ * audio (CallKit / Telecom). It routes to a connected headset or Bluetooth device by itself;
+ * what we add is the loudspeaker switch, and we report which route is in use.
  */
 export const nativeAudioDriver: AudioDriver = {
   start(media) {
-    InCallManager.start({ media });
+    // iOS: the WebRTC audio session is driven by CallKit, not by WebRTC itself.
+    if (Platform.OS === 'ios') setRTCAudioSessionConfiguration(media === 'video');
   },
   stop() {
-    InCallManager.stop();
+    // The library restores the audio session when the call session ends.
   },
   choose(route) {
-    if (Platform.OS === 'android') {
-      void InCallManager.chooseAudioRoute(NATIVE_ROUTE[route]).catch(() => undefined);
-    } else {
-      InCallManager.setForceSpeakerphoneOn(route === 'speaker');
-    }
+    // The speaker is the only route we can force; every other choice is "the system's own pick"
+    // (earpiece, or a headset / Bluetooth device when one is connected).
+    setAudioSessionPortOverride(route === 'speaker');
   },
   watch(listener) {
-    if (Platform.OS !== 'android') {
-      // iOS reports no devices: offer the phone and the speaker.
-      listener({ available: ['earpiece', 'speaker'], selected: null });
-      return () => undefined;
+    const tracker = new RouteTracker();
+    try {
+      listener(tracker.update(getAudioSession()));
+    } catch {
+      // No call session yet: the first route event reports it.
     }
-    const subscription = DeviceEventEmitter.addListener('onAudioDeviceChanged', (event) =>
-      listener(parseDeviceStatus(event)),
-    );
+    const subscription = addAudioRouteChangedListener((event) => listener(tracker.update(event)));
     return () => subscription.remove();
   },
 };

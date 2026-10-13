@@ -12,6 +12,17 @@ export interface PushChannel {
   readonly platform: PushDevice['platform'];
   readonly enabled: boolean;
   send(device: PushDevice, payload: PushPayload): Promise<PushResult>;
+  /** CHAT-061: rings the phone's native call UI. Only channels that can wake a killed app do it. */
+  sendIncomingCall?(device: PushDevice, call: IncomingCallPush): Promise<PushResult>;
+}
+
+/** The call-ringing payload the native call library on the phone understands (its
+ *  `IncomingCallEvent`). `callId` doubles as the event id and the server call id. */
+export interface IncomingCallPush {
+  callId: string;
+  hasVideo: boolean;
+  startedAt: string;
+  caller: { id: string; displayName: string; avatarUrl: string | null };
 }
 
 export const PUSH_CHANNELS = Symbol('PUSH_CHANNELS');

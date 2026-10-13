@@ -14,7 +14,7 @@ import {
 import { Alert, AppState, Linking } from 'react-native';
 import { useAuth } from '../auth/AuthContext';
 import { getRealtimeStatus } from '../realtime/status';
-import { getConnectionId, subscribeRealtime } from '../realtime/connection';
+import { getConnectionId, subscribeRealtime, waitForRealtime } from '../realtime/connection';
 import { setCallActive } from './activity';
 import { AudioSession, type AudioRoute, type AudioSnapshot } from './audioRoute';
 import {
@@ -23,6 +23,7 @@ import {
   isVideoCall,
   wantsPictureInPicture,
 } from './callMode';
+import { CallBridge } from './callBridge';
 import { CallBusyError, CallEngine, type CallPeer, type CallSnapshot } from './CallEngine';
 import { endMessage } from './endMessage';
 import {
@@ -34,7 +35,8 @@ import {
   type MediaSource,
 } from './media';
 import { nativeAudioDriver, requestBluetoothPermission } from './nativeAudio';
-import { nativeCallDeps, nativeMedia } from './nativeDeps';
+import { nativeCallApi } from './nativeCallUi';
+import { nativeCallDeps, nativeMedia, SIGNALLING_WAIT_MS } from './nativeDeps';
 import { pip, useIsInPip } from './nativePip';
 import type { RtcStream } from './rtc';
 
@@ -110,6 +112,18 @@ export function CallProvider({
   const { state } = useAuth();
   const [engine] = useState(() => new CallEngine(nativeCallDeps()));
   const call = useSyncExternalStore(engine.subscribe, engine.getSnapshot);
+
+  // CHAT-061: the phone's own call screen (lock screen, CallKit / Telecom) and the engine in step.
+  const [bridge] = useState(
+    () =>
+      new CallBridge({
+        api: nativeCallApi,
+        engine,
+        waitForSignalling: () => waitForRealtime(SIGNALLING_WAIT_MS),
+        now: () => Date.now(),
+      }),
+  );
+  useEffect(() => bridge.onSnapshot(call), [bridge, call]);
 
   useEffect(
     () =>
@@ -198,6 +212,14 @@ export function CallProvider({
     return () => setCallActive(false);
   }, [busy]);
 
+  // Once signed in, listen to the system call screen (and pick up a call it is already ringing
+  // for -- the app may have been started by it).
+  useEffect(() => {
+    if (state.status !== 'signedIn') return;
+    void bridge.start();
+    return () => bridge.stop();
+  }, [bridge, state.status]);
+
   // Signing out mid-call hangs up rather than leaving the other person talking to nobody.
   const signedIn = state.status === 'signedIn';
   useEffect(() => {
@@ -248,18 +270,31 @@ export function CallProvider({
     [engine, media],
   );
 
-  const accept = useCallback(
-    async (kind: CallMedia) => {
+  /** Gets the microphone (and camera) and answers; false if that was not possible. */
+  const answerNow = useCallback(
+    async (kind: CallMedia): Promise<boolean> => {
       try {
         const { stream, cameraMissing } = await acquireMedia(media, kind);
         await engine.accept(stream as RtcStream);
         if (cameraMissing) explainCameraOff();
+        return true;
       } catch (error) {
         // Could not get the microphone: leave the call ringing so it can still be declined.
         explainMediaProblem(error);
+        return false;
       }
     },
     [engine, media],
+  );
+  useEffect(() => bridge.setAnswerer(answerNow), [bridge, answerNow]);
+
+  const accept = useCallback(
+    async (kind: CallMedia) => {
+      // Through the system when it has this call (it then needs to know it was answered).
+      if (bridge.requestAnswer()) return;
+      await answerNow(kind);
+    },
+    [bridge, answerNow],
   );
 
   const value = useMemo<CallController>(
@@ -268,8 +303,14 @@ export function CallProvider({
       endedText,
       startCall,
       accept,
-      decline: () => engine.decline(),
-      hangUp: () => engine.hangUp(),
+      decline: () => {
+        bridge.noteLocalEnd();
+        engine.decline();
+      },
+      hangUp: () => {
+        bridge.noteLocalEnd();
+        engine.hangUp();
+      },
       toggleAudio: () => engine.toggleAudio(),
       toggleVideo: async () => {
         try {
@@ -285,7 +326,7 @@ export function CallProvider({
       isInPip: inPip,
       enterPip: wantsPip && pip.isAvailable() ? () => pip.enter() : null,
     }),
-    [call, endedText, startCall, accept, engine, audio, audioSession, inPip, wantsPip],
+    [call, endedText, startCall, accept, engine, bridge, audio, audioSession, inPip, wantsPip],
   );
 
   return <CallContext.Provider value={value}>{children}</CallContext.Provider>;

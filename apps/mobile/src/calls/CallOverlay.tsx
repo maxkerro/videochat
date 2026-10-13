@@ -1,7 +1,7 @@
 import { useEffect } from 'react';
 import { useState } from 'react';
 import { BackHandler, Platform, Pressable, StyleSheet, Text, Vibration, View } from 'react-native';
-import { RTCPIPView, RTCView } from 'react-native-webrtc';
+import { RTCPIPView, RTCView } from '@livekit/react-native-webrtc';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { activateKeepAwakeAsync, deactivateKeepAwake } from 'expo-keep-awake';
 import { Avatar } from '../ui/Avatar';

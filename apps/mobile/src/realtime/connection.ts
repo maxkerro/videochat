@@ -52,6 +52,24 @@ export function subscribeRealtime(listener: Handler): () => void {
 /** This socket's id as the server knows it (to tell my own answer from another device's). */
 export const getConnectionId = () => connectionId;
 
+/** Resolves true once the socket is open and registered with the server (it has a connection id),
+ *  false if that takes longer than `timeoutMs`. A call answered from the lock screen starts the
+ *  app before the socket is up. */
+export function waitForRealtime(timeoutMs: number): Promise<boolean> {
+  if (connectionId !== null) return Promise.resolve(true);
+  return new Promise((resolve) => {
+    const finish = (ok: boolean) => {
+      clearTimeout(timer);
+      unsubscribe();
+      resolve(ok);
+    };
+    const timer = setTimeout(() => finish(false), timeoutMs);
+    const unsubscribe = subscribeRealtime((envelope) => {
+      if (envelope.type === 'realtime.ready' && connectionId !== null) finish(true);
+    });
+  });
+}
+
 /** Sends one event; false when the socket is not open. */
 export function sendRealtimeEvent(type: string, payload: unknown): boolean {
   return realtimeClient.send(makeEnvelope(type, payload, nextId()));

@@ -2,7 +2,8 @@ import { describe, expect, it } from 'vitest';
 import {
   AudioSession,
   defaultRoute,
-  parseDeviceStatus,
+  routeOfPort,
+  RouteTracker,
   routeChoices,
   type AudioDeviceStatus,
   type AudioDriver,
@@ -32,27 +33,61 @@ function fakeDriver() {
   };
 }
 
-describe('parseDeviceStatus', () => {
-  it('reads the native payload', () => {
-    expect(
-      parseDeviceStatus({
-        availableAudioDeviceList: '["SPEAKER_PHONE","BLUETOOTH","EARPIECE"]',
-        selectedAudioDevice: 'BLUETOOTH',
-      }),
-    ).toEqual({ available: ['earpiece', 'speaker', 'bluetooth'], selected: 'bluetooth' });
+const port = (portType: string) => ({ portType, portName: '', uid: '1' });
+const route = (portType: string) => ({ currentRoute: { inputs: [], outputs: [port(portType)] } });
+
+describe('routeOfPort', () => {
+  it('maps the native port types', () => {
+    expect(routeOfPort('builtInReceiver')).toBe('earpiece');
+    expect(routeOfPort('builtInSpeaker')).toBe('speaker');
+    expect(routeOfPort('headphones')).toBe('headset');
+    expect(routeOfPort('usbAudio')).toBe('headset');
+    expect(routeOfPort('bluetoothHFP')).toBe('bluetooth');
+    expect(routeOfPort('bluetoothA2DP')).toBe('bluetooth');
+    expect(routeOfPort('carAudio')).toBe('bluetooth');
   });
 
-  it('survives garbage', () => {
-    expect(parseDeviceStatus(undefined)).toEqual({ available: [], selected: null });
-    expect(parseDeviceStatus({ availableAudioDeviceList: 'nope', selectedAudioDevice: 7 })).toEqual(
-      {
-        available: [],
-        selected: null,
-      },
-    );
+  it('ignores what it does not know', () => {
+    expect(routeOfPort('hdmi')).toBeNull();
+    expect(routeOfPort('android_99')).toBeNull();
+    expect(routeOfPort(undefined)).toBeNull();
+  });
+});
+
+describe('RouteTracker', () => {
+  it('keeps the earpiece on offer while the speaker is in use', () => {
+    const t = new RouteTracker();
+    expect(t.update(route('builtInReceiver'))).toEqual({
+      available: ['earpiece'],
+      selected: 'earpiece',
+    });
+    expect(t.update(route('builtInSpeaker'))).toEqual({
+      available: ['earpiece', 'speaker'],
+      selected: 'speaker',
+    });
+  });
+
+  it('keeps a headset until the system falls back to the earpiece', () => {
+    const t = new RouteTracker();
+    t.update(route('bluetoothHFP'));
+    expect(t.update(route('builtInSpeaker')).available).toEqual(['speaker', 'bluetooth']);
+    expect(t.update(route('builtInReceiver')).available).toEqual(['earpiece', 'speaker']);
+  });
+
+  it('uses the list when the platform gives one, and survives garbage', () => {
+    const t = new RouteTracker();
     expect(
-      parseDeviceStatus({ availableAudioDeviceList: '["NONE","WIRED_HEADSET"]' }).available,
-    ).toEqual(['headset']);
+      t.update({
+        currentRoute: { outputs: [port('builtInReceiver')] },
+        availableRoutes: [port('builtInReceiver'), port('builtInSpeaker'), port('headphones')],
+      }).available,
+    ).toEqual(['earpiece', 'speaker', 'headset']);
+    t.reset();
+    expect(t.update(undefined)).toEqual({ available: [], selected: null });
+    expect(t.update({ currentRoute: { outputs: 'x' }, availableRoutes: 3 })).toEqual({
+      available: [],
+      selected: null,
+    });
   });
 });
 
@@ -81,7 +116,7 @@ describe('routeChoices', () => {
 });
 
 describe('AudioSession', () => {
-  it('starts the platform audio and reports the route it picked, without changing it', () => {
+  it('starts the platform audio and leaves a route that is already the default alone', () => {
     const f = fakeDriver();
     const s = new AudioSession(f.driver);
     s.begin('video');
@@ -90,6 +125,29 @@ describe('AudioSession', () => {
     f.devices(['earpiece', 'speaker'], 'speaker');
     expect(f.log).toEqual(['start:video']);
     expect(s.getSnapshot().route).toBe('speaker');
+  });
+
+  it('moves a video call to the speaker once the system reports the earpiece', () => {
+    const f = fakeDriver();
+    const s = new AudioSession(f.driver);
+    s.begin('video');
+    f.devices(['earpiece'], 'earpiece');
+    expect(f.log).toEqual(['start:video', 'choose:speaker']);
+    f.devices(['earpiece', 'speaker'], 'speaker');
+    expect(f.log).toHaveLength(2);
+  });
+
+  it('keeps an audio call on the earpiece and leaves a connected headset alone', () => {
+    const f = fakeDriver();
+    const s = new AudioSession(f.driver);
+    s.begin('audio');
+    f.devices(['earpiece'], 'earpiece');
+    expect(f.log).toEqual(['start:audio']);
+    const g = fakeDriver();
+    const t = new AudioSession(g.driver);
+    t.begin('video');
+    g.devices(['earpiece', 'bluetooth'], 'bluetooth');
+    expect(g.log).toEqual(['start:video']);
   });
 
   it('moves the sound to a Bluetooth headset as soon as it connects', () => {

@@ -8,18 +8,6 @@ export interface AudioDeviceStatus {
   selected: AudioRoute | null;
 }
 
-/** The names the Android audio manager (react-native-incall-manager) uses for each route. */
-export const NATIVE_ROUTE: Record<AudioRoute, string> = {
-  earpiece: 'EARPIECE',
-  speaker: 'SPEAKER_PHONE',
-  bluetooth: 'BLUETOOTH',
-  headset: 'WIRED_HEADSET',
-};
-
-const FROM_NATIVE = new Map(
-  (Object.entries(NATIVE_ROUTE) as [AudioRoute, string][]).map(([route, name]) => [name, route]),
-);
-
 export const ROUTE_LABEL: Record<AudioRoute, string> = {
   earpiece: 'Phone',
   speaker: 'Speaker',
@@ -31,30 +19,53 @@ export const ROUTE_LABEL: Record<AudioRoute, string> = {
 const EXTERNAL: AudioRoute[] = ['bluetooth', 'headset'];
 const ORDER: AudioRoute[] = ['earpiece', 'speaker', 'bluetooth', 'headset'];
 
-/** Reads the `onAudioDeviceChanged` payload: `{ availableAudioDeviceList: '["EARPIECE",...]',
- *  selectedAudioDevice: 'EARPIECE' }`. Anything unrecognised is ignored. */
-export function parseDeviceStatus(raw: unknown): AudioDeviceStatus {
-  const data = (raw ?? {}) as { availableAudioDeviceList?: unknown; selectedAudioDevice?: unknown };
-  let names: unknown = data.availableAudioDeviceList;
-  if (typeof names === 'string') {
-    try {
-      names = JSON.parse(names);
-    } catch {
-      names = [];
-    }
+/** The cross-platform port names the native call library reports (an AVAudioSession port type on
+ *  iOS, the same names mapped from the Android audio device type on Android). */
+export function routeOfPort(portType: unknown): AudioRoute | null {
+  if (typeof portType !== 'string') return null;
+  if (portType === 'builtInReceiver') return 'earpiece';
+  if (portType === 'builtInSpeaker') return 'speaker';
+  if (portType === 'headphones' || portType === 'usbAudio' || portType === 'lineOut')
+    return 'headset';
+  if (portType.startsWith('bluetooth') || portType === 'carAudio') return 'bluetooth';
+  return null;
+}
+
+interface NativeRouteInfo {
+  currentRoute?: { outputs?: Array<{ portType?: unknown }> };
+  availableRoutes?: Array<{ portType?: unknown }>;
+}
+
+/**
+ * Remembers what the phone can route to. Android only reports the route in use (not the list),
+ * so a route seen earlier is kept: the earpiece stays on offer while the speaker is in use, and a
+ * headset stays on offer until the system falls back to the earpiece (which it only does once the
+ * headset is gone, because it prefers a connected one over the earpiece).
+ */
+export class RouteTracker {
+  private readonly seen = new Set<AudioRoute>();
+
+  reset(): void {
+    this.seen.clear();
   }
-  const found = new Set<AudioRoute>();
-  if (Array.isArray(names)) {
-    for (const name of names) {
-      const route = typeof name === 'string' ? FROM_NATIVE.get(name) : undefined;
-      if (route) found.add(route);
+
+  update(raw: unknown): AudioDeviceStatus {
+    const info = (raw ?? {}) as NativeRouteInfo;
+    const current = routeOfPort(info.currentRoute?.outputs?.[0]?.portType);
+    const listed = (Array.isArray(info.availableRoutes) ? info.availableRoutes : [])
+      .map((port) => routeOfPort(port?.portType))
+      .filter((route): route is AudioRoute => route !== null);
+    if (current === 'earpiece') {
+      // The system prefers a connected headset over the earpiece: it is not connected.
+      this.seen.delete('bluetooth');
+      this.seen.delete('headset');
     }
+    if (current === 'bluetooth') this.seen.delete('headset');
+    if (current === 'headset') this.seen.delete('bluetooth');
+    if (current) this.seen.add(current);
+    for (const route of listed) this.seen.add(route);
+    return { available: ORDER.filter((r) => this.seen.has(r)), selected: current };
   }
-  const selected =
-    typeof data.selectedAudioDevice === 'string'
-      ? (FROM_NATIVE.get(data.selectedAudioDevice) ?? null)
-      : null;
-  return { available: ORDER.filter((r) => found.has(r)), selected };
 }
 
 /** What a call should use before anyone chooses: an attached headset or Bluetooth first, then the
@@ -94,8 +105,8 @@ export interface AudioSnapshot {
  * CHAT-062: the call's audio routing. It starts the platform audio manager for the call, applies
  * the default route (speaker for video, earpiece for audio, a headset or Bluetooth device when
  * one is connected), moves the sound to a headset the moment one connects, and remembers an
- * explicit pick for as long as it stays possible. The platform's own default is left alone at the
- * start (so a call never blinks through the loudspeaker); the first device report says what it is.
+ * explicit pick for as long as it stays possible. Nothing is applied before the first device
+ * report (so a call never blinks through the loudspeaker); that report says where the system put it.
  */
 export class AudioSession {
   private media: CallMedia = 'audio';
@@ -103,6 +114,7 @@ export class AudioSession {
   private available: AudioRoute[] = [];
   private current: AudioRoute | null = null;
   private picked: AudioRoute | null = null;
+  private settled = false;
   private unwatch: (() => void) | null = null;
   private snap: AudioSnapshot = { route: null, choices: routeChoices([]) };
   private readonly listeners = new Set<() => void>();
@@ -125,11 +137,12 @@ export class AudioSession {
     this.running = true;
     this.media = media;
     this.picked = null;
+    this.settled = false;
     this.available = [];
     this.current = null;
     this.driver.start(media);
-    // The platform audio manager has already chosen the same default (speaker for video, earpiece
-    // for audio, a headset first); the first device report tells us what it picked.
+    // The first device report says where the system put the sound; if that is not the default for
+    // this kind of call (video -> speaker), move it then.
     this.unwatch = this.driver.watch((status) => this.onDevices(status));
     this.publish();
   }
@@ -157,6 +170,7 @@ export class AudioSession {
     this.driver.stop();
     this.current = null;
     this.picked = null;
+    this.settled = false;
     this.available = [];
     this.publish();
   }
@@ -176,13 +190,21 @@ export class AudioSession {
     if (arrived.length > 0) {
       // "Connecting a Bluetooth headset moves audio to it automatically."
       this.picked = null;
-      this.apply(arrived[0]!);
+      // Already there (the system routed it itself): nothing to switch.
+      if (status.selected === arrived[0]) this.current = arrived[0]!;
+      else this.apply(arrived[0]!);
     } else if (gone) {
       // The headset was unplugged / disconnected: back to the phone.
       if (this.picked !== null && !status.available.includes(this.picked)) this.picked = null;
       this.apply(this.picked ?? defaultRoute(this.media, status.available));
     } else if (status.selected !== null && status.selected !== this.current) {
       this.current = status.selected;
+    }
+    if (!this.settled && status.selected !== null) {
+      this.settled = true;
+      const wanted = defaultRoute(this.media, status.available);
+      if (arrived.length === 0 && wanted !== status.selected && !EXTERNAL.includes(status.selected))
+        this.apply(wanted);
     }
     this.publish();
   }

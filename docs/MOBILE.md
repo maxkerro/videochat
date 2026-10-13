@@ -174,15 +174,14 @@ directions.
   Android permissions; `SYSTEM_ALERT_WINDOW` (which the plugin adds) is blocked. The image picker's
   `microphonePermission` must not be `false` -- that removes `RECORD_AUDIO` from the Android
   manifest (guarded by `src/appConfig.test.ts`).
-- **Native modules:** `react-native-webrtc` and `expo-keep-awake` are native, so this is version
+- **Native modules:** the WebRTC module (now `@livekit/react-native-webrtc`, see CHAT-061) and `expo-keep-awake` are native, so this is version
   `0.5.0` and needs a new APK.
-- **Not yet:** ringing when the app is closed or the phone is locked (CHAT-061). Until then an
-  incoming call rings (vibrates) only while the app is open.
+- **Ringing with the app closed or the phone locked:** see CHAT-061 below.
 
 ## Audio routing and picture-in-picture (CHAT-062)
 
-- **Routing** (`audioRoute.ts`, `nativeAudio.ts`): `react-native-incall-manager` runs the phone's
-  audio manager from the moment media starts to connect until the call ends. Defaults: speaker for
+- **Routing** (`audioRoute.ts`, `nativeAudio.ts`): the native call library (CHAT-061) owns the
+  call audio; the app applies the loudspeaker switch and reads the route in use. Defaults: speaker for
   video, earpiece for audio, and a connected Bluetooth or wired headset beats both. A headset that
   connects mid-call takes over at once (no pick needed); when it goes away the sound returns to
   the phone. The route button in the call controls swaps speaker and phone with one tap, and opens
@@ -190,8 +189,6 @@ directions.
   becomes impossible. Android 12+ needs `BLUETOOTH_CONNECT` to see a paired headset; the app asks
   when a call is set up and works without it. On iOS the system routes to headsets itself, so only
   speaker vs. phone is offered.
-- **Proximity:** the audio manager turns the screen off against the ear, and only while the sound
-  is on the earpiece (so never on a video call with the speaker).
 - **Picture-in-picture:** on Android (`expo-pip`) a connected video call shrinks into a small
   window when the app is left (Home, recents, back); the Minimise button does the same on demand.
   On iOS the other person's video view (`RTCPIPView`) becomes the PiP window (iOS 15+; the app
@@ -200,9 +197,45 @@ directions.
 - **Camera in the background:** when the app is out of sight and not in the small window, the
   camera is switched off (`CallEngine.setVideoPaused`) and the other side sees "camera off"; it
   returns with the app. What the person chose (`videoEnabled`) is not changed by this.
-- **Native modules:** `react-native-incall-manager` and `expo-pip` are native (still version
-  `0.5.0` -- 0.5.0 has not been released yet).
+- **Native modules:** `expo-pip` is native (still version `0.5.0` -- 0.5.0 has not been
+  released yet).
 - **Android audio in the background:** since Android 11 the microphone is silenced for an app that
   is in the background unless it runs a foreground service. A video call is fine (the small window
-  keeps the app visible); an _audio-only_ call that is left for another app needs the foreground
-  service that CHAT-061 adds with the native call UI.
+  keeps the app visible); an _audio-only_ call that is left for another app relies on the
+  foreground service the native call library runs for every call (CHAT-061).
+
+## Calls on the lock screen (CHAT-061)
+
+Incoming and outgoing calls are registered with the phone's own call system through
+`expo-callkit-telecom` (CallKit on iOS, Core-Telecom on Android), via `callBridge.ts` (the
+logic, tested with a fake) and `nativeCallUi.ts` (the library).
+
+- **Android, app closed or locked:** when a call is placed, the API sends the callee's Android
+  phones a high-priority, data-only FCM message (`messageType: incomingCall`, built in
+  `fcm-push.channel.ts`, sent by `CallPushService` -> `NotificationsService.notifyIncomingCall`). The
+  library's FCM service in the app turns it into the system call screen even with the app killed,
+  with a 30 s TTL (the server's ring timeout). The payload's `metadata.conversationId` is what lets
+  the app open the right conversation.
+- **Answering:** the answer on the system screen starts the app, which shows the call
+  (`CallEngine.presentIncoming`), gets the microphone, waits for the realtime socket to open (up to
+  20 s), then sends `call.accept` and negotiates as usual. Declining from the system screen sends
+  `call.decline`; a ring that ran out (system screen ended near 30 s) is left to the server as
+  _missed_, not turned into _declined_.
+- **App open:** `call.incoming` over the socket reports the call to the same system screen. If the
+  push already did, the existing system call is adopted (one id: the call id). The in-app screen is
+  a fallback; its Answer button goes through the system so both stay in step.
+- **Outgoing calls** are registered too, which gives Android the foreground service that keeps the
+  microphone alive in the background (audio-only calls).
+- **Missed calls:** unchanged -- the server posts the "Missed call" chat message and notification
+  (CHAT-044/055).
+- **Native modules:** WebRTC is now `@livekit/react-native-webrtc` (same API as `react-native-webrtc`;
+  the iOS call audio needs this build), plus `expo-callkit-telecom`, `expo-build-properties`
+  (Android `minSdkVersion` 26) and `expo-task-manager`. Still version `0.5.0` (unreleased).
+- **Known limits:** (1) Declining from the lock screen while the app is _killed_ only reaches the
+  server once the app is running; otherwise the caller keeps ringing until the 30 s timeout. (2) A
+  caller cancelling while the phone is ringing with the app killed does not dismiss the system
+  call screen until its own 30 s timeout (the app is not running to hear `call.ended`). (3) **iOS
+  is not built or tested**: ringing with the app killed needs a PushKit VoIP push, which needs an
+  Apple developer account and APNs credentials; the server has no APNs channel yet. Apple requires
+  every VoIP push to show a call, so VoIP pushes must never be used for ordinary messages. On iOS
+  only the foreground path (app open) is in place.

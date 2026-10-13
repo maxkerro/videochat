@@ -83,6 +83,66 @@ describe('NotificationsService', () => {
     );
   });
 
+  describe('notifyIncomingCall', () => {
+    const call = {
+      callId: 'c1',
+      hasVideo: false,
+      startedAt: '2026-10-13T10:00:00.000Z',
+      caller: { id: 'anna', displayName: 'Anna', avatarUrl: null },
+    };
+    let android: {
+      platform: 'android';
+      enabled: boolean;
+      send: ReturnType<typeof vi.fn>;
+      sendIncomingCall: ReturnType<typeof vi.fn>;
+    };
+
+    beforeEach(() => {
+      android = {
+        platform: 'android',
+        enabled: true,
+        send: vi.fn(),
+        sendIncomingCall: vi.fn().mockResolvedValue('sent'),
+      };
+      service = new NotificationsService(
+        {} as Database,
+        { hvals: vi.fn() } as unknown as Redis,
+        {} as RealtimeService,
+        [channel as unknown as PushChannel, android as unknown as PushChannel],
+      );
+      vi.mocked(devicesDb.listPushDevices).mockResolvedValue([
+        { id: 'd1', userId: 'ben', platform: 'android', token: 'tok', keys: null },
+        { id: 'd2', userId: 'ben', platform: 'web', token: 'ep', keys: null },
+      ]);
+    });
+
+    it('rings Android phones only; web has no call push', async () => {
+      await service.notifyIncomingCall('ben', call);
+      expect(android.sendIncomingCall).toHaveBeenCalledOnce();
+      expect(android.sendIncomingCall.mock.calls[0]![1]).toEqual(call);
+      expect(channel.send).not.toHaveBeenCalled();
+    });
+
+    it('does nothing when the person switched notifications off', async () => {
+      vi.mocked(devicesDb.getNotificationPrefs).mockResolvedValue(
+        new Map([['ben', { enabled: false, previews: true, sound: true }]]),
+      );
+      await service.notifyIncomingCall('ben', call);
+      expect(android.sendIncomingCall).not.toHaveBeenCalled();
+    });
+
+    it('forgets a token the push service says is dead', async () => {
+      android.sendIncomingCall.mockResolvedValue('gone');
+      await service.notifyIncomingCall('ben', call);
+      expect(devicesDb.deletePushDevice).toHaveBeenCalledWith({}, 'tok');
+    });
+
+    it('never throws into the call flow', async () => {
+      android.sendIncomingCall.mockRejectedValue(new Error('boom'));
+      await expect(service.notifyIncomingCall('ben', call)).resolves.toBeUndefined();
+    });
+  });
+
   it('skips members looking at the conversation and members who blocked the sender', async () => {
     viewing['viewing:ben'] = ['conv'];
     vi.mocked(blocksDb.isBlocked).mockImplementation(async (_db, blocker) => blocker === 'clara');

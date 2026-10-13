@@ -36,3 +36,22 @@ describe('app config for calls (CHAT-060)', () => {
     expect(config.ios?.infoPlist?.UIBackgroundModes).toContain('audio');
   });
 });
+
+describe('app config for calls on the lock screen (CHAT-061)', () => {
+  it('rings out after the same 30 seconds as the server', () => {
+    const entry = plugin('expo-callkit-telecom') as [string, Record<string, unknown>];
+    expect(entry[1].incomingCallTimeout).toBe(30);
+  });
+
+  it('asks for Android 8 or newer, which Telecom needs', () => {
+    const entry = plugin('expo-build-properties') as [
+      string,
+      { android?: { minSdkVersion?: number } },
+    ];
+    expect(entry[1].android?.minSdkVersion).toBeGreaterThanOrEqual(26);
+  });
+
+  it('uses the LiveKit WebRTC build, the one that works with CallKit audio', () => {
+    expect(plugin('@livekit/react-native-expo-plugin')).toBeDefined();
+  });
+});

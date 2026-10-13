@@ -5,7 +5,7 @@ import { z } from 'zod';
 import type { Env } from '../config/env.js';
 import type { PushDevice } from '../db/devices.js';
 import { ENV } from '../infra/tokens.js';
-import type { PushChannel, PushResult } from './push-channel.js';
+import type { IncomingCallPush, PushChannel, PushResult } from './push-channel.js';
 
 const serviceAccountSchema = z.object({
   project_id: z.string().min(1),
@@ -38,6 +38,39 @@ export function buildFcmMessage(token: string, payload: PushPayload) {
           tag: payload.tag,
           channel_id: payload.silent ? ANDROID_CHANNEL_SILENT : ANDROID_CHANNEL,
         },
+      },
+    },
+  };
+}
+
+/** How long FCM keeps a ring request: a call nobody can answer any more must not ring later. */
+export const CALL_PUSH_TTL_SEC = 30;
+
+/**
+ * CHAT-061: a data-only, high-priority message. The native call library's FCM service (in the
+ * app) recognises `messageType: 'incomingCall'` and shows the system call screen, even with the
+ * app killed. No `notification` block: that would make the system show a plain notification
+ * instead of waking the app.
+ */
+export function buildFcmCallMessage(token: string, call: IncomingCallPush) {
+  return {
+    message: {
+      token,
+      data: {
+        messageType: 'incomingCall',
+        incomingCall: JSON.stringify({
+          eventId: call.callId,
+          serverCallId: call.callId,
+          hasVideo: call.hasVideo,
+          startedAt: call.startedAt,
+          caller: call.caller,
+        }),
+      },
+      android: {
+        priority: 'HIGH',
+        ttl: `${CALL_PUSH_TTL_SEC}s`,
+        // Only the newest ring request for a call id matters.
+        collapse_key: `call-${call.callId}`.slice(0, 64),
       },
     },
   };
@@ -76,6 +109,14 @@ export class FcmPushChannel implements PushChannel {
   }
 
   async send(device: PushDevice, payload: PushPayload): Promise<PushResult> {
+    return this.post(buildFcmMessage(device.token, payload));
+  }
+
+  async sendIncomingCall(device: PushDevice, call: IncomingCallPush): Promise<PushResult> {
+    return this.post(buildFcmCallMessage(device.token, call));
+  }
+
+  private async post(message: object): Promise<PushResult> {
     if (!this.auth) return 'failed';
     try {
       const accessToken = await this.auth.getAccessToken();
@@ -87,7 +128,7 @@ export class FcmPushChannel implements PushChannel {
             Authorization: `Bearer ${accessToken ?? ''}`,
             'Content-Type': 'application/json',
           },
-          body: JSON.stringify(buildFcmMessage(device.token, payload)),
+          body: JSON.stringify(message),
         },
       );
       if (res.ok) return 'sent';

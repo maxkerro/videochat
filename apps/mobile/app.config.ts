@@ -145,6 +145,24 @@ export default ({ config }: ConfigContext): ExpoConfig => {
       // CHAT-062: lets a video call continue in a small window (Android picture-in-picture).
       // (The plugin reads its options unconditionally, so it needs the empty object.)
       ['expo-pip', {}],
+      // CHAT-061: the phone's own call screen (CallKit on iOS, Telecom on Android). The ring
+      // timeout matches the server's (CALL_RING_TIMEOUT_SEC), so a call that rang out is missed.
+      [
+        'expo-callkit-telecom',
+        {
+          incomingCallTimeout: 30,
+          outgoingCallTimeout: 60,
+          fulfillAnswerCallTimeout: 30,
+          microphonePermission:
+            'Chat needs the microphone so the other person can hear you on calls.',
+          cameraPermission: 'Chat needs the camera so the other person can see you on video calls.',
+        },
+      ],
+      // Android Telecom (Core-Telecom) needs Android 8 (API 26). The iOS minimum is already above
+      // what the library asks for.
+      ['expo-build-properties', { android: { minSdkVersion: 26 } }],
+      // The LiveKit WebRTC build used for calls (CHAT-060, swapped in CHAT-061 for iOS CallKit).
+      '@livekit/react-native-expo-plugin',
       // CHAT-060: native WebRTC for calls. The texts are what iOS shows in its permission prompts.
       [
         '@config-plugins/react-native-webrtc',

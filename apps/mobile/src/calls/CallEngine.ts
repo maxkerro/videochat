@@ -56,7 +56,7 @@ export interface CallSnapshot {
   /** When media first connected (ms since epoch), for the call timer. */
   startedAt: number | null;
   localStream: RtcStream | null;
-  /** Set when the first remote track arrives (react-native-webrtc hands over its own stream). */
+  /** Set when the first remote track arrives (the WebRTC module hands over its own stream). */
   remoteStream: RtcStream | null;
   /** The camera in use faces the person (front) rather than away (back). */
   frontCamera: boolean;
@@ -88,6 +88,17 @@ export interface CallEngineDeps {
   newCallId: () => string;
   /** CHAT-043: end-of-call quality summary, fire-and-forget. */
   reportStats?: (callId: string, stats: CallStats) => void;
+  /** CHAT-061: resolves true once the realtime socket is open and registered, false if it does
+   *  not come up in time. A call answered from the lock screen starts before the socket does. */
+  waitForSignalling?: () => Promise<boolean>;
+}
+
+/** A ringing call learned of outside the realtime socket (a push woke the app). */
+export interface IncomingCallInfo {
+  callId: string;
+  conversationId: string;
+  media: CallMedia;
+  caller: CallPeer;
 }
 
 export class CallBusyError extends Error {
@@ -191,14 +202,37 @@ export class CallEngine {
     }
     this.polite = true;
     this.iceServers = this.fetchIceServers();
+    const callId = this.snap.callId;
     this.update({
       phase: 'connecting',
       localStream: stream,
       audioEnabled: true,
       videoEnabled: stream.getVideoTracks().length > 0,
     });
-    this.deps.send(CALL_EVENTS.accept, { callId: this.snap.callId });
+    if (this.deps.waitForSignalling && !(await this.deps.waitForSignalling())) {
+      if (this.isCurrent(callId)) this.finish('failed');
+      return;
+    }
+    // The call may have ended (the caller gave up) while the socket was coming up.
+    if (!this.isCurrent(callId) || (this.snap as CallSnapshot | null)?.phase === 'ended') return;
+    this.deps.send(CALL_EVENTS.accept, { callId });
     await this.startPeer();
+  }
+
+  /** CHAT-061: shows a ringing call that arrived by push rather than over the socket. */
+  presentIncoming(info: IncomingCallInfo): boolean {
+    if (this.isBusy()) return this.snap?.callId === info.callId;
+    this.showIncoming(info);
+    if (this.deps.getConnectionId() !== null) {
+      this.deps.send(CALL_EVENTS.ringing, { callId: info.callId });
+    }
+    return true;
+  }
+
+  /** CHAT-061: the system call screen timed out. The server ends the call as missed by itself;
+   *  telling it "declined" would turn a missed call into a declined one. */
+  abandonIncoming(): void {
+    if (this.snap?.phase === 'incoming') this.finish('missed');
   }
 
   decline(): void {
@@ -242,9 +276,13 @@ export class CallEngine {
   }
 
   toggleAudio(): void {
+    if (this.snap) this.setAudioEnabled(!this.snap.audioEnabled);
+  }
+
+  /** Mutes or unmutes the microphone (also driven from the system call screen, CHAT-061). */
+  setAudioEnabled(enabled: boolean): void {
     const snap = this.snap;
-    if (!snap?.localStream) return;
-    const enabled = !snap.audioEnabled;
+    if (!snap?.localStream || snap.audioEnabled === enabled) return;
     for (const track of snap.localStream.getAudioTracks()) track.enabled = enabled;
     this.update({ audioEnabled: enabled });
     this.sendMediaState();
@@ -351,8 +389,13 @@ export class CallEngine {
     // Already in a call on this device: leave it to the server (which reports "busy") and to
     // whichever other device is free.
     if (this.isBusy()) return;
+    this.showIncoming(incoming.data);
+    this.deps.send(CALL_EVENTS.ringing, { callId: incoming.data.callId });
+  }
+
+  private showIncoming(info: IncomingCallInfo): void {
     this.reset();
-    const { callId, conversationId, media, caller } = incoming.data;
+    const { callId, conversationId, media, caller } = info;
     this.snap = {
       callId,
       conversationId,
@@ -376,7 +419,6 @@ export class CallEngine {
       lowBandwidth: false,
     };
     this.emit();
-    this.deps.send(CALL_EVENTS.ringing, { callId });
   }
 
   private onAccepted(payload: unknown): void {

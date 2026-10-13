@@ -5,6 +5,7 @@ import {
   ANDROID_CHANNEL,
   ANDROID_CHANNEL_SILENT,
   FcmPushChannel,
+  buildFcmCallMessage,
   buildFcmMessage,
   isDeadToken,
   parseServiceAccount,
@@ -46,6 +47,32 @@ describe('buildFcmMessage', () => {
   it('uses the silent channel when the person turned sounds off', () => {
     const { message } = buildFcmMessage('tok', { ...payload, silent: true });
     expect(message.android.notification.channel_id).toBe(ANDROID_CHANNEL_SILENT);
+  });
+});
+
+describe('buildFcmCallMessage', () => {
+  const call = {
+    callId: '3f0c9c7e-2b2c-4d5a-9f55-0d3b8f1a2b3c',
+    hasVideo: true,
+    startedAt: '2026-10-13T10:00:00.000Z',
+    caller: { id: 'u1', displayName: 'Anna', avatarUrl: null },
+  };
+
+  it('is a data-only, high-priority message the native call library recognises', () => {
+    const { message } = buildFcmCallMessage('tok', call);
+    expect(message.token).toBe('tok');
+    expect(message.data.messageType).toBe('incomingCall');
+    expect(JSON.parse(message.data.incomingCall)).toEqual({
+      eventId: call.callId,
+      serverCallId: call.callId,
+      hasVideo: true,
+      startedAt: call.startedAt,
+      caller: call.caller,
+    });
+    // A `notification` block would show a plain notification instead of waking the app.
+    expect(message).not.toHaveProperty('message.android.notification');
+    expect(message.android.priority).toBe('HIGH');
+    expect(message.android.ttl).toBe('30s');
   });
 });
 

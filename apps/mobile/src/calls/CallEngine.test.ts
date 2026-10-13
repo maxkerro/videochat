@@ -290,6 +290,68 @@ describe('CallEngine (CHAT-042)', () => {
       expect(engine.getSnapshot()?.phase).toBe('connecting');
     });
 
+    describe('answered from the lock screen (CHAT-061)', () => {
+      it('presents a call learned of by push, and tells the caller it rings once connected', () => {
+        const { engine, lastSent } = setUp();
+        expect(engine.presentIncoming(incoming as never)).toBe(true);
+        expect(engine.getSnapshot()).toMatchObject({ phase: 'incoming', peer: PEER });
+        expect(lastSent(CALL_EVENTS.ringing)?.payload).toEqual({ callId: CALL_ID });
+
+        const offline = setUp({ getConnectionId: () => null });
+        offline.engine.presentIncoming(incoming as never);
+        expect(offline.lastSent(CALL_EVENTS.ringing)).toBeUndefined();
+      });
+
+      it('knows the call it is already showing, and refuses a different one while busy', () => {
+        const { engine } = setUp();
+        engine.presentIncoming(incoming as never);
+        expect(engine.presentIncoming(incoming as never)).toBe(true);
+        expect(engine.presentIncoming({ ...incoming, callId: 'other' } as never)).toBe(false);
+      });
+
+      it('waits for the socket before sending accept', async () => {
+        let open!: (ok: boolean) => void;
+        const waiting = new Promise<boolean>((r) => (open = r));
+        const { engine, lastSent } = setUp({ waitForSignalling: () => waiting });
+        engine.presentIncoming(incoming as never);
+        const accepting = engine.accept(avStream());
+        await flush();
+        expect(engine.getSnapshot()?.phase).toBe('connecting');
+        expect(lastSent(CALL_EVENTS.accept)).toBeUndefined();
+        open(true);
+        await accepting;
+        expect(lastSent(CALL_EVENTS.accept)?.payload).toEqual({ callId: CALL_ID });
+      });
+
+      it('gives up when the socket never comes up', async () => {
+        const { engine, lastSent } = setUp({ waitForSignalling: async () => false });
+        engine.presentIncoming(incoming as never);
+        await engine.accept(avStream());
+        expect(lastSent(CALL_EVENTS.accept)).toBeUndefined();
+        expect(engine.getSnapshot()).toMatchObject({ phase: 'ended', endCause: 'failed' });
+      });
+
+      it('sends nothing when the caller gave up while the socket was coming up', async () => {
+        let open!: (ok: boolean) => void;
+        const waiting = new Promise<boolean>((r) => (open = r));
+        const { engine, lastSent } = setUp({ waitForSignalling: () => waiting });
+        engine.presentIncoming(incoming as never);
+        const accepting = engine.accept(avStream());
+        engine.hangUp();
+        open(true);
+        await accepting;
+        expect(lastSent(CALL_EVENTS.accept)).toBeUndefined();
+      });
+
+      it('a timed-out ring ends locally without telling the server "declined"', () => {
+        const { engine, lastSent } = setUp();
+        engine.presentIncoming(incoming as never);
+        engine.abandonIncoming();
+        expect(lastSent(CALL_EVENTS.decline)).toBeUndefined();
+        expect(engine.getSnapshot()).toMatchObject({ phase: 'ended', endCause: 'missed' });
+      });
+    });
+
     it('declining tells the server and ends locally', () => {
       const { engine, event, lastSent } = setUp();
       event(CALL_EVENTS.incoming, incoming);
