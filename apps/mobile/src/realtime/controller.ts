@@ -33,9 +33,12 @@ export function createRealtimeController(options: RealtimeControllerOptions) {
   let graceOver = false;
   let timer: ReturnType<typeof setTimeout> | undefined;
   let connected = false;
+  let inCall = false;
 
   function apply(): void {
-    const want = signedIn && online && (active || !graceOver);
+    // A call needs the socket even with the app in the background (another app in front, or
+    // picture-in-picture): signalling and the hang-up travel over it.
+    const want = signedIn && online && (active || !graceOver || inCall);
     if (want === connected) return;
     connected = want;
     if (want) options.target.connect();
@@ -49,6 +52,11 @@ export function createRealtimeController(options: RealtimeControllerOptions) {
     },
     setOnline(next: boolean): void {
       online = next;
+      apply();
+    },
+    /** CHAT-060: true while a call is in progress; keeps the socket open in the background. */
+    setInCall(next: boolean): void {
+      inCall = next;
       apply();
     },
     setActive(next: boolean): void {

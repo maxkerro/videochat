@@ -1,7 +1,13 @@
-import { makeEnvelope, type TypingSignalInput, type WsEnvelope } from '@videochat/shared';
+import {
+  makeEnvelope,
+  realtimeReadySchema,
+  type TypingSignalInput,
+  type WsEnvelope,
+} from '@videochat/shared';
 import { config, session } from '../lib/api';
 import { RealtimeClient } from './client';
 import { setRealtimeStatus } from './status';
+import type { RealtimeStatus } from './client';
 
 let envelopeCounter = 0;
 const nextId = () => `m-${Date.now().toString(36)}-${(envelopeCounter += 1)}`;
@@ -9,20 +15,46 @@ const nextId = () => `m-${Date.now().toString(36)}-${(envelopeCounter += 1)}`;
 type Handler = (envelope: WsEnvelope) => void;
 let handler: Handler | null = null;
 let viewing: string | null = null;
+let connectionId: string | null = null;
+const subscribers = new Set<Handler>();
 
 /** The one socket of the app. The provider decides when it exists (see controller.ts). */
 export const realtimeClient = new RealtimeClient({
   url: config.realtimeUrl,
   getAccessToken: async () => (session.isSignedIn() ? await session.getAccessToken() : null),
-  onStatus: setRealtimeStatus,
+  onStatus: (status: RealtimeStatus) => {
+    // The id belongs to one socket; none until the server confirms the next one.
+    if (status !== 'open') connectionId = null;
+    setRealtimeStatus(status);
+  },
   onEvent: (envelope) => {
-    if (envelope.type === 'realtime.ready') sendViewing();
+    if (envelope.type === 'realtime.ready') {
+      const ready = realtimeReadySchema.safeParse(envelope.payload);
+      connectionId = ready.success ? ready.data.connectionId : null;
+      sendViewing();
+    }
     handler?.(envelope);
+    for (const subscriber of subscribers) subscriber(envelope);
   },
 });
 
 export function setEventHandler(next: Handler | null): void {
   handler = next;
+}
+
+/** CHAT-060: a second listener for the same events (calls), independent of the one that feeds the
+ *  caches. Returns the unsubscribe function. */
+export function subscribeRealtime(listener: Handler): () => void {
+  subscribers.add(listener);
+  return () => subscribers.delete(listener);
+}
+
+/** This socket's id as the server knows it (to tell my own answer from another device's). */
+export const getConnectionId = () => connectionId;
+
+/** Sends one event; false when the socket is not open. */
+export function sendRealtimeEvent(type: string, payload: unknown): boolean {
+  return realtimeClient.send(makeEnvelope(type, payload, nextId()));
 }
 
 function sendViewing(): void {

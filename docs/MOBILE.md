@@ -147,3 +147,35 @@ iOS device builds need a paid Apple Developer account; until then use the simula
 CI typechecks and lints the app, runs its unit tests, and bundles it with Metro for Android and
 iOS (`expo export --no-bytecode`), which catches broken imports and shared-package resolution
 problems. Native binaries are built by EAS, not CI.
+
+## Calls (CHAT-060)
+
+Calls use the same signalling as the web app (`call.*` events over the one realtime socket, ICE
+servers from `GET /calls/ice-servers`), so a phone and a browser call each other in both
+directions.
+
+- **Engine** (`src/calls/CallEngine.ts`): a port of the web `CallEngine` -- the state machine,
+  perfect negotiation, ICE restart, quality stats, end-of-call summary. It talks to WebRTC through
+  the small interfaces in `rtc.ts`, so it runs (and is tested) under plain Node. Keep the two
+  engines in step until they move into `packages/shared`.
+- **Native side** (`nativeDeps.ts`, the only file that imports `react-native-webrtc`): media,
+  peer connections, ICE servers and stats wired to the app's socket and API.
+- **Provider and screen** (`CallProvider.tsx`, `CallOverlay.tsx`): mounted inside `(app)/_layout`.
+  The call screen is drawn over the whole app (ringing, calling, live call, "Call ended"), with
+  mute, camera on/off, front/back camera and hang up. Android's back button is ignored while a call
+  is on screen. The audio/video buttons are in the header of a direct chat.
+- **Permissions** (`media.ts`): react-native-webrtc shows the system prompts and leaves out a track
+  whose permission was refused, so `acquireMedia` checks what came back. No microphone: the call
+  cannot start, with a button to the phone's settings. No camera on a video call: the call goes
+  ahead with sound only and explains how to turn the camera on.
+- **Socket in the background:** while a call lasts, the realtime socket stays open however long the
+  app is in the background (`controller.setInCall`).
+- **Config:** the `@config-plugins/react-native-webrtc` plugin adds the camera/microphone texts and
+  Android permissions; `SYSTEM_ALERT_WINDOW` (which the plugin adds) is blocked. The image picker's
+  `microphonePermission` must not be `false` -- that removes `RECORD_AUDIO` from the Android
+  manifest (guarded by `src/appConfig.test.ts`).
+- **Native modules:** `react-native-webrtc` and `expo-keep-awake` are native, so this is version
+  `0.5.0` and needs a new APK.
+- **Not yet:** ringing when the app is closed or the phone is locked (CHAT-061), audio routing
+  (speaker/earpiece/Bluetooth), the proximity sensor and picture-in-picture (CHAT-062). Until then
+  an incoming call rings (vibrates) only while the app is open.

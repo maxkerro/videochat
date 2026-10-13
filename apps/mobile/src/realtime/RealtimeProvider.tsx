@@ -2,6 +2,7 @@ import NetInfo from '@react-native-community/netinfo';
 import { useEffect, type ReactNode } from 'react';
 import { AppState } from 'react-native';
 import { useAuth } from '../auth/AuthContext';
+import { isCallActive, subscribeCallActive } from '../calls/activity';
 import { session } from '../lib/api';
 import { createRealtimeController } from './controller';
 import { realtimeClient, setEventHandler } from './connection';
@@ -28,8 +29,11 @@ export function RealtimeProvider({ children }: { children: ReactNode }) {
     controller.setActive(AppState.currentState === 'active');
     const appSub = AppState.addEventListener('change', (s) => controller.setActive(s === 'active'));
     const netUnsub = NetInfo.addEventListener((s) => controller.setOnline(s.isConnected !== false));
+    controller.setInCall(isCallActive());
+    const callUnsub = subscribeCallActive((active) => controller.setInCall(active));
     controller.setSignedIn(true);
     return () => {
+      callUnsub();
       appSub.remove();
       netUnsub();
       controller.dispose();

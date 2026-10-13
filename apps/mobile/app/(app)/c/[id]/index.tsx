@@ -16,6 +16,8 @@ import {
 } from 'react-native';
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useAuth } from '../../../../src/auth/AuthContext';
+import { CallButton } from '../../../../src/calls/CallButton';
+import { useCalls } from '../../../../src/calls/CallProvider';
 import { AttachSheet, type AttachChoice } from '../../../../src/chat/AttachSheet';
 import {
   CameraUnavailableError,
@@ -80,7 +82,9 @@ export default function ConversationScreen() {
   useViewingReporter(id);
   const sendTyping = useTypingSender(id);
   const typing = useTypingLabel(id);
-  const peerId = !isGroup ? (conversation.data?.peer?.id ?? null) : null;
+  const calls = useCalls();
+  const peer = !isGroup ? (conversation.data?.peer ?? null) : null;
+  const peerId = peer?.id ?? null;
   const presence = usePresence(peerId ? [peerId] : []);
   const subtitle = typing ?? (peerId ? presenceLabel(presence.get(peerId)) : null);
 
@@ -350,6 +354,20 @@ export default function ConversationScreen() {
             </Text>
           ) : null}
         </Pressable>
+        {peer ? (
+          <>
+            <CallButton
+              label={`Audio call ${peer.displayName}`}
+              glyph="✆"
+              onPress={() => void calls.startCall({ conversationId: id, peer, media: 'audio' })}
+            />
+            <CallButton
+              label={`Video call ${peer.displayName}`}
+              glyph="📹"
+              onPress={() => void calls.startCall({ conversationId: id, peer, media: 'video' })}
+            />
+          </>
+        ) : null}
       </View>
       {!online ? (
         <Banner>You’re offline. Messages will send when you’re back online.</Banner>

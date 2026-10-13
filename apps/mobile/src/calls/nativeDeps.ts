@@ -1,0 +1,37 @@
+import { mediaDevices, MediaStream, RTCPeerConnection } from 'react-native-webrtc';
+import { newCallId } from './ids';
+import { fetchIceServers, postCallStats } from './callsApi';
+import type { CallEngineDeps } from './CallEngine';
+import type { MediaSource } from './media';
+import { getConnectionId, sendRealtimeEvent } from '../realtime/connection';
+import type { RtcPeer, RtcStream } from './rtc';
+
+/**
+ * CHAT-060: the call engine wired to the real thing -- react-native-webrtc for media, the app's
+ * one realtime socket for signalling, the API for ICE servers and the end-of-call summary. The only
+ * place that imports the native module, so everything else stays testable under plain Node.
+ */
+export function nativeCallDeps(): CallEngineDeps {
+  return {
+    send: (type, payload) => {
+      sendRealtimeEvent(type, payload);
+    },
+    getConnectionId,
+    getIceServers: () => fetchIceServers().then((r) => r.iceServers),
+    getUserMedia: (constraints) =>
+      mediaDevices.getUserMedia(constraints as never) as unknown as Promise<RtcStream>,
+    createPeerConnection: (config) => new RTCPeerConnection(config as never) as unknown as RtcPeer,
+    createMediaStream: () => new MediaStream() as unknown as RtcStream,
+    now: () => Date.now(),
+    newCallId,
+    reportStats: (callId, stats) => {
+      void postCallStats(callId, stats).catch(() => undefined);
+    },
+  };
+}
+
+/** The real microphone and camera. */
+export const nativeMedia: MediaSource = {
+  getUserMedia: (constraints) =>
+    mediaDevices.getUserMedia(constraints as never) as unknown as Promise<RtcStream>,
+};

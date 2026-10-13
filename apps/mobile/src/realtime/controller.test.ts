@@ -92,4 +92,21 @@ describe('createRealtimeController', () => {
     vi.advanceTimersByTime(60_000);
     expect(calls).toEqual(['connect', 'close']);
   });
+
+  it('keeps the socket open in the background for as long as a call lasts', () => {
+    const { controller, calls } = setup();
+    controller.setSignedIn(true);
+    controller.setInCall(true);
+    controller.setActive(false);
+    vi.advanceTimersByTime(BACKGROUND_GRACE_MS * 3);
+    expect(calls).toEqual(['connect']);
+    controller.setInCall(false);
+    expect(calls).toEqual(['connect', 'close']);
+  });
+
+  it('a call does not connect a signed-out app', () => {
+    const { controller, calls } = setup();
+    controller.setInCall(true);
+    expect(calls).toEqual([]);
+  });
 });

@@ -103,7 +103,7 @@ export default ({ config }: ConfigContext): ExpoConfig => {
     ...config,
     name: v.name,
     slug: 'videochat',
-    version: '0.4.0',
+    version: '0.5.0',
     orientation: 'portrait',
     scheme: v.scheme,
     userInterfaceStyle: 'automatic',
@@ -113,6 +113,9 @@ export default ({ config }: ConfigContext): ExpoConfig => {
       // Firebase Cloud Messaging (CHAT-055): the file from the Firebase console, holding one entry
       // per app id above. Without it the build still works, just without push on Android.
       ...(googleServicesFile ? { googleServicesFile } : {}),
+      // The WebRTC config plugin (CHAT-060) also declares "draw over other apps", which a chat app
+      // does not need and which Google Play questions; calls work without it.
+      blockedPermissions: ['android.permission.SYSTEM_ALERT_WINDOW'],
     },
     plugins: [
       'expo-router',
@@ -123,12 +126,23 @@ export default ({ config }: ConfigContext): ExpoConfig => {
         {
           photosPermission: 'Chat needs access to your photos so you can send them.',
           cameraPermission: 'Chat needs the camera so you can take a photo to send.',
-          // Photos only: never ask for the microphone.
-          microphonePermission: false,
+          // Photos only here. The microphone is declared for calls (the WebRTC plugin below); this
+          // must not be `false`, which would strip RECORD_AUDIO from the Android manifest.
+          microphonePermission:
+            'Chat needs the microphone so the other person can hear you on calls.',
         },
       ],
       'expo-document-picker',
       'expo-notifications',
+      // CHAT-060: native WebRTC for calls. The texts are what iOS shows in its permission prompts.
+      [
+        '@config-plugins/react-native-webrtc',
+        {
+          cameraPermission: 'Chat needs the camera so the other person can see you on video calls.',
+          microphonePermission:
+            'Chat needs the microphone so the other person can hear you on calls.',
+        },
+      ],
     ],
     // EAS Update (the staging/production build channels need expo-updates). With the
     // `appVersion` runtime policy an over-the-air update only reaches binaries with the same

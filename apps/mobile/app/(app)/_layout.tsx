@@ -1,7 +1,9 @@
 import { Stack } from 'expo-router';
 import { useEffect } from 'react';
-import { Appearance } from 'react-native';
+import { Appearance, View } from 'react-native';
 import { useAuth } from '../../src/auth/AuthContext';
+import { CallOverlay } from '../../src/calls/CallOverlay';
+import { CallProvider } from '../../src/calls/CallProvider';
 import { DataProvider } from '../../src/data/DataProvider';
 import { PushProvider } from '../../src/push/PushProvider';
 import { RealtimeProvider } from '../../src/realtime/RealtimeProvider';
@@ -41,7 +43,12 @@ export default function AppLayout() {
     <DataProvider>
       <RealtimeProvider>
         <PushProvider>
-          <ThemedStack />
+          <CallProvider>
+            <View style={{ flex: 1 }}>
+              <ThemedStack />
+              <CallOverlay />
+            </View>
+          </CallProvider>
         </PushProvider>
       </RealtimeProvider>
     </DataProvider>

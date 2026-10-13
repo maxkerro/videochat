@@ -144,7 +144,7 @@ Phones get pushes through Firebase Cloud Messaging (FCM). One-time setup:
    the value of **`FCM_SERVICE_ACCOUNT_JSON`** on `videochat-api` in Render (this one _is_ a secret:
    never commit it). Without it the API simply sends no phone pushes.
 4. Build a new APK (`apps/mobile/apk_update.sh`): the push module is native, so an over-the-air update
-   cannot add it. The version is `0.4.0` (CHAT-056/057 add the camera, image-manipulator, haptics and clipboard modules, so it needs a new APK as well).
+   cannot add it. The version is `0.5.0` (CHAT-056/057 added the camera, image-manipulator, haptics and clipboard modules; CHAT-060 adds react-native-webrtc and expo-keep-awake, so every one of these needs a new APK).
 
 How it behaves: the app asks for notification permission after sign-in and registers its FCM token
 (`POST /push/devices`, which also sends the login's refresh token: the token is bound to that login

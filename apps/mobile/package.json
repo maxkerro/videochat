@@ -14,6 +14,7 @@
     "eas-build-post-install": "pnpm --filter @videochat/shared build"
   },
   "dependencies": {
+    "@config-plugins/react-native-webrtc": "15.0.2",
     "@react-native-community/netinfo": "12.0.1",
     "@tanstack/react-query": "^5.103.2",
     "@videochat/shared": "workspace:*",
@@ -25,6 +26,7 @@
     "expo-haptics": "~57.0.3",
     "expo-image-manipulator": "~57.0.21",
     "expo-image-picker": "~57.0.20",
+    "expo-keep-awake": "~57.0.2",
     "expo-linking": "~57.0.12",
     "expo-notifications": "~57.0.22",
     "expo-router": "~57.0.25",
@@ -36,6 +38,7 @@
     "react-native": "0.86.3",
     "react-native-safe-area-context": "~5.7.0",
     "react-native-screens": "~4.26.0",
+    "react-native-webrtc": "124.0.8",
     "zod": "^4.6.5"
   },
   "devDependencies": {
