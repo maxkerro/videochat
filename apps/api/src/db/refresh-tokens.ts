@@ -74,15 +74,15 @@ export async function revokeFamily(db: DbExecutor, familyId: string): Promise<vo
   await db.delete(devices).where(eq(devices.sessionFamilyId, familyId));
 }
 
-/** Ends every session for a user (e.g. after a password reset), with their phones' push tokens. */
+/** Ends every session for a user (e.g. after a password reset), with all their push tokens --
+ *  browsers' too, which carry no session binding: whoever else was signed in there must not keep
+ *  receiving previews after a reset. (The owner's own browser re-subscribes on next sign-in.) */
 export async function revokeAllForUser(db: DbExecutor, userId: string): Promise<void> {
   await db
     .update(refreshTokens)
     .set({ revokedAt: new Date() })
     .where(and(eq(refreshTokens.userId, userId), isNull(refreshTokens.revokedAt)));
-  await db
-    .delete(devices)
-    .where(and(eq(devices.userId, userId), isNotNull(devices.sessionFamilyId)));
+  await db.delete(devices).where(eq(devices.userId, userId));
 }
 
 /** CHAT-037: after a password change, every other session ends; this one (if known) stays. */

@@ -1,6 +1,6 @@
-import { and, eq, inArray, isNotNull, sql } from 'drizzle-orm';
+import { and, eq, inArray, isNotNull, isNull, or, sql } from 'drizzle-orm';
 import type { DbExecutor } from './client.js';
-import { devices, users } from './schema.js';
+import { devices, refreshTokens, users } from './schema.js';
 
 export interface PushDevice {
   id: string;
@@ -59,12 +59,30 @@ export async function deletePushDevice(
     .where(and(eq(devices.pushToken, endpoint), ...(userId ? [eq(devices.userId, userId)] : [])));
 }
 
+/**
+ * The push-capable devices of these users. A phone is bound to the login session it registered
+ * under (CHAT-055), so it only counts while that session still has a live refresh token: a session
+ * that expired (or was revoked in a race with its registration) never gets another preview, even
+ * though nothing deleted its row. Browsers (no session binding) are always listed.
+ */
 export async function listPushDevices(db: DbExecutor, userIds: string[]): Promise<PushDevice[]> {
   if (!userIds.length) return [];
+  const sessionLive = sql`EXISTS (
+    SELECT 1 FROM ${refreshTokens}
+    WHERE ${refreshTokens.familyId} = ${devices.sessionFamilyId}
+      AND ${refreshTokens.revokedAt} IS NULL
+      AND ${refreshTokens.expiresAt} > now()
+  )`;
   const rows = await db
     .select()
     .from(devices)
-    .where(and(inArray(devices.userId, userIds), isNotNull(devices.pushToken)));
+    .where(
+      and(
+        inArray(devices.userId, userIds),
+        isNotNull(devices.pushToken),
+        or(isNull(devices.sessionFamilyId), sessionLive),
+      ),
+    );
   return rows.map((r) => ({
     id: r.id,
     userId: r.userId,

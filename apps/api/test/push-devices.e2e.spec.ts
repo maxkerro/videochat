@@ -222,4 +222,38 @@ describe.skipIf(!hasInfra)('native push devices (CHAT-055)', () => {
       .expect(204);
     expect(await tokensOf(user.id)).toEqual([t1]);
   });
+
+  it('a session whose tokens have expired cannot register', async () => {
+    const user = await signUp();
+    const phone = await phoneSession(user);
+    await rows(
+      "UPDATE refresh_tokens SET expires_at = now() - interval '1 minute' WHERE user_id = $1",
+      [user.id],
+    );
+    await register(phone.accessToken, {
+      platform: 'android',
+      token: fcm(),
+      refreshToken: phone.refreshToken,
+    }).expect(401);
+    expect(await tokensOf(user.id)).toEqual([]);
+  });
+
+  it('accepts a refresh token that was rotated after the phone read it (same live session)', async () => {
+    // The phone reads its refresh token, then the request's own auth refresh rotates it
+    // mid-flight. Registration must still succeed -- this leniency is load-bearing.
+    const user = await signUp();
+    const phone = await phoneSession(user);
+    await request(server())
+      .post('/auth/refresh')
+      .set('X-Refresh-Mode', 'body')
+      .send({ refreshToken: phone.refreshToken })
+      .expect(200);
+    const token = fcm();
+    await register(phone.accessToken, {
+      platform: 'android',
+      token,
+      refreshToken: phone.refreshToken,
+    }).expect(204);
+    expect(await tokensOf(user.id)).toEqual([token]);
+  });
 });
