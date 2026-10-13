@@ -54,7 +54,7 @@ describe.skipIf(!hasInfra)('HTTP app (e2e)', () => {
     expect(denied.headers['access-control-allow-origin']).toBeUndefined();
   });
 
-  it('marks responses uncacheable (signed attachment URLs must never be replayed from a cache)', async () => {
+  it('marks responses uncacheable', async () => {
     const res = await request(app.getHttpServer()).get('/health').expect(200);
     expect(res.headers['cache-control']).toBe('no-store');
   });

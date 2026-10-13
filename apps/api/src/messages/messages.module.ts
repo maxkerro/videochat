@@ -7,10 +7,11 @@ import { RealtimeModule } from '../realtime/realtime.module.js';
 import { MessagesController } from './messages.controller.js';
 import { MessagesService } from './messages.service.js';
 import { ReactionsService } from './reactions.service.js';
+import { ReportsService } from './reports.service.js';
 
 @Module({
   imports: [AuthModule, RealtimeModule, AttachmentsModule, LinkPreviewsModule, NotificationsModule],
   controllers: [MessagesController],
-  providers: [MessagesService, ReactionsService],
+  providers: [MessagesService, ReactionsService, ReportsService],
 })
 export class MessagesModule {}

@@ -12,6 +12,7 @@ import {
 } from '@nestjs/common';
 import {
   editMessageSchema,
+  reportMessageSchema,
   toggleReactionSchema,
   type MessageReactions,
   messagesPageQuerySchema,
@@ -27,6 +28,7 @@ import { ZodValidationPipe } from '../common/zod-validation.pipe.js';
 import { MessageThrottlerGuard } from '../rate-limit/rate-limit.guards.js';
 import { MessagesService } from './messages.service.js';
 import { ReactionsService } from './reactions.service.js';
+import { ReportsService } from './reports.service.js';
 
 @Controller('conversations/:conversationId/messages')
 @UseGuards(AccessTokenGuard)
@@ -34,6 +36,7 @@ export class MessagesController {
   constructor(
     private readonly messages: MessagesService,
     private readonly reactions: ReactionsService,
+    private readonly reports: ReportsService,
   ) {}
 
   @Get()
@@ -98,5 +101,18 @@ export class MessagesController {
     @Body(new ZodValidationPipe(toggleReactionSchema)) body: z.infer<typeof toggleReactionSchema>,
   ): Promise<MessageReactions> {
     return this.reactions.toggle(conversationId, userId, messageId, body.emoji);
+  }
+
+  /** CHAT-058: report someone else's message (idempotent per reporter and message). */
+  @Post(':messageId/report')
+  @HttpCode(204)
+  @UseGuards(MessageThrottlerGuard)
+  async report(
+    @Param('conversationId', UuidParamPipe) conversationId: string,
+    @Param('messageId', UlidParamPipe) messageId: string,
+    @CurrentUserId() userId: string,
+    @Body(new ZodValidationPipe(reportMessageSchema)) body: z.infer<typeof reportMessageSchema>,
+  ): Promise<void> {
+    await this.reports.report(conversationId, userId, messageId, body);
   }
 }

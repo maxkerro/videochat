@@ -1,9 +1,11 @@
-import type { Message } from '@videochat/shared';
+import { REPORT_REASONS, type Message, type ReportReason } from '@videochat/shared';
+import * as Clipboard from 'expo-clipboard';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   ActivityIndicator,
   Alert,
+  Linking,
   FlatList,
   KeyboardAvoidingView,
   Platform,
@@ -14,17 +16,21 @@ import {
 } from 'react-native';
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useAuth } from '../../../../src/auth/AuthContext';
+import { AttachSheet, type AttachChoice } from '../../../../src/chat/AttachSheet';
 import {
+  CameraUnavailableError,
   pickFile,
   pickPhoto,
-  sendAttachment,
+  takePhoto,
   type PickedFile,
 } from '../../../../src/chat/attachments';
 import { Composer } from '../../../../src/chat/Composer';
 import { MessageActions, type MessageAction } from '../../../../src/chat/MessageActions';
 import { MessageBubble } from '../../../../src/chat/MessageBubble';
 import { buildRows, type ChatRow } from '../../../../src/chat/rows';
+import { UploadBubble } from '../../../../src/chat/UploadBubble';
 import * as actions from '../../../../src/data/actions';
+import { reportMessage } from '../../../../src/data/api';
 import { useConversation, useMembers, useMessages, useOutbox } from '../../../../src/data/hooks';
 import {
   discardOutboxMessage,
@@ -35,11 +41,20 @@ import { useAppActive, useIsOnline } from '../../../../src/data/useLive';
 import { useTypingSender, useViewingReporter } from '../../../../src/realtime/hooks';
 import { presenceLabel, usePresence } from '../../../../src/realtime/presence';
 import { useTypingLabel } from '../../../../src/realtime/typing';
+import { uploads, useConversationUploads } from '../../../../src/uploads';
+import { success } from '../../../../src/ui/haptics';
 import { Banner } from '../../../../src/ui/Banner';
 import { describeError } from '../../../../src/ui/describeError';
 import { canDeleteMessage, canEditMessage, conversationTitle } from '../../../../src/ui/format';
 import { useTheme } from '../../../../src/ui/theme';
 import { useKeyboardVisible } from '../../../../src/ui/useKeyboardVisible';
+
+const REPORT_LABELS: Record<ReportReason, string> = {
+  spam: 'Spam',
+  harassment: 'Harassment or bullying',
+  inappropriate: 'Inappropriate content',
+  other: 'Something else',
+};
 
 function fail(title: string, e: unknown) {
   Alert.alert(title, describeError(e));
@@ -57,6 +72,7 @@ export default function ConversationScreen() {
   const conversation = useConversation(id);
   const view = useMessages(id);
   const outbox = useOutbox(id);
+  const uploading = useConversationUploads(id);
   const isGroup = conversation.data?.type === 'group';
   const members = useMembers(id, isGroup);
   const online = useIsOnline();
@@ -71,8 +87,8 @@ export default function ConversationScreen() {
   const [replyTo, setReplyTo] = useState<Message | null>(null);
   const [editing, setEditing] = useState<Message | null>(null);
   const [actionsFor, setActionsFor] = useState<Message | null>(null);
-  const [uploading, setUploading] = useState<{ name: string; progress: number } | null>(null);
-  const [uploadError, setUploadError] = useState<string | null>(null);
+  const [attachOpen, setAttachOpen] = useState(false);
+  const [reportFor, setReportFor] = useState<Message | null>(null);
 
   const names = useMemo(
     () => new Map((members.data ?? []).map((m) => [m.userId, m.displayName])),
@@ -85,11 +101,12 @@ export default function ConversationScreen() {
       buildRows({
         messages: messages ?? [],
         outbox,
+        uploads: uploading,
         myId,
         isGroup,
         peerLastReadSeq: conversation.data?.peerLastReadSeq ?? null,
       }),
-    [messages, outbox, myId, isGroup, conversation.data?.peerLastReadSeq],
+    [messages, outbox, uploading, myId, isGroup, conversation.data?.peerLastReadSeq],
   );
 
   // Reading: once the newest message is on screen and the app is in front, tell the server.
@@ -112,18 +129,23 @@ export default function ConversationScreen() {
     [id],
   );
 
+  const onReply = useCallback((m: Message) => {
+    setEditing(null);
+    setReplyTo(m);
+  }, []);
+
+  const onCopy = useCallback((m: Message) => {
+    if (!m.body) return;
+    void Clipboard.setStringAsync(m.body)
+      .then(success)
+      .catch(() => undefined);
+  }, []);
+
   const sheetActions = useMemo((): MessageAction[] => {
     const m = actionsFor;
     if (!m || m.deletedAt) return [];
-    const list: MessageAction[] = [
-      {
-        label: 'Reply',
-        onPress: () => {
-          setEditing(null);
-          setReplyTo(m);
-        },
-      },
-    ];
+    const list: MessageAction[] = [{ label: 'Reply', onPress: () => onReply(m) }];
+    if (m.body) list.push({ label: 'Copy text', onPress: () => onCopy(m) });
     if (canEditMessage(m, myId)) {
       list.push({
         label: 'Edit',
@@ -151,8 +173,34 @@ export default function ConversationScreen() {
           ]),
       });
     }
+    if (
+      m.senderId &&
+      m.senderId !== myId &&
+      (m.type === 'text' || m.type === 'image' || m.type === 'file')
+    ) {
+      list.push({
+        label: 'Report',
+        destructive: true,
+        onPress: () => setReportFor(m),
+      });
+    }
     return list;
-  }, [actionsFor, myId, id]);
+  }, [actionsFor, myId, id, onReply, onCopy]);
+
+  const reportActions = useMemo((): MessageAction[] => {
+    const target = reportFor;
+    if (!target) return [];
+    return REPORT_REASONS.map((reason) => ({
+      label: REPORT_LABELS[reason],
+      onPress: () =>
+        void reportMessage(id, target.id, { reason })
+          .then(() => {
+            success();
+            Alert.alert('Thanks for letting us know', 'We’ll look at this message.');
+          })
+          .catch((e: unknown) => fail('Couldn’t send the report', e)),
+    }));
+  }, [reportFor, id]);
 
   function onSend(text: string) {
     if (editing) {
@@ -166,37 +214,48 @@ export default function ConversationScreen() {
     void queueTextMessage({ conversationId: id, body: text, replyToId });
   }
 
-  async function upload(file: PickedFile) {
-    setUploadError(null);
-    setUploading({ name: file.name, progress: 0 });
-    try {
-      await sendAttachment(id, file, { replyToId: replyTo?.id ?? null }, (progress) =>
-        setUploading({ name: file.name, progress }),
-      );
-      setReplyTo(null);
-    } catch (e) {
-      setUploadError(describeError(e));
-    } finally {
-      setUploading(null);
-    }
+  function startUpload(file: PickedFile) {
+    // The manager owns it from here: it keeps going if this screen is left, and shows up as a
+    // bubble in the list with its progress.
+    uploads.start(id, file, { replyToId: replyTo?.id ?? null });
+    setReplyTo(null);
   }
 
-  function onAttach() {
-    const choose = (pick: () => Promise<PickedFile | null>) => () =>
-      void pick()
-        .then((file) => file && upload(file))
-        .catch((e: unknown) => fail('Couldn’t attach that', e));
-    Alert.alert('Send', undefined, [
-      { text: 'Photo', onPress: choose(pickPhoto) },
-      { text: 'File', onPress: choose(pickFile) },
-      { text: 'Cancel', style: 'cancel' },
-    ]);
+  function onAttachChoice(choice: AttachChoice) {
+    const pick = choice === 'camera' ? takePhoto : choice === 'library' ? pickPhoto : pickFile;
+    void pick()
+      .then((file) => file && startUpload(file))
+      .catch((e: unknown) => {
+        if (e instanceof CameraUnavailableError) {
+          Alert.alert(
+            'Camera is off',
+            e.message,
+            e.canAskAgain
+              ? [{ text: 'OK' }]
+              : [
+                  { text: 'Not now', style: 'cancel' },
+                  { text: 'Open Settings', onPress: () => void Linking.openSettings() },
+                ],
+          );
+          return;
+        }
+        fail('Couldn’t attach that', e);
+      });
   }
 
   const renderItem = useCallback(
     ({ item }: { item: ChatRow }) => {
       if (item.kind === 'day') {
         return <Text style={[styles.day, { color: t.muted }]}>{item.label}</Text>;
+      }
+      if (item.kind === 'upload') {
+        return (
+          <UploadBubble
+            entry={item.entry}
+            onRetry={() => uploads.retry(item.entry.id)}
+            onDiscard={() => uploads.discard(item.entry.id)}
+          />
+        );
       }
       if (item.kind === 'pending') {
         const failed = item.item.state === 'failed';
@@ -242,11 +301,13 @@ export default function ConversationScreen() {
           senderName={item.message.senderId ? (names.get(item.message.senderId) ?? null) : null}
           seen={item.seen}
           onLongPress={setActionsFor}
+          onReply={onReply}
+          onCopy={onCopy}
           onReact={onReact}
         />
       );
     },
-    [t, online, myId, names, onReact],
+    [t, online, myId, names, onReact, onReply, onCopy],
   );
 
   const title = conversation.data ? conversationTitle(conversation.data) : 'Chat';
@@ -324,11 +385,9 @@ export default function ConversationScreen() {
           <Composer
             replyTo={replyTo}
             editing={editing}
-            uploading={uploading}
-            uploadError={uploadError}
             onSend={onSend}
             onTyping={sendTyping}
-            onAttach={onAttach}
+            onAttach={() => setAttachOpen(true)}
             onCancelContext={() => {
               setReplyTo(null);
               setEditing(null);
@@ -336,6 +395,17 @@ export default function ConversationScreen() {
           />
         </View>
       </KeyboardAvoidingView>
+      <AttachSheet
+        visible={attachOpen}
+        onChoose={onAttachChoice}
+        onClose={() => setAttachOpen(false)}
+      />
+      <MessageActions
+        message={reportFor}
+        title="Report this message"
+        actions={reportActions}
+        onClose={() => setReportFor(null)}
+      />
       <MessageActions
         message={actionsFor}
         actions={sheetActions}

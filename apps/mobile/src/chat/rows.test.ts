@@ -1,6 +1,7 @@
 import type { Message } from '@videochat/shared';
 import { describe, expect, it } from 'vitest';
 import type { OutboxItem } from '../db/store';
+import type { UploadEntry } from '../uploads/manager';
 import { buildRows } from './rows';
 
 const ME = '3f0c9c7e-2b2c-4d5a-9f55-0d3b8f1a2b3c';
@@ -42,7 +43,32 @@ const summary = (rows: ReturnType<typeof buildRows>) =>
     r.kind === 'message' ? `m${r.message.seq}` : r.kind === 'day' ? `day:${r.label}` : r.key,
   );
 
+const upload = (id: string): UploadEntry => ({
+  id,
+  conversationId: 'c',
+  file: { uri: 'file:///x.jpg', name: 'x.jpg', contentType: 'image/jpeg', sizeBytes: 1 },
+  replyToId: null,
+  status: 'uploading',
+  phase: 'uploading',
+  progress: 0.5,
+  error: null,
+  retrying: false,
+});
+
 describe('buildRows', () => {
+  it('puts files on their way at the very bottom, newest first', () => {
+    const rows = buildRows({
+      messages: [msg(1, ME)],
+      outbox: [pending('p1')],
+      uploads: [upload('u1'), upload('u2')],
+      myId: ME,
+      isGroup: false,
+      peerLastReadSeq: null,
+      now,
+    });
+    expect(summary(rows).slice(0, 4)).toEqual(['upload:u2', 'upload:u1', 'pending:p1', 'm1']);
+  });
+
   it('lists newest first with unsent messages at the bottom and day headings above each day', () => {
     const rows = buildRows({
       messages: [msg(1, A, 5), msg(2, ME, 6), msg(3, A, 6)],

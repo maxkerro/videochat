@@ -1,14 +1,11 @@
 import { LIMITS, type Message } from '@videochat/shared';
 import { useState } from 'react';
-import { ActivityIndicator, Pressable, StyleSheet, Text, TextInput, View } from 'react-native';
+import { Pressable, StyleSheet, Text, TextInput, View } from 'react-native';
 import { useTheme } from '../ui/theme';
 
 export interface ComposerProps {
   replyTo: Message | null;
   editing: Message | null;
-  /** Shown while a file is uploading. */
-  uploading: { name: string; progress: number } | null;
-  uploadError: string | null;
   onSend: (text: string) => void;
   /** Called on every change of the text, for the "typing…" signal. */
   onTyping?: () => void;
@@ -24,8 +21,6 @@ function quotePreview(m: Message): string {
 export function Composer({
   replyTo,
   editing,
-  uploading,
-  uploadError,
   onSend,
   onTyping,
   onAttach,
@@ -54,7 +49,7 @@ export function Composer({
   }
 
   const trimmed = text.trim();
-  const canSend = trimmed.length > 0 && uploading === null;
+  const canSend = trimmed.length > 0;
 
   function send() {
     if (!canSend) return;
@@ -87,25 +82,11 @@ export function Composer({
           </Pressable>
         </View>
       ) : null}
-      {uploading ? (
-        <View style={styles.context}>
-          <ActivityIndicator />
-          <Text numberOfLines={1} style={[styles.contextText, { color: t.muted }]}>
-            Sending {uploading.name} · {Math.round(uploading.progress * 100)}%
-          </Text>
-        </View>
-      ) : null}
-      {uploadError ? (
-        <Text accessibilityLiveRegion="polite" style={[styles.error, { color: t.error }]}>
-          {uploadError}
-        </Text>
-      ) : null}
       <View style={styles.row}>
         {!editing ? (
           <Pressable
             accessibilityRole="button"
             accessibilityLabel="Attach a photo or file"
-            disabled={uploading !== null}
             onPress={onAttach}
             style={styles.attach}
           >

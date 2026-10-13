@@ -379,6 +379,38 @@ export const reactions = pgTable(
   ],
 );
 
+/**
+ * CHAT-058: a member's report of a message. Keeps a copy of the text so a report stays reviewable
+ * after the sender edits or deletes the message. One report per (reporter, message).
+ */
+export const messageReports = pgTable(
+  'message_reports',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    reporterId: uuid('reporter_id')
+      .notNull()
+      .references(() => users.id, { onDelete: 'cascade' }),
+    reportedUserId: uuid('reported_user_id').references(() => users.id, { onDelete: 'set null' }),
+    conversationId: uuid('conversation_id')
+      .notNull()
+      .references(() => conversations.id, { onDelete: 'cascade' }),
+    messageId: char('message_id', { length: 26 }).references(() => messages.id, {
+      onDelete: 'set null',
+    }),
+    reason: text('reason').notNull(),
+    details: text('details'),
+    bodySnapshot: text('body_snapshot'),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [
+    uniqueIndex('message_reports_reporter_message_uq').on(t.reporterId, t.messageId),
+    check(
+      'message_reports_reason_ck',
+      sql`${t.reason} in ('spam', 'harassment', 'inappropriate', 'other')`,
+    ),
+  ],
+);
+
 export const attachmentKind = pgEnum('attachment_kind', ATTACHMENT_KINDS);
 
 /**

@@ -13,8 +13,12 @@ export function isNetworkError(e: unknown): boolean {
 /** A file that can't be sent (too big, unreadable), or whose upload to storage failed. The message
  *  is already worded for the person. */
 export class UploadError extends Error {
-  constructor(message: string) {
+  /** Worth another go (a dropped connection, an expired link, a storage hiccup) rather than
+   *  something wrong with the file itself. */
+  readonly retryable: boolean;
+  constructor(message: string, retryable = false) {
     super(message);
     this.name = 'UploadError';
+    this.retryable = retryable;
   }
 }

@@ -400,6 +400,15 @@ export type Reaction = z.infer<typeof reactionSchema>;
 export const toggleReactionSchema = z.object({ emoji: emojiSchema });
 export type ToggleReactionInput = z.infer<typeof toggleReactionSchema>;
 
+/** CHAT-058: "report this message" (Apple requires a report mechanism for user-generated content). */
+export const REPORT_REASONS = ['spam', 'harassment', 'inappropriate', 'other'] as const;
+export type ReportReason = (typeof REPORT_REASONS)[number];
+export const reportMessageSchema = z.object({
+  reason: z.enum(REPORT_REASONS),
+  details: z.string().trim().max(500).optional(),
+});
+export type ReportMessageInput = z.infer<typeof reportMessageSchema>;
+
 /** CHAT-033: payload of the `message.reactions` realtime event (and the toggle's response). */
 export const messageReactionsSchema = z.object({
   conversationId: z.uuid(),

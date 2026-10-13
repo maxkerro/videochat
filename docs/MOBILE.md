@@ -78,8 +78,38 @@ the server it is being viewed so no notification is sent for it.
 notification opens `/c/<id>` (only a well-formed conversation id is accepted), including when the
 tap launched the app. The icon badge shows the unread total (muted chats excluded; whether it shows
 depends on the phone's launcher). Server setup is in `DEPLOYMENT.md`. Push needs `google-services.json`
-in `apps/mobile/` listing the variant's package and a native build (version `0.3.0`); iOS needs an Apple developer account and is
+in `apps/mobile/` listing the variant's package and a native build (version `0.4.0`); iOS needs an Apple developer account and is
 not wired yet.
+
+## Attachments and gestures (CHAT-056/057, report from CHAT-058)
+
+**Sending photos and files.** The **+** button opens a sheet: take a photo, choose a photo, choose a
+file. The camera permission is asked the first time the camera is used (if it was refused for good,
+the app offers to open Settings); the photo library uses the system picker and needs none. Photos
+are shrunk to at most 2048 px on the long side and re-encoded as JPEG at quality 0.8 before upload
+(`src/chat/prepareFile.ts`; GIFs and other files go up untouched), so a 12 MP photo is well under
+1 MB and an iPhone's HEIC arrives as a JPEG everyone can show.
+
+**Uploads outlive the screen.** A picked file is handed to an app-wide manager (`src/uploads/`), not
+to the chat screen: leaving the chat does not stop it, and the file shows in the chat as a bubble
+with its progress (preparing, uploading %, sending), with Cancel. A failed attempt (no connection,
+expired link, storage or server error) is retried automatically twice, with a fresh upload link
+each time; after that the bubble says why and offers Retry/Delete. A retry resumes where it
+stopped (a file that is already uploaded is not uploaded again) and reuses the message's
+`clientMsgId`, so the server never delivers it twice. Signing out cancels all uploads. They do not
+survive the app being killed (there is no on-disk queue for files), and they do not run while the
+app is in the background for long.
+
+**Gestures.** Swipe a message to the right to reply (the bubble follows the finger, a haptic tick
+marks the point where letting go counts; with "reduce motion" on the bubble stays still). Long-press
+for the menu: quick reactions, Reply, Copy text, Edit, Delete, and Report on other people's
+messages. Everything in the menu is also reachable with a screen reader: the bubble offers the
+actions Reply, Copy text and "More" (the full menu).
+
+**Report.** Report asks for a reason (spam, harassment, inappropriate, other) and calls
+`POST /conversations/:id/messages/:messageId/report`. The server stores the report with a copy of
+the text (migration `0012`) and logs it as `message.reported`; there is no moderation screen yet,
+so check the logs or the `message_reports` table.
 
 ## Running it
 

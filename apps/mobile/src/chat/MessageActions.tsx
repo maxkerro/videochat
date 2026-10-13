@@ -1,6 +1,8 @@
 import { QUICK_REACTIONS, type Message } from '@videochat/shared';
+import { useEffect } from 'react';
 import { Modal, Pressable, StyleSheet, Text, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
+import { select, tick } from '../ui/haptics';
 import { useTheme } from '../ui/theme';
 
 export interface MessageAction {
@@ -15,37 +17,53 @@ export function MessageActions({
   actions,
   onReact,
   onClose,
+  title,
 }: {
   message: Message | null;
   actions: MessageAction[];
-  onReact: (emoji: string) => void;
+  /** Omit for a menu without the reaction bar (the report reasons). */
+  onReact?: (emoji: string) => void;
   onClose: () => void;
+  title?: string;
 }) {
   const t = useTheme();
+  const visible = message !== null;
+  // A light tick as the menu opens.
+  useEffect(() => {
+    if (visible) tick();
+  }, [visible]);
   return (
-    <Modal visible={message !== null} transparent animationType="fade" onRequestClose={onClose}>
+    <Modal visible={visible} transparent animationType="fade" onRequestClose={onClose}>
       <Pressable
         accessibilityLabel="Close"
         onPress={onClose}
         style={[styles.backdrop, { backgroundColor: '#00000066' }]}
       />
       <SafeAreaView edges={['bottom']} style={[styles.sheet, { backgroundColor: t.card }]}>
-        <View style={styles.reactions}>
-          {QUICK_REACTIONS.map((emoji) => (
-            <Pressable
-              key={emoji}
-              accessibilityRole="button"
-              accessibilityLabel={`React ${emoji}`}
-              onPress={() => {
-                onReact(emoji);
-                onClose();
-              }}
-              style={styles.emoji}
-            >
-              <Text style={{ fontSize: 28 }}>{emoji}</Text>
-            </Pressable>
-          ))}
-        </View>
+        {title ? (
+          <Text style={[styles.title, { color: t.muted }]} accessibilityRole="header">
+            {title}
+          </Text>
+        ) : null}
+        {onReact ? (
+          <View style={styles.reactions}>
+            {QUICK_REACTIONS.map((emoji) => (
+              <Pressable
+                key={emoji}
+                accessibilityRole="button"
+                accessibilityLabel={`React ${emoji}`}
+                onPress={() => {
+                  select();
+                  onReact(emoji);
+                  onClose();
+                }}
+                style={styles.emoji}
+              >
+                <Text style={{ fontSize: 28 }}>{emoji}</Text>
+              </Pressable>
+            ))}
+          </View>
+        ) : null}
         {actions.map((a) => (
           <Pressable
             key={a.label}
@@ -69,5 +87,6 @@ const styles = StyleSheet.create({
   sheet: { borderTopLeftRadius: 16, borderTopRightRadius: 16 },
   reactions: { flexDirection: 'row', justifyContent: 'space-around', padding: 12 },
   emoji: { padding: 6 },
+  title: { paddingHorizontal: 20, paddingTop: 16, paddingBottom: 4, fontSize: 13 },
   action: { paddingVertical: 16, paddingHorizontal: 20, borderTopWidth: StyleSheet.hairlineWidth },
 });

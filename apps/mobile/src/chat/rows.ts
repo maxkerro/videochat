@@ -1,5 +1,6 @@
 import type { Message } from '@videochat/shared';
 import type { OutboxItem } from '../db/store';
+import type { UploadEntry } from '../uploads/manager';
 import { formatDayHeading, isSameDay } from '../ui/format';
 
 export type ChatRow =
@@ -14,6 +15,7 @@ export type ChatRow =
       seen: boolean;
     }
   | { kind: 'pending'; key: string; item: OutboxItem }
+  | { kind: 'upload'; key: string; entry: UploadEntry }
   | { kind: 'day'; key: string; label: string };
 
 /**
@@ -24,6 +26,8 @@ export type ChatRow =
 export function buildRows(input: {
   messages: Message[];
   outbox: OutboxItem[];
+  /** Files on their way (CHAT-056), oldest first. */
+  uploads?: UploadEntry[];
   myId: string;
   isGroup: boolean;
   peerLastReadSeq: number | null;
@@ -33,6 +37,9 @@ export function buildRows(input: {
   const now = input.now ?? new Date();
   const rows: ChatRow[] = [];
 
+  for (const entry of [...(input.uploads ?? [])].reverse()) {
+    rows.push({ kind: 'upload', key: `upload:${entry.id}`, entry });
+  }
   for (const item of [...outbox].reverse()) {
     rows.push({ kind: 'pending', key: `pending:${item.clientMsgId}`, item });
   }

@@ -103,7 +103,7 @@ export default ({ config }: ConfigContext): ExpoConfig => {
     ...config,
     name: v.name,
     slug: 'videochat',
-    version: '0.3.0',
+    version: '0.4.0',
     orientation: 'portrait',
     scheme: v.scheme,
     userInterfaceStyle: 'automatic',
@@ -120,7 +120,12 @@ export default ({ config }: ConfigContext): ExpoConfig => {
       'expo-sqlite',
       [
         'expo-image-picker',
-        { photosPermission: 'Chat needs access to your photos so you can send them.' },
+        {
+          photosPermission: 'Chat needs access to your photos so you can send them.',
+          cameraPermission: 'Chat needs the camera so you can take a photo to send.',
+          // Photos only: never ask for the microphone.
+          microphonePermission: false,
+        },
       ],
       'expo-document-picker',
       'expo-notifications',

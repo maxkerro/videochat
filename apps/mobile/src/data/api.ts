@@ -13,6 +13,7 @@ import {
   messageReactionsSchema,
   messageSchema,
   renameConversationSchema,
+  reportMessageSchema,
   sendMessageSchema,
   startDirectConversationSchema,
   updateProfileSchema,
@@ -23,6 +24,7 @@ import {
   type ChangePasswordInput,
   type CreateAttachmentUploadInput,
   type CreateGroupConversationInput,
+  type ReportMessageInput,
   type SendMessageInput,
   type UpdateProfileInput,
   type UpdateSettingsInput,
@@ -144,6 +146,7 @@ export function uploadToStorage(
   upload: Pick<AttachmentUpload, 'uploadUrl' | 'uploadHeaders'>,
   file: Blob,
   onProgress: (fraction: number) => void,
+  signal?: AbortSignal,
 ): Promise<void> {
   return new Promise<void>((resolve, reject) => {
     const xhr = new XMLHttpRequest();
@@ -158,12 +161,38 @@ export function uploadToStorage(
       xhr.status >= 200 && xhr.status < 300
         ? resolve()
         : reject(
-            new UploadError(`Upload failed (${xhr.status}${storageErrorCode(xhr.responseText)})`),
+            new UploadError(
+              `Upload failed (${xhr.status}${storageErrorCode(xhr.responseText)})`,
+              isRetryableStorageStatus(xhr.status),
+            ),
           );
-    xhr.onerror = () => reject(new UploadError('Upload failed -- check your connection'));
+    xhr.onerror = () => reject(new UploadError('Upload failed -- check your connection', true));
+    xhr.onabort = () => reject(new UploadError('Upload cancelled'));
+    if (signal) {
+      if (signal.aborted) return reject(new UploadError('Upload cancelled'));
+      signal.addEventListener('abort', () => xhr.abort(), { once: true });
+    }
     xhr.send(file);
   });
 }
+
+/** A signed link that expired (403), a slow or overloaded storage node, or throttling is worth a
+ *  fresh attempt with a new link; a rejected request (400, 413 ...) is not. */
+export function isRetryableStorageStatus(status: number): boolean {
+  return status === 0 || status === 403 || status === 408 || status === 429 || status >= 500;
+}
+
+/** CHAT-058: report someone else's message. */
+export const reportMessage = (
+  conversationId: string,
+  messageId: string,
+  input: ReportMessageInput,
+) =>
+  apiPost(
+    `/conversations/${conversationId}/messages/${messageId}/report`,
+    z.undefined(),
+    reportMessageSchema.parse(input),
+  );
 
 // Profile, settings, blocking ---------------------------------------------------------------
 
