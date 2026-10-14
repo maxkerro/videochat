@@ -43,6 +43,8 @@ export const GROUP_CALL_SWEEP_INTERVAL_MS = 5_000;
 /** A new call whose room the SFU doesn't list yet is left alone this long (creation can lag). */
 export const GROUP_CALL_START_GRACE_MS = 30_000;
 
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
 export function toGroupCall(row: GroupCallRow): GroupCall {
   return {
     id: row.id,
@@ -254,6 +256,24 @@ export class GroupCallsService implements OnModuleInit, OnModuleDestroy {
         `Couldn't check or remove non-members in group call ${call.id}: ${(err as Error).message}`,
       );
     }
+  }
+
+  /**
+   * LiveKit's `participant_joined` webhook: checked at once, so someone who is not (or no longer)
+   * a member of the group -- e.g. reconnecting with a token kept from before they were removed --
+   * is out again within moments instead of at the next sweep. Also closes the door on a room whose
+   * call has already ended.
+   */
+  async onParticipantJoined(room: string, identity: string): Promise<void> {
+    // Room names are call ids; anything else is not one of ours.
+    const call = UUID.test(room) ? await getGroupCall(this.db, room) : undefined;
+    if (call && call.endedAt === null) {
+      const members = await listCallableMemberIds(this.db, call.conversationId);
+      if (members.has(userOfIdentity(identity))) return;
+    }
+    // Not a member, or not a running call (or not one of ours): out.
+    await this.sfu.removeIdentity(room, identity);
+    this.logger.log(`Removed ${identity} from group call room ${room} on join`);
   }
 
   private async announceEnded(call: GroupCallRow): Promise<void> {

@@ -65,10 +65,11 @@ export function GroupCallProvider({ children }: { children: ReactNode }) {
         Alert.alert('Already in a call', 'Finish your current call first.');
         return;
       }
+      // Not signed in as a known person (yet): nothing to join as.
+      if (!userId) return;
       setJoining(conversationId);
       try {
         const res = await joinGroupCall(conversationId);
-        if (!userId) return;
         setJoined({
           userId,
           session: { callId: res.call.id, conversationId, title, url: res.url, token: res.token },

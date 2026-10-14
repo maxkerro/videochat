@@ -170,20 +170,30 @@ One-time setup:
    **`LIVEKIT_URL`** (the project's `wss://<project>.livekit.cloud` URL), **`LIVEKIT_API_KEY`** and
    **`LIVEKIT_API_SECRET`** (a secret: Render only, never in the repo or in chat). Without them the
    "Group call" button answers "Group calls aren't available right now" and nothing else changes.
-3. Deploy the API (migration `0013_group_calls` creates the `group_calls` table) and the web app; build
+3. Project **Settings -> Webhooks**: add `https://<api host>/livekit/webhook` (staging:
+   `https://videochat-api-p6sw.onrender.com/livekit/webhook`), signed with the same API key. It lets the
+   API remove a non-member the moment they join; without it that waits for the next sweep (5 s).
+4. Deploy the API (migration `0013_group_calls` creates the `group_calls` table) and the web app; build
    the `0.5.0` APK for the phone.
 
 Leaving a group, or being removed from it, also takes the person out of its running call (the API
-asks LiveKit to remove their connections; they see "You're no longer in this group"). Because a join
-token is checked against membership only when it is issued (and LiveKit renews it while connected),
-every sweep also removes anyone in a call who is no longer a member of its group or whose account was
-deleted, so a kept token or a join racing a removal is cut off within seconds. Each join gets its own
-identity (`<userId>:<random>`), so the same person can be in the call from two devices. When the API ends a
+asks LiveKit to remove their connections; they see "You're no longer in this group"). A join token
+lasts 60 s (just long enough to connect; LiveKit renews it while connected), and membership is checked
+again after that in two places: LiveKit's **webhook** reports every join and the API removes a
+non-member at once (setup step 3 below), and every sweep removes anyone in a call who is no longer a
+member of its group or whose account was deleted. So someone removed from a group who reconnects with a
+token they kept is taken out again within moments each time (without the webhook: within a sweep).
+LiveKit can't revoke a token, so a deliberately modified client could keep reconnecting for as long
+as the last token LiveKit renewed for it is valid, getting a moment of the call each time. Each join
+gets its own identity (`<userId>:<random>`), so the same person can be in the call from two devices. When the API ends a
 call it also closes its LiveKit room, so nobody can stay in a room that no running call points at
 (someone who re-joined in that moment is disconnected and their next Join starts a fresh call).
 
-No webhook is needed: every API node asks LiveKit every 5 s which rooms still exist and how many people
-are in them (one `ListRooms` call for all running calls). The free plan's minutes go fast with video:
+The rest is a sweep: every API node asks LiveKit every 5 s which rooms still exist and how many people
+are in them (one `ListRooms` call for all running calls), plus, for each call with people in it, who is
+connected (one `ListParticipants` call and one membership query per call). At this app's scale that is
+a handful of requests every few seconds; with many API nodes or many simultaneous calls it should move
+to a single node or a longer interval. The free plan's minutes go fast with video:
 20 people for one hour is 1,200 participant-minutes. Usage is on the LiveKit dashboard; when it runs out
 the plan stops accepting connections until the next month (or upgrade to Ship).
 

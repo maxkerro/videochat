@@ -7,8 +7,9 @@ import { ENV } from '../infra/tokens.js';
 /** How long a new room waits for its first person, and lingers after the last one leaves. */
 export const ROOM_EMPTY_TIMEOUT_SEC = 60;
 export const ROOM_DEPARTURE_TIMEOUT_SEC = 15;
-/** A join token only has to last until the client connects; LiveKit renews it from then on. */
-export const JOIN_TOKEN_TTL_SEC = 10 * 60;
+/** A join token only has to last until the client connects (LiveKit renews it from then on), so it
+ *  is short: a token handed out just before its holder left the group is soon useless. */
+export const JOIN_TOKEN_TTL_SEC = 60;
 
 export interface SfuRoom {
   name: string;
@@ -33,14 +34,11 @@ export interface Sfu {
   deleteRoom(room: string): Promise<void>;
 }
 
-/** The control API's answer for a room or participant that doesn't exist (any more). */
+/** The control API's answer for a room or participant that doesn't exist (any more): HTTP 404 /
+ *  Twirp `not_found` only. Anything else (bad key, outage) is a real failure. */
 export function isNotFound(err: unknown): boolean {
-  const e = err as { status?: number; code?: string; message?: string } | null;
-  return (
-    e?.status === 404 ||
-    e?.code === 'not_found' ||
-    /not.?found|does not exist/i.test(e?.message ?? '')
-  );
+  const e = err as { status?: number; code?: string } | null;
+  return e?.status === 404 || e?.code === 'not_found';
 }
 
 /** One identity per connection, so the same person on two devices doesn't knock one of them out

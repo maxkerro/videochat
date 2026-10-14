@@ -83,8 +83,12 @@ describe('isNotFound', () => {
     const { isNotFound } = await import('./sfu.js');
     expect(isNotFound({ status: 404 })).toBe(true);
     expect(isNotFound({ code: 'not_found' })).toBe(true);
-    expect(isNotFound(new Error('participant not found'))).toBe(true);
-    expect(isNotFound(new Error('requested room does not exist'))).toBe(true);
+    expect(isNotFound(Object.assign(new Error('participant not found'), { status: 404 }))).toBe(
+      true,
+    );
+    // A message alone proves nothing: "API key not found" is a configuration error.
+    expect(isNotFound(new Error('API key not found'))).toBe(false);
+    expect(isNotFound({ status: 401, code: 'unauthenticated' })).toBe(false);
     expect(isNotFound(new Error('connect ETIMEDOUT'))).toBe(false);
     expect(isNotFound(null)).toBe(false);
   });

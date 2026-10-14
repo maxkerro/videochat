@@ -7,6 +7,8 @@ import {
   type GroupCallUpdated,
   type Message,
 } from '@videochat/shared';
+import { AccessToken } from 'livekit-server-sdk';
+import { createHash } from 'node:crypto';
 import request from 'supertest';
 import {
   GROUP_CALL_START_GRACE_MS,
@@ -15,6 +17,19 @@ import {
 import { bearer, startE2eApp, type E2eUser, type FakeSfu, type TestSocket } from './e2e-app.js';
 import { createPool } from '../src/db/client.js';
 import { hasInfra } from './helpers.js';
+
+// The webhook verifies LiveKit's signature with these (the SFU itself is faked).
+process.env.LIVEKIT_API_KEY = 'test-key';
+process.env.LIVEKIT_API_SECRET = 'test-secret-test-secret-test-secret';
+process.env.LIVEKIT_URL = 'wss://sfu.test';
+
+/** A webhook as LiveKit sends it: the body, signed (sha256 of it in a JWT) with the API secret. */
+async function webhook(body: object, secret = process.env.LIVEKIT_API_SECRET!) {
+  const text = JSON.stringify(body);
+  const token = new AccessToken(process.env.LIVEKIT_API_KEY, secret);
+  token.sha256 = createHash('sha256').update(text).digest('base64');
+  return { text, auth: await token.toJwt() };
+}
 
 describe.skipIf(!hasInfra)('group calls (CHAT-070)', () => {
   let app: INestApplication;
@@ -301,5 +316,70 @@ describe.skipIf(!hasInfra)('group calls (CHAT-070)', () => {
     sfu.closeRoom(call.id);
     await service.sweep(later(GROUP_CALL_START_GRACE_MS));
     expect(sfu.deleted).toContain(call.id);
+  });
+
+  describe('LiveKit webhook', () => {
+    const post = (signed: { text: string; auth: string }) =>
+      request(server())
+        .post('/livekit/webhook')
+        .set('Content-Type', 'application/webhook+json')
+        .set('Authorization', signed.auth)
+        .send(signed.text);
+    const joined = (room: string, identity: string) => ({
+      event: 'participant_joined',
+      room: { name: room },
+      participant: { identity },
+    });
+
+    it('refuses a webhook that LiveKit did not sign', async () => {
+      const forged = await webhook(joined('x', 'y'), 'not-the-secret-not-the-secret-xxxx');
+      await post(forged).expect(401);
+    });
+
+    it('takes a removed member out again every time they reconnect with a kept token', async () => {
+      const { anna, ben, conversationId } = await group();
+      const { call } = groupCallJoinSchema.parse((await join(anna, conversationId)).body);
+      const benToken = groupCallJoinSchema.parse((await join(ben, conversationId)).body);
+      expect(benToken.token).toBeTruthy();
+      sfu.connect(call.id, anna.id);
+      await request(server())
+        .delete(`/conversations/${conversationId}/members/${ben.id}`)
+        .set(bearer(anna.token))
+        .expect((r) => expect(r.status).toBeLessThan(300));
+
+      const benIdentity = sfu.tokens.find(
+        (t) => t.room === call.id && t.identity.startsWith(`${ben.id}:`),
+      )!.identity;
+      // Five reconnects with the kept token: each is removed while the join is being reported,
+      // so he is never left connected between two of them.
+      for (let i = 0; i < 5; i += 1) {
+        sfu.connect(call.id, ben.id);
+        await post(await webhook(joined(call.id, benIdentity))).expect(200);
+        expect(await sfu.listIdentities(call.id)).not.toContain(benIdentity);
+      }
+      expect(sfu.removed.filter((r) => r.identity === benIdentity).length).toBeGreaterThanOrEqual(
+        5,
+      );
+    });
+
+    it('leaves members alone, and closes the door on rooms of ended or unknown calls', async () => {
+      const { anna, conversationId } = await group();
+      const { call } = groupCallJoinSchema.parse((await join(anna, conversationId)).body);
+      sfu.connect(call.id, anna.id);
+      const annaIdentity = (await sfu.listIdentities(call.id))[0]!;
+      await post(await webhook(joined(call.id, annaIdentity))).expect(200);
+      expect(await sfu.listIdentities(call.id)).toContain(annaIdentity);
+
+      sfu.closeRoom(call.id);
+      await service.sweep(later(GROUP_CALL_START_GRACE_MS)); // the call ends
+      await post(await webhook(joined(call.id, annaIdentity))).expect(200);
+      await post(await webhook(joined('some-other-room', 'someone:1'))).expect(200);
+      expect(sfu.removed).toEqual(
+        expect.arrayContaining([
+          { room: call.id, identity: annaIdentity },
+          { room: 'some-other-room', identity: 'someone:1' },
+        ]),
+      );
+    });
   });
 });
