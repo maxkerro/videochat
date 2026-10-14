@@ -14,7 +14,7 @@ describe('CallPushService (CHAT-061)', () => {
       notifyIncomingCall,
     } as unknown as NotificationsService).onModuleInit();
 
-    const caller = { id: 'anna', displayName: 'Anna', avatarUrl: null };
+    const caller = { id: 'anna', displayName: 'Anna', avatarUrl: 'https://bucket/signed?x=1' };
     await listener(
       {
         id: 'call-1',
@@ -31,7 +31,8 @@ describe('CallPushService (CHAT-061)', () => {
       conversationId: 'conv-1',
       hasVideo: true,
       startedAt: '2026-10-13T10:00:00.000Z',
-      caller,
+      // The signed photo URL stays out of the push.
+      caller: { id: 'anna', displayName: 'Anna', avatarUrl: null },
     });
   });
 });

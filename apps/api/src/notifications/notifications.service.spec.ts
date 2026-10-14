@@ -138,6 +138,22 @@ describe('NotificationsService', () => {
       expect(devicesDb.deletePushDevice).toHaveBeenCalledWith({}, 'tok');
     });
 
+    it('skips a disabled channel and one that cannot ring', async () => {
+      android.enabled = false;
+      await service.notifyIncomingCall('ben', call);
+      expect(android.sendIncomingCall).not.toHaveBeenCalled();
+      android.enabled = true;
+      const noCall = { platform: 'android', enabled: true, send: vi.fn() };
+      const other = new NotificationsService(
+        {} as Database,
+        { hvals: vi.fn() } as unknown as Redis,
+        {} as RealtimeService,
+        [noCall as unknown as PushChannel],
+      );
+      await expect(other.notifyIncomingCall('ben', call)).resolves.toBeUndefined();
+      expect(noCall.send).not.toHaveBeenCalled();
+    });
+
     it('never throws into the call flow', async () => {
       android.sendIncomingCall.mockRejectedValue(new Error('boom'));
       await expect(service.notifyIncomingCall('ben', call)).resolves.toBeUndefined();

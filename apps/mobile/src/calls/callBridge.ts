@@ -45,7 +45,7 @@ export interface NativeCallApi {
 /** The part of the call engine the bridge drives. */
 export interface BridgeEngine {
   getSnapshot(): CallSnapshot | null;
-  presentIncoming(info: IncomingCallInfo): boolean;
+  presentIncoming(info: IncomingCallInfo, opts?: { announce?: boolean }): boolean;
   decline(): void;
   hangUp(): void;
   abandonIncoming(): void;
@@ -362,7 +362,8 @@ export class CallBridge {
     const info = incomingInfoOf(event.session ?? this.sessions.get(event.id));
     if (!info || this.requestIds.has(callId) || this.ringedOut(callId)) return;
     if (!(await this.deps.waitForSignalling())) return;
-    if (engine.getSnapshot() === null && engine.presentIncoming(info)) engine.decline();
+    if (engine.getSnapshot() === null && engine.presentIncoming(info, { announce: false }))
+      engine.decline();
   }
 
   private ringedOut(callId: string): boolean {

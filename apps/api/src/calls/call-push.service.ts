@@ -24,7 +24,9 @@ export class CallPushService implements OnModuleInit {
         conversationId: call.conversationId,
         hasVideo: call.media === 'video',
         startedAt: call.createdAt.toISOString(),
-        caller,
+        // The photo is a signed storage URL: it is not sent through the push service. The system
+        // call screen shows initials; the app's own screen loads the photo once it is open.
+        caller: { ...caller, avatarUrl: null },
       }),
     );
   }

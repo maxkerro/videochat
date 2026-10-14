@@ -13,6 +13,7 @@ vi.mock('../db/calls.js', () => ({
   insertCall: vi.fn(),
   endCall: vi.fn(),
   getCall: vi.fn(),
+  acceptCall: vi.fn(),
 }));
 vi.mock('../db/blocks.js', () => ({ isBlocked: vi.fn() }));
 vi.mock('../db/users.js', () => ({
@@ -20,6 +21,7 @@ vi.mock('../db/users.js', () => ({
 }));
 import { isBlocked } from '../db/blocks.js';
 import {
+  acceptCall,
   endCall,
   endExpiredCalls,
   findDirectPeer,
@@ -239,5 +241,73 @@ describe('CallSignalingService: a late decline (CHAT-061)', () => {
       } as never,
     );
     expect(endCall).not.toHaveBeenCalled();
+  });
+});
+
+describe('CallSignalingService: only the callee may answer, decline or ring (CHAT-061)', () => {
+  const CALL = '11111111-1111-4111-8111-111111111111';
+  let realtime: {
+    publishToUser: ReturnType<typeof vi.fn>;
+    publishToConnection: ReturnType<typeof vi.fn>;
+  };
+  let service: CallSignalingService;
+  const ringing = {
+    ...expiredCall(CALL),
+    status: 'ringing',
+    endReason: null,
+    endedAt: null,
+  } as CallRow;
+  const send = (type: string, userId = 'stranger') =>
+    service.handle(
+      { userId, connectionId: 'c9' } as never,
+      {
+        type,
+        id: 'e',
+        ts: new Date().toISOString(),
+        payload: { callId: CALL },
+      } as never,
+    );
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    realtime = {
+      publishToUser: vi.fn().mockResolvedValue(undefined),
+      publishToConnection: vi.fn().mockResolvedValue(undefined),
+    };
+    service = new CallSignalingService(
+      {} as Database,
+      { CALL_RING_TIMEOUT_SEC: 30, CALL_RECONNECT_GRACE_SEC: 20 } as Env,
+      realtime as unknown as RealtimeService,
+      {} as S3Service,
+    );
+    vi.mocked(getCall).mockResolvedValue(ringing);
+    // The real UPDATE matches on callee_id and status = 'ringing'; a stranger matches nothing.
+    vi.mocked(acceptCall).mockResolvedValue(undefined);
+  });
+
+  it("ignores a third user's decline, cancel and end", async () => {
+    await send('call.decline');
+    await send('call.cancel');
+    await send('call.end');
+    expect(endCall).not.toHaveBeenCalled();
+    expect(realtime.publishToUser).not.toHaveBeenCalled();
+  });
+
+  it("ignores a third user's accept: nothing is told to anyone", async () => {
+    await send('call.accept');
+    expect(acceptCall).toHaveBeenCalledWith({}, CALL, 'stranger', 'c9');
+    expect(realtime.publishToUser).not.toHaveBeenCalled();
+    expect(realtime.publishToConnection).not.toHaveBeenCalled();
+  });
+
+  it("ignores a third user's ringing", async () => {
+    await send('call.ringing');
+    expect(realtime.publishToConnection).not.toHaveBeenCalled();
+  });
+
+  it('still lets the callee decline', async () => {
+    vi.mocked(endCall).mockResolvedValue({ ...ringing, status: 'ended', endReason: 'declined' });
+    await send('call.decline', 'callee');
+    expect(endCall).toHaveBeenCalledWith({}, CALL, 'declined', ['ringing']);
   });
 });

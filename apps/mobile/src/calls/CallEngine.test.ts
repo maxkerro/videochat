@@ -406,6 +406,50 @@ describe('CallEngine (CHAT-042)', () => {
         expect(waitForSignalling).not.toHaveBeenCalled();
       });
 
+      it('does not tell the caller it rings when shown only to be declined', () => {
+        const { engine, lastSent } = setUp();
+        engine.presentIncoming(incoming as never, { announce: false });
+        engine.decline();
+        expect(lastSent(CALL_EVENTS.ringing)).toBeUndefined();
+        expect(lastSent(CALL_EVENTS.decline)?.payload).toEqual({ callId: CALL_ID });
+      });
+
+      it('tries the decline again when the socket drops right after coming up', async () => {
+        let ups = 0;
+        let delivered = false;
+        const { engine } = setUp({
+          getConnectionId: () => null,
+          waitForSignalling: async () => {
+            ups += 1;
+            return true;
+          },
+          send: () => {
+            // down, then flapped right after `ready`, then up
+            if (ups < 2) return false;
+            delivered = true;
+            return true;
+          },
+        });
+        engine.presentIncoming(incoming as never);
+        engine.decline();
+        await flush();
+        await flush();
+        expect(delivered).toBe(true);
+        expect(ups).toBe(2);
+      });
+
+      it('copes with every send failing while the socket is down', async () => {
+        const { engine, event, pcs } = setUp({ send: () => false });
+        event(CALL_EVENTS.incoming, incoming);
+        await engine.accept(avStream());
+        event(CALL_EVENTS.offer, { callId: CALL_ID, sdp: 'remote-offer' });
+        await flush();
+        await flush();
+        // Nothing threw; the call carries on and the answer is ready for when the socket returns.
+        expect(engine.getSnapshot()?.phase).toBe('connecting');
+        expect(pcs[0]!.remoteDescriptions[0]).toEqual({ type: 'offer', sdp: 'remote-offer' });
+      });
+
       it('a timed-out ring ends locally without telling the server "declined"', () => {
         const { engine, lastSent } = setUp();
         engine.presentIncoming(incoming as never);

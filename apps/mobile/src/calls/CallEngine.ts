@@ -28,6 +28,8 @@ export const RECONNECT_TIMEOUT_MS = 15_000;
 /** A brief `disconnected` often recovers by itself; restart ICE only if it hasn't by then. */
 export const ICE_RESTART_DELAY_MS = 2_000;
 export const STATS_INTERVAL_MS = 2_000;
+/** Tries at sending a decline while the socket comes and goes (CHAT-061). */
+export const DECLINE_ATTEMPTS = 3;
 
 export type CallPhase =
   'outgoing' | 'incoming' | 'connecting' | 'active' | 'reconnecting' | 'ended';
@@ -225,10 +227,12 @@ export class CallEngine {
   }
 
   /** CHAT-061: shows a ringing call that arrived by push rather than over the socket. */
-  presentIncoming(info: IncomingCallInfo): boolean {
+  presentIncoming(info: IncomingCallInfo, opts: { announce?: boolean } = {}): boolean {
     if (this.isBusy()) return this.snap?.callId === info.callId;
     this.showIncoming(info);
-    if (this.deps.getConnectionId() !== null) {
+    // `announce: false` when it is only shown to be declined (the person already said no on the
+    // lock screen): the caller should not see "Ringing..." first.
+    if (opts.announce !== false && this.deps.getConnectionId() !== null) {
       this.deps.send(CALL_EVENTS.ringing, { callId: info.callId });
     }
     return true;
@@ -250,12 +254,12 @@ export class CallEngine {
    * A decline must reach the server, or the caller rings on until the timeout. On a phone started
    * by the call (CHAT-061) the socket is often not up yet: then it goes out once it is.
    */
-  private sendDecline(callId: string): void {
-    const payload = { callId };
-    if (this.deps.send(CALL_EVENTS.decline, payload) !== false || !this.deps.waitForSignalling)
-      return;
+  private sendDecline(callId: string, attemptsLeft = DECLINE_ATTEMPTS): void {
+    if (this.deps.send(CALL_EVENTS.decline, { callId }) !== false) return;
+    if (!this.deps.waitForSignalling || attemptsLeft <= 1) return; // the server's ring timeout ends it
+    // Another try once the socket is (back) up -- it can flap between `realtime.ready` and here.
     void this.deps.waitForSignalling().then((up) => {
-      if (up) this.deps.send(CALL_EVENTS.decline, payload);
+      if (up) this.sendDecline(callId, attemptsLeft - 1);
     });
   }
 

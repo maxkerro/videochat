@@ -78,7 +78,7 @@ function setUp(opts: { active?: NativeSession | null; now?: () => number } = {})
   let snap: CallSnapshot | null = null;
   const engine = {
     getSnapshot: () => snap,
-    presentIncoming: vi.fn((info: IncomingCallInfo) => {
+    presentIncoming: vi.fn((info: IncomingCallInfo, _opts?: { announce?: boolean }) => {
       snap = snapshot({ callId: info.callId, media: info.media, peer: info.caller });
       return true;
     }),
@@ -287,6 +287,8 @@ describe('CallBridge: incoming', () => {
     await flush();
     expect(t.waitForSignalling).toHaveBeenCalled();
     expect(t.engine.presentIncoming).toHaveBeenCalledOnce();
+    // Shown only to be declined: the caller must not see "Ringing..." first.
+    expect(t.engine.presentIncoming.mock.calls[0]![1]).toEqual({ announce: false });
     expect(t.engine.decline).toHaveBeenCalledOnce();
   });
 
