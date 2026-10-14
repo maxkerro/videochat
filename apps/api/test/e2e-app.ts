@@ -19,6 +19,7 @@ import { MailService } from '../src/mail/mail.service.js';
 import { ObjectTooLargeError, S3Service } from '../src/storage/s3.service.js';
 import { LinkPreviewFetcher } from '../src/link-previews/link-preview.fetcher.js';
 import { WebPushChannel } from '../src/notifications/web-push.channel.js';
+import { SFU, type Sfu, type SfuRoom } from '../src/group-calls/sfu.js';
 
 class FakeMailService {
   verifyTokens: string[] = [];
@@ -125,6 +126,39 @@ export class FakePushChannel {
   }
 }
 
+/** CHAT-070: an in-memory SFU. A test puts people "in" a room with `setParticipants`, or removes
+ *  the room (everyone left and the SFU closed it) with `closeRoom`. */
+export class FakeSfu implements Sfu {
+  enabled = true;
+  readonly url = 'wss://sfu.test';
+  readonly rooms = new Map<string, number>();
+  readonly tokens: Array<{ room: string; identity: string; name: string }> = [];
+  failCreate = false;
+
+  createRoom(name: string) {
+    if (this.failCreate) return Promise.reject(new Error('SFU down'));
+    this.rooms.set(name, 0);
+    return Promise.resolve();
+  }
+  listRooms(names: string[]): Promise<SfuRoom[]> {
+    return Promise.resolve(
+      names
+        .filter((n) => this.rooms.has(n))
+        .map((n) => ({ name: n, numParticipants: this.rooms.get(n)! })),
+    );
+  }
+  joinToken(room: string, identity: string, name: string) {
+    this.tokens.push({ room, identity, name });
+    return Promise.resolve(`token-${room}-${identity}`);
+  }
+  setParticipants(room: string, count: number) {
+    this.rooms.set(room, count);
+  }
+  closeRoom(room: string) {
+    this.rooms.delete(room);
+  }
+}
+
 export interface E2eUser {
   id: string;
   session: AuthSession;
@@ -151,6 +185,8 @@ export async function startE2eApp(prefix: string) {
     .useClass(FakeLinkPreviewFetcher)
     .overrideProvider(WebPushChannel)
     .useClass(FakePushChannel)
+    .overrideProvider(SFU)
+    .useClass(FakeSfu)
     .compile();
   const app: INestApplication = moduleRef.createNestApplication({ bufferLogs: true });
   configureApp(app);
@@ -158,6 +194,7 @@ export async function startE2eApp(prefix: string) {
   const mail = moduleRef.get(MailService) as unknown as FakeMailService;
   const s3 = moduleRef.get(S3Service) as unknown as FakeS3Service;
   const push = moduleRef.get(WebPushChannel) as unknown as FakePushChannel;
+  const sfu = moduleRef.get<FakeSfu>(SFU);
   const server = () => app.getHttpServer();
 
   let counter = 0;
@@ -198,7 +235,7 @@ export async function startE2eApp(prefix: string) {
     await app.close();
   }
 
-  return { app, server, signUp, connect, close, s3, push };
+  return { app, server, signUp, connect, close, s3, push, sfu, moduleRef };
 }
 
 /**

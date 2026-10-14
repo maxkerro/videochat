@@ -40,6 +40,7 @@ import { GroupMembersPanel } from '../conversations/GroupMembersPanel';
 import { PendingUploads } from '../attachments/PendingUploads';
 import { useAttachmentUploads } from '../attachments/useAttachmentUploads';
 import { CallButtons } from '../calls/CallButtons';
+import { GroupCallBanner, GroupCallButton } from '../groupCalls/GroupCallBar';
 import { LinkPreviewCard } from '../linkPreviews/LinkPreviewCard';
 import { EmojiPicker } from './EmojiPicker';
 import { MessageBubble, replyQuoteText } from './MessageBubble';
@@ -936,6 +937,10 @@ export function ChatPane() {
           )}
         </div>
         {/* CHAT-018: group-only -- a direct conversation has no roles or membership to manage. */}
+        {/* CHAT-070: group calls, in group chats only (direct chats have 1:1 calls). */}
+        {conversation?.type === 'group' && conversationId && (
+          <GroupCallButton conversationId={conversationId} title={title} />
+        )}
         {conversation?.type === 'group' && (
           <Button variant="ghost" size="sm" onClick={() => setMembersOpen(true)}>
             Members
@@ -970,6 +975,9 @@ export function ChatPane() {
           />
         )}
       </header>
+      {conversation?.type === 'group' && conversationId && (
+        <GroupCallBanner conversationId={conversationId} title={title} />
+      )}
 
       {messagesQuery.isError ? (
         // Without this, a failed history load rendered an empty list -- indistinguishable from

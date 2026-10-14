@@ -108,6 +108,9 @@ const env: Env = {
   VAPID_PRIVATE_KEY: '',
   VAPID_SUBJECT: 'mailto:test@example.com',
   FCM_SERVICE_ACCOUNT_JSON: '',
+  LIVEKIT_URL: '',
+  LIVEKIT_API_KEY: '',
+  LIVEKIT_API_SECRET: '',
 };
 
 function makeService() {

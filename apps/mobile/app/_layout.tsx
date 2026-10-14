@@ -1,3 +1,5 @@
+// CHAT-070: LiveKit's WebRTC setup must run before anything else uses WebRTC.
+import '../src/groupCalls/setup';
 import { Stack } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
 import { ActivityIndicator, StyleSheet, Text, View } from 'react-native';

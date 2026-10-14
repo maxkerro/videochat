@@ -48,6 +48,7 @@
     "google-auth-library": "^11.3.0",
     "helmet": "^8.3.0",
     "ioredis": "^6.0.0",
+    "livekit-server-sdk": "2.19.1",
     "multer": "^2.4.0",
     "nestjs-pino": "^5.2.0",
     "nodemailer": "^10.0.10",

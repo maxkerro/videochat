@@ -98,6 +98,18 @@ services:
       - '49160-49200:49160-49200/udp'
       - '9641:9641'
 
+  # CHAT-070: the SFU for group calls, in dev mode (API key `devkey`, secret `secret`). Opt-in:
+  # `docker compose --profile sfu up -d livekit`, then set the LIVEKIT_* values from .env.example.
+  # Staging/production use LiveKit Cloud instead (docs/DEPLOYMENT.md).
+  livekit:
+    image: livekit/livekit-server:v1.9
+    profiles: ['sfu']
+    command: ['--dev', '--bind', '0.0.0.0', '--node-ip', '127.0.0.1']
+    ports:
+      - '7880:7880'
+      - '7881:7881'
+      - '7882:7882/udp'
+
   mailpit:
     image: axllent/mailpit:latest
     ports:

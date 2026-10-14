@@ -92,6 +92,13 @@
       "when": 1791905081332,
       "tag": "0012_message_reports",
       "breakpoints": true
+    },
+    {
+      "idx": 13,
+      "version": "7",
+      "when": 1791992250980,
+      "tag": "0013_group_calls",
+      "breakpoints": true
     }
   ]
 }

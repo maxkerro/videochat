@@ -3,6 +3,7 @@ import { useState } from 'react';
 import { Button } from '../../components/ui';
 import type { CallPeer } from './CallEngine';
 import { useCalls } from './CallProvider';
+import { useOptionalGroupCall } from '../groupCalls/GroupCallProvider';
 import { hasMediaSupport } from './mediaDevices';
 import { PreJoinDialog } from './PreJoinDialog';
 import styles from './Calls.module.css';
@@ -19,7 +20,9 @@ export function CallButtons({
 }) {
   const calls = useCalls();
   const [media, setMedia] = useState<CallMedia | null>(null);
-  const inCall = calls.call !== null && calls.call.phase !== 'ended';
+  // CHAT-070: a group call counts too -- one call at a time.
+  const inGroupCall = Boolean(useOptionalGroupCall()?.session);
+  const inCall = (calls.call !== null && calls.call.phase !== 'ended') || inGroupCall;
   const unavailable = disabled || inCall || !hasMediaSupport();
   const why = inCall ? ' (already in a call)' : '';
 

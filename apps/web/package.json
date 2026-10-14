@@ -13,6 +13,8 @@
     "test:coverage": "vitest run --coverage"
   },
   "dependencies": {
+    "@livekit/components-react": "2.9.24",
+    "@livekit/components-styles": "1.2.0",
     "@radix-ui/react-dialog": "^1.1.23",
     "@radix-ui/react-dropdown-menu": "^2.1.24",
     "@radix-ui/react-toast": "^1.2.23",
@@ -20,6 +22,7 @@
     "@tanstack/react-query": "^5.103.2",
     "@tanstack/react-virtual": "^3.13.12",
     "@videochat/shared": "workspace:*",
+    "livekit-client": "2.22.4",
     "react": "^19.3.0",
     "react-dom": "^19.3.0",
     "react-router": "^8.4.0",

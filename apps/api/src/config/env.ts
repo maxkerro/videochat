@@ -128,6 +128,14 @@ const envSchema = z.object({
    *  Cloud Messaging. Unset = no push to Android phones. */
   FCM_SERVICE_ACCOUNT_JSON: z.string().default(''),
 
+  // --- Group calls (CHAT-070) ---
+  /** The LiveKit server clients connect to, e.g. `wss://<project>.livekit.cloud` (LiveKit Cloud)
+   *  or `ws://localhost:7880` (the `livekit` docker compose service). Unset = group calls off. */
+  LIVEKIT_URL: z.string().default(''),
+  /** The API key and secret of that LiveKit project (secret: Render env only, never in the repo). */
+  LIVEKIT_API_KEY: z.string().default(''),
+  LIVEKIT_API_SECRET: z.string().default(''),
+
   /** Login attempts, tracked per client IP (there's no authenticated user yet at this endpoint).
    *  Distinct from CHAT-010's per-account lockout after 5 *failed* attempts -- this limits the
    *  *rate* of attempts against the endpoint itself, successful or not, and by IP rather than by

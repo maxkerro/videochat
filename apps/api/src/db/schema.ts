@@ -454,6 +454,37 @@ export const attachments = pgTable(
   ],
 );
 
+/**
+ * CHAT-070: a group call in a group conversation, carried by the SFU (LiveKit). The SFU room is
+ * named after `id`. At most one running call per conversation (the partial unique index), so
+ * "start" for a second person simply joins it. Ended by the server sweep once the SFU room is gone
+ * (the last person left), one conditional UPDATE, so it is announced exactly once.
+ */
+export const groupCalls = pgTable(
+  'group_calls',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    conversationId: uuid('conversation_id')
+      .notNull()
+      .references(() => conversations.id, { onDelete: 'cascade' }),
+    startedBy: uuid('started_by').references(() => users.id, { onDelete: 'set null' }),
+    /** As the SFU last reported; refreshed by the sweep. */
+    participantCount: integer('participant_count').notNull().default(0),
+    /** The most people in the call at once (for stats). */
+    peakParticipants: integer('peak_participants').notNull().default(0),
+    startedAt: timestamp('started_at', { withTimezone: true }).notNull().defaultNow(),
+    endedAt: timestamp('ended_at', { withTimezone: true }),
+  },
+  (t) => [
+    uniqueIndex('group_calls_one_running_idx')
+      .on(t.conversationId)
+      .where(sql`${t.endedAt} IS NULL`),
+    index('group_calls_running_idx')
+      .on(t.startedAt)
+      .where(sql`${t.endedAt} IS NULL`),
+  ],
+);
+
 export type User = typeof users.$inferSelect;
 export type NewUser = typeof users.$inferInsert;
 export type RefreshTokenRow = typeof refreshTokens.$inferSelect;
@@ -465,4 +496,5 @@ export type NewMessageRow = typeof messages.$inferInsert;
 export type BlockRow = typeof blocks.$inferSelect;
 export type CallRow = typeof calls.$inferSelect;
 export type AttachmentRow = typeof attachments.$inferSelect;
+export type GroupCallRow = typeof groupCalls.$inferSelect;
 export type ReactionRow = typeof reactions.$inferSelect;

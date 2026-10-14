@@ -81,6 +81,15 @@ services:
       # CHAT-055: Android push. The Firebase service-account key (JSON), pasted as one value.
       - key: FCM_SERVICE_ACCOUNT_JSON
         sync: false
+      # CHAT-070: group calls through LiveKit Cloud (Render can't host an SFU: it needs UDP). The
+      # project's wss:// URL, API key and API secret; unset = group calls off. See
+      # docs/DEPLOYMENT.md "Group calls".
+      - key: LIVEKIT_URL
+        sync: false
+      - key: LIVEKIT_API_KEY
+        sync: false
+      - key: LIVEKIT_API_SECRET
+        sync: false
 
   - type: web
     name: videochat-web

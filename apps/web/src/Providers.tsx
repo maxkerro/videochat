@@ -4,6 +4,7 @@ import { ToastProvider } from './components/ui';
 import { AuthProvider } from './features/auth/AuthContext';
 import { RealtimeProvider } from './features/chat/RealtimeProvider';
 import { CallProvider } from './features/calls/CallProvider';
+import { GroupCallProvider } from './features/groupCalls/GroupCallProvider';
 import { ThemeProvider } from './theme/ThemeProvider';
 
 export function Providers({ children }: { children: ReactNode }) {
@@ -19,7 +20,9 @@ export function Providers({ children }: { children: ReactNode }) {
         <ToastProvider>
           <AuthProvider>
             <RealtimeProvider>
-              <CallProvider>{children}</CallProvider>
+              <CallProvider>
+                <GroupCallProvider>{children}</GroupCallProvider>
+              </CallProvider>
             </RealtimeProvider>
           </AuthProvider>
         </ToastProvider>

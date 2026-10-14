@@ -4,6 +4,7 @@ import { Appearance, View } from 'react-native';
 import { useAuth } from '../../src/auth/AuthContext';
 import { CallOverlay } from '../../src/calls/CallOverlay';
 import { CallProvider } from '../../src/calls/CallProvider';
+import { GroupCallProvider } from '../../src/groupCalls/GroupCallProvider';
 import { DataProvider } from '../../src/data/DataProvider';
 import { PushProvider } from '../../src/push/PushProvider';
 import { RealtimeProvider } from '../../src/realtime/RealtimeProvider';
@@ -44,10 +45,12 @@ export default function AppLayout() {
       <RealtimeProvider>
         <PushProvider>
           <CallProvider>
-            <View style={{ flex: 1 }}>
-              <ThemedStack />
-              <CallOverlay />
-            </View>
+            <GroupCallProvider>
+              <View style={{ flex: 1 }}>
+                <ThemedStack />
+                <CallOverlay />
+              </View>
+            </GroupCallProvider>
           </CallProvider>
         </PushProvider>
       </RealtimeProvider>

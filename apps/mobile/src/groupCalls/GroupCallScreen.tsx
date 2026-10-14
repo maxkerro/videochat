@@ -1,0 +1,335 @@
+import {
+  AndroidAudioTypePresets,
+  AudioSession,
+  isTrackReference,
+  LiveKitRoom,
+  setupIOSAudioManagement,
+  useIsSpeaking,
+  useLocalParticipant,
+  useParticipants,
+  useTracks,
+  VideoTrack,
+  type TrackReferenceOrPlaceholder,
+} from '@livekit/react-native';
+import { Track, type LocalVideoTrack, type RoomOptions } from 'livekit-client';
+import { useEffect, useState } from 'react';
+import { useCalls } from '../calls/CallProvider';
+import {
+  Alert,
+  FlatList,
+  Platform,
+  Pressable,
+  StyleSheet,
+  Text,
+  useWindowDimensions,
+  View,
+} from 'react-native';
+import { SafeAreaView } from 'react-native-safe-area-context';
+import { useKeepAwake } from 'expo-keep-awake';
+import { groupCallParticipantsText } from '@videochat/shared';
+import type { GroupCallSession } from './GroupCallProvider';
+import { gridColumns, initialsOf, tileSize } from './layout';
+
+const ACCENT = '#2cc3ad';
+
+/** Simulcast for every camera, and each viewer receives only the size its tile needs. */
+const ROOM_OPTIONS: RoomOptions = {
+  adaptiveStream: { pixelDensity: 'screen' },
+  dynacast: true,
+  publishDefaults: { simulcast: true },
+};
+
+/** The phone's audio for the length of the group call: the loudspeaker unless a headset or
+ *  Bluetooth device is connected. */
+function useCallAudio(): boolean {
+  const [ready, setReady] = useState(false);
+  useEffect(() => {
+    let cancelled = false;
+    let cleanupIos: (() => void) | undefined;
+    void (async () => {
+      try {
+        if (Platform.OS === 'ios') cleanupIos = setupIOSAudioManagement(true);
+        else
+          await AudioSession.configureAudio({
+            android: {
+              preferredOutputList: ['bluetooth', 'headset', 'speaker'],
+              audioTypeOptions: AndroidAudioTypePresets.communication,
+            },
+          });
+        await AudioSession.startAudioSession();
+      } finally {
+        if (!cancelled) setReady(true);
+      }
+    })();
+    return () => {
+      cancelled = true;
+      cleanupIos?.();
+      void AudioSession.stopAudioSession();
+    };
+  }, []);
+  return ready;
+}
+
+function Tile({
+  trackRef,
+  width,
+  height,
+}: {
+  trackRef: TrackReferenceOrPlaceholder;
+  width: number;
+  height: number;
+}) {
+  const participant = trackRef.participant;
+  const speaking = useIsSpeaking(participant);
+  const name = participant.name || participant.identity;
+  const showVideo = isTrackReference(trackRef) && !trackRef.publication.isMuted;
+  return (
+    <View
+      accessible
+      accessibilityLabel={`${name}${speaking ? ', speaking' : ''}${participant.isLocal ? ' (you)' : ''}`}
+      style={[styles.tile, { width, height, borderColor: speaking ? ACCENT : 'transparent' }]}
+    >
+      {showVideo ? (
+        <VideoTrack trackRef={trackRef} style={StyleSheet.absoluteFill} objectFit="cover" />
+      ) : (
+        <View style={styles.placeholder}>
+          <Text style={styles.initials}>{initialsOf(name)}</Text>
+        </View>
+      )}
+      <Text numberOfLines={1} style={styles.name}>
+        {participant.isLocal ? `${name} (you)` : name}
+      </Text>
+    </View>
+  );
+}
+
+function Controls({ onLeave }: { onLeave: () => void }) {
+  const { localParticipant, isMicrophoneEnabled, isCameraEnabled } = useLocalParticipant();
+  const [front, setFront] = useState(true);
+  const toggle = async (what: 'mic' | 'camera') => {
+    try {
+      if (what === 'mic') await localParticipant.setMicrophoneEnabled(!isMicrophoneEnabled);
+      else await localParticipant.setCameraEnabled(!isCameraEnabled);
+    } catch {
+      Alert.alert(
+        'Can’t use your microphone or camera',
+        'Allow access for this app in the phone’s settings, then try again.',
+      );
+    }
+  };
+  const flip = async () => {
+    const track = localParticipant.getTrackPublication(Track.Source.Camera)?.track as
+      LocalVideoTrack | undefined;
+    if (!track) return;
+    await track.restartTrack({ facingMode: front ? 'environment' : 'user' });
+    setFront(!front);
+  };
+  return (
+    <View style={styles.controls}>
+      <ControlButton
+        label={isMicrophoneEnabled ? 'Mute' : 'Unmute'}
+        glyph={isMicrophoneEnabled ? '🎙' : '🔇'}
+        onPress={() => void toggle('mic')}
+      />
+      <ControlButton
+        label={isCameraEnabled ? 'Turn camera off' : 'Turn camera on'}
+        glyph={isCameraEnabled ? '📹' : '📷'}
+        onPress={() => void toggle('camera')}
+      />
+      {isCameraEnabled ? (
+        <ControlButton label="Switch camera" glyph="🔄" onPress={() => void flip()} />
+      ) : null}
+      <ControlButton label="Leave call" glyph="✕" danger onPress={onLeave} />
+    </View>
+  );
+}
+
+function ControlButton({
+  label,
+  glyph,
+  onPress,
+  danger = false,
+}: {
+  label: string;
+  glyph: string;
+  onPress: () => void;
+  danger?: boolean;
+}) {
+  return (
+    <Pressable
+      accessibilityRole="button"
+      accessibilityLabel={label}
+      onPress={onPress}
+      style={({ pressed }) => [
+        styles.control,
+        { backgroundColor: danger ? '#d64545' : '#2a2f36', opacity: pressed ? 0.6 : 1 },
+      ]}
+    >
+      <Text style={styles.controlGlyph}>{glyph}</Text>
+    </Pressable>
+  );
+}
+
+function RoomBody({
+  session,
+  minimised,
+  setMinimised,
+  onLeave,
+}: {
+  session: GroupCallSession;
+  minimised: boolean;
+  setMinimised: (m: boolean) => void;
+  onLeave: () => void;
+}) {
+  useKeepAwake();
+  const count = useParticipants().length;
+  const tracks = useTracks([{ source: Track.Source.Camera, withPlaceholder: true }], {
+    onlySubscribed: false,
+  });
+  const { width, height } = useWindowDimensions();
+  const size = tileSize(tracks.length, width, height - 200);
+
+  if (minimised) {
+    return (
+      <View style={styles.bar}>
+        <Text style={styles.barText} numberOfLines={1}>
+          {session.title} · {groupCallParticipantsText(count)}
+        </Text>
+        <Pressable accessibilityRole="button" onPress={() => setMinimised(false)}>
+          <Text style={styles.link}>Back to call</Text>
+        </Pressable>
+        <Pressable accessibilityRole="button" accessibilityLabel="Leave call" onPress={onLeave}>
+          <Text style={[styles.link, { color: '#ff8a8a' }]}>Leave</Text>
+        </Pressable>
+      </View>
+    );
+  }
+
+  return (
+    <SafeAreaView style={styles.flex} edges={['top', 'bottom']}>
+      <View style={styles.header}>
+        <View style={styles.flex}>
+          <Text style={styles.title} numberOfLines={1}>
+            {session.title}
+          </Text>
+          <Text style={styles.subtitle}>{groupCallParticipantsText(count)}</Text>
+        </View>
+        <Pressable accessibilityRole="button" onPress={() => setMinimised(true)}>
+          <Text style={styles.link}>Minimise</Text>
+        </Pressable>
+      </View>
+      <FlatList
+        key={gridColumns(tracks.length)}
+        numColumns={gridColumns(tracks.length)}
+        data={tracks}
+        keyExtractor={(t) => `${t.participant.identity}:${t.source}`}
+        renderItem={({ item }) => <Tile trackRef={item} width={size.width} height={size.height} />}
+      />
+      <Controls onLeave={onLeave} />
+    </SafeAreaView>
+  );
+}
+
+/**
+ * CHAT-070: the group call screen. Joins with the microphone on and the camera off. Minimised, the
+ * call goes on and only a bar is shown, so the chat can be used; the call stays connected while
+ * the app is open (in the background Android may silence the microphone -- see docs/MOBILE.md).
+ */
+export function GroupCallScreen({
+  session,
+  onLeave,
+}: {
+  session: GroupCallSession;
+  onLeave: () => void;
+}) {
+  const audioReady = useCallAudio();
+  const [minimised, setMinimised] = useState(false);
+  // Answering a 1:1 call that came in meanwhile leaves the group call (one call at a time).
+  const oneToOne = useCalls().call;
+  const answered = oneToOne !== null && oneToOne.phase !== 'incoming' && oneToOne.phase !== 'ended';
+  useEffect(() => {
+    if (answered) onLeave();
+  }, [answered, onLeave]);
+  return (
+    <View
+      style={minimised ? styles.minimisedWrap : styles.screen}
+      pointerEvents={minimised ? 'box-none' : 'auto'}
+    >
+      <LiveKitRoom
+        serverUrl={session.url}
+        token={session.token}
+        connect={audioReady}
+        audio
+        video={false}
+        options={ROOM_OPTIONS}
+        onDisconnected={onLeave}
+        onError={() => {
+          Alert.alert('The group call was interrupted');
+          onLeave();
+        }}
+      >
+        <RoomBody
+          session={session}
+          minimised={minimised}
+          setMinimised={setMinimised}
+          onLeave={onLeave}
+        />
+      </LiveKitRoom>
+    </View>
+  );
+}
+
+const styles = StyleSheet.create({
+  flex: { flex: 1 },
+  screen: { ...StyleSheet.absoluteFill, backgroundColor: '#0b0d10', zIndex: 20 },
+  minimisedWrap: { position: 'absolute', left: 12, right: 12, bottom: 24, zIndex: 20 },
+  header: { flexDirection: 'row', alignItems: 'center', paddingHorizontal: 16, paddingVertical: 8 },
+  title: { color: '#fff', fontSize: 17, fontWeight: '600' },
+  subtitle: { color: '#c9cdd2', fontSize: 13 },
+  link: {
+    color: ACCENT,
+    fontSize: 15,
+    fontWeight: '600',
+    paddingHorizontal: 8,
+    paddingVertical: 6,
+  },
+  tile: {
+    backgroundColor: '#1a1e24',
+    borderWidth: 3,
+    overflow: 'hidden',
+    justifyContent: 'flex-end',
+  },
+  placeholder: { ...StyleSheet.absoluteFill, alignItems: 'center', justifyContent: 'center' },
+  initials: { color: '#fff', fontSize: 32, fontWeight: '700' },
+  name: {
+    color: '#fff',
+    fontSize: 13,
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+    backgroundColor: 'rgba(0,0,0,0.45)',
+  },
+  controls: {
+    flexDirection: 'row',
+    justifyContent: 'center',
+    gap: 16,
+    paddingVertical: 12,
+  },
+  control: {
+    width: 56,
+    height: 56,
+    borderRadius: 28,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  controlGlyph: { fontSize: 22, color: '#fff' },
+  bar: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    paddingLeft: 14,
+    paddingVertical: 6,
+    borderRadius: 14,
+    backgroundColor: '#0b0d10',
+  },
+  barText: { flex: 1, color: '#fff', fontSize: 14 },
+});

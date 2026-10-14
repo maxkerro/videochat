@@ -144,7 +144,7 @@ Phones get pushes through Firebase Cloud Messaging (FCM). One-time setup:
    the value of **`FCM_SERVICE_ACCOUNT_JSON`** on `videochat-api` in Render (this one _is_ a secret:
    never commit it). Without it the API simply sends no phone pushes.
 4. Build a new APK (`apps/mobile/apk_update.sh`): the push module is native, so an over-the-air update
-   cannot add it. The version is `0.5.0` (CHAT-056/057 added the camera, image-manipulator, haptics and clipboard modules; CHAT-060 adds the WebRTC module (swapped to @livekit/react-native-webrtc in CHAT-061) and expo-keep-awake, CHAT-062 adds expo-pip, CHAT-061 adds expo-callkit-telecom and expo-build-properties, so every one of these needs a new APK).
+   cannot add it. The version is `0.5.0` (CHAT-056/057 added the camera, image-manipulator, haptics and clipboard modules; CHAT-060 adds the WebRTC module (swapped to @livekit/react-native-webrtc in CHAT-061) and expo-keep-awake, CHAT-062 adds expo-pip, CHAT-061 adds expo-callkit-telecom and expo-build-properties, CHAT-070 adds @livekit/react-native, so every one of these needs a new APK).
 
 How it behaves: the app asks for notification permission after sign-in and registers its FCM token
 (`POST /push/devices`, which also sends the login's refresh token: the token is bound to that login
@@ -154,3 +154,29 @@ migration `0011` adds this and deploys with the API); sign-out removes it (`DELE
 notifications off); tokens FCM reports as unregistered are deleted. A new message for a conversation
 replaces its earlier notification, tapping one opens that conversation, and opening a conversation
 clears its notifications.
+
+## Group calls (CHAT-070)
+
+Group chats can hold a call of up to 20 people. The media goes through an SFU (LiveKit); the API only
+decides who may join which call, hands out a 10-minute room token, and ends the call (with a "Group
+call ended · 12:34" message) a few seconds after the SFU closes the empty room. Render can't host an
+SFU (it needs UDP ports), so staging and production use **LiveKit Cloud**.
+
+One-time setup:
+
+1. Sign up at [cloud.livekit.io](https://cloud.livekit.io) (the free **Build** plan needs no card:
+   5,000 participant-minutes and 100 concurrent connections a month) and create a project.
+2. Project **Settings -> Keys**: create an API key. On `videochat-api` in Render set
+   **`LIVEKIT_URL`** (the project's `wss://<project>.livekit.cloud` URL), **`LIVEKIT_API_KEY`** and
+   **`LIVEKIT_API_SECRET`** (a secret: Render only, never in the repo or in chat). Without them the
+   "Group call" button answers "Group calls aren't available right now" and nothing else changes.
+3. Deploy the API (migration `0013_group_calls` creates the `group_calls` table) and the web app; build
+   the `0.5.0` APK for the phone.
+
+No webhook is needed: every API node asks LiveKit every 5 s which rooms still exist and how many people
+are in them (one `ListRooms` call for all running calls). The free plan's minutes go fast with video:
+20 people for one hour is 1,200 participant-minutes. Usage is on the LiveKit dashboard; when it runs out
+the plan stops accepting connections until the next month (or upgrade to Ship).
+
+Locally: `docker compose --profile sfu up -d livekit` and the `LIVEKIT_*` dev values from
+`.env.example` (`ws://localhost:7880`, `devkey`, `secret`).

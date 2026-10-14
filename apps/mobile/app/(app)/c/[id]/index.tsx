@@ -18,6 +18,8 @@ import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context'
 import { useAuth } from '../../../../src/auth/AuthContext';
 import { CallButton } from '../../../../src/calls/CallButton';
 import { useCalls } from '../../../../src/calls/CallProvider';
+import { GroupCallBanner, GroupCallButton } from '../../../../src/groupCalls/GroupCallBanner';
+import { useGroupCall } from '../../../../src/groupCalls/GroupCallProvider';
 import { AttachSheet, type AttachChoice } from '../../../../src/chat/AttachSheet';
 import {
   CameraUnavailableError,
@@ -323,6 +325,16 @@ export default function ConversationScreen() {
   );
 
   const title = conversation.data ? conversationTitle(conversation.data) : 'Chat';
+  // CHAT-070: one call at a time -- no 1:1 call while in a group call.
+  const groupCall = useGroupCall();
+  const startCall = (media: 'audio' | 'video') => {
+    if (!peer) return;
+    if (groupCall.session) {
+      Alert.alert('Already in a call', 'Leave the group call first.');
+      return;
+    }
+    void calls.startCall({ conversationId: id, peer, media });
+  };
 
   return (
     <SafeAreaView edges={['top']} style={[styles.flex, { backgroundColor: t.bg }]}>
@@ -359,16 +371,18 @@ export default function ConversationScreen() {
             <CallButton
               label={`Audio call ${peer.displayName}`}
               glyph="✆"
-              onPress={() => void calls.startCall({ conversationId: id, peer, media: 'audio' })}
+              onPress={() => startCall('audio')}
             />
             <CallButton
               label={`Video call ${peer.displayName}`}
               glyph="📹"
-              onPress={() => void calls.startCall({ conversationId: id, peer, media: 'video' })}
+              onPress={() => startCall('video')}
             />
           </>
         ) : null}
+        {isGroup ? <GroupCallButton conversationId={id} title={title} /> : null}
       </View>
+      {isGroup ? <GroupCallBanner conversationId={id} title={title} /> : null}
       {!online ? (
         <Banner>You’re offline. Messages will send when you’re back online.</Banner>
       ) : null}

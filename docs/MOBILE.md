@@ -250,3 +250,24 @@ logic, tested with a fake) and `nativeCallUi.ts` (the library).
   Apple developer account and APNs credentials; the server has no APNs channel yet. Apple requires
   every VoIP push to show a call, so VoIP pushes must never be used for ordinary messages. On iOS
   only the foreground path (app open) is in place.
+
+## Group calls (CHAT-070)
+
+In a group chat, the header's 📹 starts a group call (LiveKit, see docs/DEPLOYMENT.md); while one
+runs, a banner under the header shows how many are in it and lets anyone join. The call screen
+(`src/groupCalls/GroupCallScreen.tsx`) shows one tile per person (one fills the screen, two stack, then
+two columns, scrolling past 8), outlines whoever is speaking, and has mute, camera, switch camera and
+leave. It joins with the microphone on and the camera off. Minimise keeps the call and shows a bar
+over the app. Sound goes to a headset or Bluetooth device when one is connected, else the loudspeaker.
+
+- **Setup:** `registerGlobals({ autoConfigureAudioSession: false })` runs first thing
+  (`src/groupCalls/setup.ts`, imported by `app/_layout.tsx`); the LiveKit Expo plugin sets up the
+  native side. `@livekit/react-native` is native, so this is still the unreleased `0.5.0`.
+- **One call at a time:** no group call during a 1:1 call and no 1:1 call during a group call.
+  A 1:1 call that comes in during a group call still rings (the system call screen); answering it
+  leaves the group call.
+- **Known limit:** the group call keeps going while the app is open (also minimised). Android silences
+  the microphone of an app in the background unless it runs a foreground service, which group calls
+  don't register yet; leaving the app mutes you to the others until you come back.
+- **iOS** is not built or tested (no Apple account). Its audio session for group calls is set up with
+  `setupIOSAudioManagement` while the call runs.
