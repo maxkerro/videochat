@@ -9,5 +9,6 @@ import { LiveKitSfu, SFU } from './sfu.js';
   imports: [AuthModule, RealtimeModule],
   controllers: [GroupCallsController],
   providers: [{ provide: SFU, useClass: LiveKitSfu }, GroupCallsService],
+  exports: [GroupCallsService],
 })
 export class GroupCallsModule {}

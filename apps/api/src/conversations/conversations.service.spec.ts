@@ -4,6 +4,7 @@ import * as blocksDb from '../db/blocks.js';
 import * as conversationsDb from '../db/conversations.js';
 import * as messagesDb from '../db/messages.js';
 import * as usersDb from '../db/users.js';
+import type { GroupCallsService } from '../group-calls/group-calls.service.js';
 import type { RealtimeService } from '../realtime/realtime.service.js';
 import type { S3Service } from '../storage/s3.service.js';
 import { ConversationsService } from './conversations.service.js';
@@ -119,6 +120,7 @@ describe('ConversationsService (CHAT-018)', () => {
       {} as Database,
       s3 as unknown as S3Service,
       realtime as unknown as RealtimeService,
+      { removeFromCall: vi.fn() } as unknown as GroupCallsService,
     );
   });
 

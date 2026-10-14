@@ -8,7 +8,7 @@ import {
   useParticipants,
   useTracks,
 } from '@livekit/components-react';
-import { Track, VideoPresets, type RoomOptions } from 'livekit-client';
+import { DisconnectReason, Track, VideoPresets, type RoomOptions } from 'livekit-client';
 import { useEffect, useState } from 'react';
 import { useCalls } from '../calls/CallProvider';
 import { useToast } from '../../components/ui';
@@ -100,7 +100,12 @@ export default function GroupCallView({
       audio
       video={false}
       options={ROOM_OPTIONS}
-      onDisconnected={onLeave}
+      onDisconnected={(reason) => {
+        // Left the group (or was removed from it): the server took them out of the call.
+        if (reason === DisconnectReason.PARTICIPANT_REMOVED)
+          toast({ title: 'You’re no longer in this group, so you left its call' });
+        onLeave();
+      }}
       onError={() => {
         toast({ title: 'The group call was interrupted', tone: 'danger' });
         onLeave();

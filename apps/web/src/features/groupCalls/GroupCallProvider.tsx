@@ -65,9 +65,14 @@ export function GroupCallProvider({ children }: { children: ReactNode }) {
   const auth = useAuth();
   const calls = useCalls();
   const { toast } = useToast();
-  const [joined, setSession] = useState<GroupCallSession | null>(null);
-  // Signing out leaves the call (the view unmounts, which disconnects from the room).
-  const session = auth.status === 'anonymous' ? null : joined;
+  // The session belongs to the person who joined: it is only ever shown to them, and it is
+  // dropped when they sign out, so the next person signing in on this tab never inherits it.
+  const [joined, setJoined] = useState<{ userId: string; session: GroupCallSession } | null>(null);
+  const userId = auth.status === 'anonymous' ? null : (auth.user?.id ?? null);
+  // Signed out (or someone else signed in): forget it for good, so signing back in later doesn't
+  // reconnect either. (Adjusting state while rendering, React's pattern for "reset on change".)
+  if (joined && joined.userId !== userId) setJoined(null);
+  const session = joined && joined.userId === userId ? joined.session : null;
   const [joining, setJoining] = useState<string | null>(null);
   const inOneToOne = calls.call !== null && calls.call.phase !== 'ended';
 
@@ -81,17 +86,21 @@ export function GroupCallProvider({ children }: { children: ReactNode }) {
       setJoining(conversationId);
       try {
         const res = await withAuthRetry(auth, (token) => joinGroupCall(token, conversationId));
-        setSession({ callId: res.call.id, conversationId, title, url: res.url, token: res.token });
+        if (!userId) return;
+        setJoined({
+          userId,
+          session: { callId: res.call.id, conversationId, title, url: res.url, token: res.token },
+        });
       } catch (err) {
         toast({ title: joinErrorText(err), tone: 'danger' });
       } finally {
         setJoining(null);
       }
     },
-    [auth, inOneToOne, session, toast],
+    [auth, inOneToOne, session, toast, userId],
   );
 
-  const leave = useCallback(() => setSession(null), []);
+  const leave = useCallback(() => setJoined(null), []);
 
   const value = useMemo(() => ({ session, joining, join, leave }), [session, joining, join, leave]);
 

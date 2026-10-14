@@ -34,6 +34,7 @@ import { appendMessage } from '../db/messages.js';
 import { findUserById } from '../db/users.js';
 import { toMessage } from '../messages/message-mapper.js';
 import { publishReadEvent } from './read-events.js';
+import { GroupCallsService } from '../group-calls/group-calls.service.js';
 import { RealtimeService } from '../realtime/realtime.service.js';
 import { S3Service } from '../storage/s3.service.js';
 import { toConversationSummary } from './conversation-mapper.js';
@@ -56,6 +57,7 @@ export class ConversationsService {
     @Inject(DB) private readonly db: Database,
     private readonly s3: S3Service,
     private readonly realtime: RealtimeService,
+    private readonly groupCalls: GroupCallsService,
   ) {}
 
   async startDirect(userId: string, otherUserId: string): Promise<ConversationSummary> {
@@ -237,6 +239,8 @@ export class ConversationsService {
     if (!result.left) throw new NotFoundException('User is not a member of this conversation');
     // AC: "removed members stop receiving messages immediately".
     this.realtime.removeConversationForUser(targetUserId, conversationId);
+    // CHAT-070: ...and stop hearing and seeing the group's call.
+    await this.groupCalls.removeFromCall(conversationId, targetUserId);
 
     const actor = await findUserById(this.db, userId);
     await this.postSystemMessage(
@@ -256,6 +260,7 @@ export class ConversationsService {
     const actor = await findUserById(this.db, userId);
     const result = await leaveConversation(this.db, conversationId, userId);
     this.realtime.removeConversationForUser(userId, conversationId);
+    await this.groupCalls.removeFromCall(conversationId, userId);
 
     await this.postSystemMessage(conversationId, `${actor!.displayName} left`);
     await this.announcePromotionIfAny(conversationId, result.promotedUserId);

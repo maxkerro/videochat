@@ -34,7 +34,7 @@ import { findUserById } from '../db/users.js';
 import { DB } from '../infra/tokens.js';
 import { toMessage } from '../messages/message-mapper.js';
 import { RealtimeService } from '../realtime/realtime.service.js';
-import { SFU, type Sfu } from './sfu.js';
+import { connectionIdentity, SFU, type Sfu } from './sfu.js';
 
 /** How often each API node asks the SFU which calls are still going and how many are in them. */
 export const GROUP_CALL_SWEEP_INTERVAL_MS = 5_000;
@@ -98,24 +98,50 @@ export class GroupCallsService implements OnModuleInit, OnModuleDestroy {
     const { call, created } = await startOrGetGroupCall(this.db, conversationId, userId);
     const user = await findUserById(this.db, userId);
     const name = user?.displayName ?? 'Someone';
-    if (created) {
-      try {
-        await this.sfu.createRoom(call.id);
-      } catch (err) {
-        // No room, no call: take it back so the next try starts afresh.
-        await endGroupCalls(this.db, [call.id]);
-        this.logger.warn(`Couldn't create the SFU room for ${call.id}: ${(err as Error).message}`);
-        throw new ServiceUnavailableException('Couldn’t start the call. Please try again.');
-      }
-      await this.postSystemMessage(conversationId, `${name} started a group call`);
-      await this.announce(conversationId, call);
-    } else if (call.participantCount >= GROUP_CALL_MAX_PARTICIPANTS) {
+    if (!created && call.participantCount >= GROUP_CALL_MAX_PARTICIPANTS) {
+      // The count can be a few seconds old; the room's own 20-person limit is the hard stop.
       throw new ConflictException(
         `The call is full (${GROUP_CALL_MAX_PARTICIPANTS} people at most)`,
       );
     }
-    const token = await this.sfu.joinToken(call.id, userId, name);
+    try {
+      // Also for a running call: the SFU may have closed its room a moment before the sweep
+      // noticed, and a room it re-creates on join would lack our settings (the 20-person cap).
+      // Creating an existing room just returns it.
+      await this.sfu.createRoom(call.id);
+    } catch (err) {
+      this.logger.warn(`Couldn't create the SFU room for ${call.id}: ${(err as Error).message}`);
+      // No room, no call: a call this request created is taken back so the next try starts afresh.
+      if (created) await endGroupCalls(this.db, [call.id]);
+      throw new ServiceUnavailableException('Couldn’t start the call. Please try again.');
+    }
+    if (created) {
+      // The call is running either way; a failed announcement must not fail the request.
+      try {
+        await this.postSystemMessage(conversationId, `${name} started a group call`);
+        await this.announce(conversationId, call);
+      } catch (err) {
+        this.logger.warn(`Couldn't announce group call ${call.id}: ${(err as Error).message}`);
+      }
+    }
+    const token = await this.sfu.joinToken(call.id, connectionIdentity(userId, randomUUID()), name);
     return { call: toGroupCall(call), url: this.sfu.url, token };
+  }
+
+  /**
+   * Someone left the group or was removed: take them out of its running call too. Their token was
+   * checked against membership only when issued, and the SFU renews it for as long as they stay.
+   */
+  async removeFromCall(conversationId: string, userId: string): Promise<void> {
+    if (!this.sfu.enabled) return;
+    try {
+      const call = await findRunningGroupCall(this.db, conversationId);
+      if (call) await this.sfu.removeUser(call.id, userId);
+    } catch (err) {
+      this.logger.warn(
+        `Couldn't remove ${userId} from the group call in ${conversationId}: ${(err as Error).message}`,
+      );
+    }
   }
 
   /** Brings each running call in line with the SFU: new participant counts, and ends the calls

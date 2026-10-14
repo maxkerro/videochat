@@ -23,7 +23,20 @@ export interface Sfu {
   createRoom(name: string): Promise<void>;
   /** The rooms among `names` that exist right now. */
   listRooms(names: string[]): Promise<SfuRoom[]>;
+  /** `identity` is unique per connection; `userId` goes into the token's attributes. */
   joinToken(room: string, identity: string, displayName: string): Promise<string>;
+  /** Disconnects every connection of `userId` from `room` (all their devices). */
+  removeUser(room: string, userId: string): Promise<void>;
+}
+
+/** One identity per connection, so the same person on two devices doesn't knock one of them out
+ *  (LiveKit drops the older connection of a duplicate identity). */
+export function connectionIdentity(userId: string, connectionId: string): string {
+  return `${userId}:${connectionId}`;
+}
+
+export function userOfIdentity(identity: string): string {
+  return identity.split(':')[0]!;
 }
 
 export const SFU = Symbol('SFU');
@@ -59,6 +72,15 @@ export class LiveKitSfu implements Sfu {
       departureTimeout: ROOM_DEPARTURE_TIMEOUT_SEC,
       maxParticipants: GROUP_CALL_MAX_PARTICIPANTS,
     });
+  }
+
+  async removeUser(room: string, userId: string): Promise<void> {
+    const participants = await this.rooms!.listParticipants(room);
+    await Promise.all(
+      participants
+        .filter((p) => userOfIdentity(p.identity) === userId)
+        .map((p) => this.rooms!.removeParticipant(room, p.identity)),
+    );
   }
 
   async listRooms(names: string[]): Promise<SfuRoom[]> {

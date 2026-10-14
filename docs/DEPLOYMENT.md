@@ -173,6 +173,10 @@ One-time setup:
 3. Deploy the API (migration `0013_group_calls` creates the `group_calls` table) and the web app; build
    the `0.5.0` APK for the phone.
 
+Leaving a group, or being removed from it, also takes the person out of its running call (the API
+asks LiveKit to remove their connections; they see "You're no longer in this group"). Each join gets
+its own identity (`<userId>:<random>`), so the same person can be in the call from two devices.
+
 No webhook is needed: every API node asks LiveKit every 5 s which rooms still exist and how many people
 are in them (one `ListRooms` call for all running calls). The free plan's minutes go fast with video:
 20 people for one hour is 1,200 participant-minutes. Usage is on the LiveKit dashboard; when it runs out

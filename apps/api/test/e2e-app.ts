@@ -133,11 +133,14 @@ export class FakeSfu implements Sfu {
   readonly url = 'wss://sfu.test';
   readonly rooms = new Map<string, number>();
   readonly tokens: Array<{ room: string; identity: string; name: string }> = [];
+  readonly removed: Array<{ room: string; userId: string }> = [];
+  readonly creates: string[] = [];
   failCreate = false;
 
   createRoom(name: string) {
     if (this.failCreate) return Promise.reject(new Error('SFU down'));
-    this.rooms.set(name, 0);
+    this.creates.push(name);
+    if (!this.rooms.has(name)) this.rooms.set(name, 0);
     return Promise.resolve();
   }
   listRooms(names: string[]): Promise<SfuRoom[]> {
@@ -150,6 +153,10 @@ export class FakeSfu implements Sfu {
   joinToken(room: string, identity: string, name: string) {
     this.tokens.push({ room, identity, name });
     return Promise.resolve(`token-${room}-${identity}`);
+  }
+  removeUser(room: string, userId: string) {
+    this.removed.push({ room, userId });
+    return Promise.resolve();
   }
   setParticipants(room: string, count: number) {
     this.rooms.set(room, count);

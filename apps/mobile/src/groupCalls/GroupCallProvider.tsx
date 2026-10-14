@@ -45,10 +45,13 @@ export function joinErrorText(err: unknown): string {
 export function GroupCallProvider({ children }: { children: ReactNode }) {
   const { state } = useAuth();
   const calls = useCalls();
-  const [joined, setJoined] = useState<GroupCallSession | null>(null);
+  // The session belongs to the person who joined; signing out drops it for good, so whoever signs
+  // in next on this phone never inherits it (whatever the routing does with this provider).
+  const [joined, setJoined] = useState<{ userId: string; session: GroupCallSession } | null>(null);
   const [joining, setJoining] = useState<string | null>(null);
-  // Signing out leaves the call (the screen unmounts, which disconnects).
-  const session = state.status === 'signedIn' ? joined : null;
+  const userId = state.status === 'signedIn' ? state.user.id : null;
+  if (joined && joined.userId !== userId) setJoined(null);
+  const session = joined && joined.userId === userId ? joined.session : null;
   const inOneToOne = calls.call !== null && calls.call.phase !== 'ended';
 
   const join = useCallback(
@@ -61,14 +64,18 @@ export function GroupCallProvider({ children }: { children: ReactNode }) {
       setJoining(conversationId);
       try {
         const res = await joinGroupCall(conversationId);
-        setJoined({ callId: res.call.id, conversationId, title, url: res.url, token: res.token });
+        if (!userId) return;
+        setJoined({
+          userId,
+          session: { callId: res.call.id, conversationId, title, url: res.url, token: res.token },
+        });
       } catch (err) {
         Alert.alert('Can’t join the call', joinErrorText(err));
       } finally {
         setJoining(null);
       }
     },
-    [session, inOneToOne],
+    [session, inOneToOne, userId],
   );
 
   const leave = useCallback(() => setJoined(null), []);

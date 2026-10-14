@@ -7,12 +7,19 @@ import {
   useIsSpeaking,
   useLocalParticipant,
   useParticipants,
+  useRoomContext,
   useTracks,
   VideoTrack,
   type TrackReferenceOrPlaceholder,
 } from '@livekit/react-native';
-import { Track, type LocalVideoTrack, type RoomOptions } from 'livekit-client';
-import { useEffect, useState } from 'react';
+import {
+  DisconnectReason,
+  RoomEvent,
+  Track,
+  type LocalVideoTrack,
+  type RoomOptions,
+} from 'livekit-client';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { useCalls } from '../calls/CallProvider';
 import {
   Alert,
@@ -40,8 +47,9 @@ const ROOM_OPTIONS: RoomOptions = {
 };
 
 /** The phone's audio for the length of the group call: the loudspeaker unless a headset or
- *  Bluetooth device is connected. */
-function useCallAudio(): boolean {
+ *  Bluetooth device is connected. Not torn down when the call ends because a 1:1 call was
+ *  answered (`handedOver`): that call's own audio session is starting at that moment. */
+function useCallAudio(isHandedOver: () => boolean): boolean {
   const [ready, setReady] = useState(false);
   useEffect(() => {
     let cancelled = false;
@@ -57,6 +65,8 @@ function useCallAudio(): boolean {
             },
           });
         await AudioSession.startAudioSession();
+      } catch {
+        // The call still connects; the platform's default audio routing applies.
       } finally {
         if (!cancelled) setReady(true);
       }
@@ -64,9 +74,9 @@ function useCallAudio(): boolean {
     return () => {
       cancelled = true;
       cleanupIos?.();
-      void AudioSession.stopAudioSession();
+      if (!isHandedOver()) void AudioSession.stopAudioSession().catch(() => undefined);
     };
-  }, []);
+  }, [isHandedOver]);
   return ready;
 }
 
@@ -182,6 +192,18 @@ function RoomBody({
   onLeave: () => void;
 }) {
   useKeepAwake();
+  const room = useRoomContext();
+  useEffect(() => {
+    const onGone = (reason?: DisconnectReason) => {
+      // Left the group (or was removed from it): the server took them out of the call.
+      if (reason === DisconnectReason.PARTICIPANT_REMOVED)
+        Alert.alert('You left the call', 'You’re no longer in this group.');
+    };
+    room.on(RoomEvent.Disconnected, onGone);
+    return () => {
+      room.off(RoomEvent.Disconnected, onGone);
+    };
+  }, [room]);
   const count = useParticipants().length;
   const tracks = useTracks([{ source: Track.Source.Camera, withPlaceholder: true }], {
     onlySubscribed: false,
@@ -242,13 +264,17 @@ export function GroupCallScreen({
   session: GroupCallSession;
   onLeave: () => void;
 }) {
-  const audioReady = useCallAudio();
-  const [minimised, setMinimised] = useState(false);
   // Answering a 1:1 call that came in meanwhile leaves the group call (one call at a time).
   const oneToOne = useCalls().call;
   const answered = oneToOne !== null && oneToOne.phase !== 'incoming' && oneToOne.phase !== 'ended';
+  const handedOver = useRef(false);
+  const isHandedOver = useCallback(() => handedOver.current, []);
+  const audioReady = useCallAudio(isHandedOver);
+  const [minimised, setMinimised] = useState(false);
   useEffect(() => {
-    if (answered) onLeave();
+    if (!answered) return;
+    handedOver.current = true;
+    onLeave();
   }, [answered, onLeave]);
   return (
     <View

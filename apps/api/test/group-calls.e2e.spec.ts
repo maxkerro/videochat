@@ -60,7 +60,7 @@ describe.skipIf(!hasInfra)('group calls (CHAT-070)', () => {
 
     const res = groupCallJoinSchema.parse((await join(anna, conversationId)).body);
     expect(res.url).toBe('wss://sfu.test');
-    expect(res.token).toBe(`token-${res.call.id}-${anna.id}`);
+    expect(res.token).toMatch(new RegExp(`^token-${res.call.id}-${anna.id}:`));
     expect(sfu.rooms.has(res.call.id)).toBe(true);
 
     const update = await benSocket.waitFor(GROUP_CALL_EVENTS.updated);
@@ -79,7 +79,7 @@ describe.skipIf(!hasInfra)('group calls (CHAT-070)', () => {
 
     const second = groupCallJoinSchema.parse((await join(clara, conversationId)).body);
     expect(second.call.id).toBe(first.call.id);
-    expect(second.token).toBe(`token-${first.call.id}-${clara.id}`);
+    expect(second.token).toMatch(new RegExp(`^token-${first.call.id}-${clara.id}:`));
   });
 
   it('keeps people outside the group out, and is for groups only', async () => {
@@ -151,5 +151,69 @@ describe.skipIf(!hasInfra)('group calls (CHAT-070)', () => {
     }
     expect(await running(anna, conversationId)).toBeNull();
     await join(anna, conversationId, 200);
+  });
+
+  it('takes people out of the call when they leave the group or are removed from it', async () => {
+    const { anna, ben, clara, conversationId } = await group();
+    const { call } = groupCallJoinSchema.parse((await join(anna, conversationId)).body);
+    await join(ben, conversationId);
+    await join(clara, conversationId);
+
+    await request(server())
+      .delete(`/conversations/${conversationId}/members/${ben.id}`)
+      .set(bearer(anna.token))
+      .expect((r) => expect(r.status).toBeLessThan(300));
+    await request(server())
+      .post(`/conversations/${conversationId}/leave`)
+      .set(bearer(clara.token))
+      .expect((r) => expect(r.status).toBeLessThan(300));
+
+    expect(sfu.removed).toEqual(
+      expect.arrayContaining([
+        { room: call.id, userId: ben.id },
+        { room: call.id, userId: clara.id },
+      ]),
+    );
+    // ...and they can't come back in.
+    await join(ben, conversationId, 404);
+    await join(clara, conversationId, 404);
+    await request(server())
+      .get(`/conversations/${conversationId}/group-call`)
+      .set(bearer(ben.token))
+      .expect(404);
+  });
+
+  it('gives each device its own identity, so a second device does not knock out the first', async () => {
+    const { anna, conversationId } = await group();
+    const first = groupCallJoinSchema.parse((await join(anna, conversationId)).body);
+    const second = groupCallJoinSchema.parse((await join(anna, conversationId)).body);
+    expect(first.token).not.toBe(second.token);
+    const identities = sfu.tokens.filter((t) => t.room === first.call.id).map((t) => t.identity);
+    expect(new Set(identities).size).toBe(identities.length);
+  });
+
+  it('makes sure the room exists, with its settings, for every join', async () => {
+    const { anna, ben, conversationId } = await group();
+    const { call } = groupCallJoinSchema.parse((await join(anna, conversationId)).body);
+    sfu.closeRoom(call.id); // closed a moment ago; the sweep hasn't noticed yet
+    await join(ben, conversationId);
+    expect(sfu.creates.filter((n) => n === call.id)).toHaveLength(2);
+    expect(sfu.rooms.has(call.id)).toBe(true);
+  });
+
+  it('starts exactly one call when two people press "Group call" at once', async () => {
+    const { anna, ben, conversationId } = await group();
+    const annaSocket = await connect(anna);
+    const [a, b] = await Promise.all([join(anna, conversationId), join(ben, conversationId)]);
+    expect(groupCallJoinSchema.parse(a.body).call.id).toBe(
+      groupCallJoinSchema.parse(b.body).call.id,
+    );
+    await annaSocket.waitFor(GROUP_CALL_EVENTS.updated);
+    await new Promise((r) => setTimeout(r, 400)); // room for a (wrong) second announcement
+    const started = annaSocket.received.filter(
+      (e) =>
+        e.type === 'message.new' && /started a group call/.test((e.payload as Message).body ?? ''),
+    );
+    expect(started).toHaveLength(1);
   });
 });
