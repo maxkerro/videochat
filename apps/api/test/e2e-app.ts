@@ -133,7 +133,9 @@ export class FakeSfu implements Sfu {
   readonly url = 'wss://sfu.test';
   readonly rooms = new Map<string, number>();
   readonly tokens: Array<{ room: string; identity: string; name: string }> = [];
-  readonly removed: Array<{ room: string; userId: string }> = [];
+  readonly removed: Array<{ room: string; identity: string }> = [];
+  /** Who is "connected" to each room (a test connects issued tokens with `connect`). */
+  readonly connected = new Map<string, Set<string>>();
   readonly creates: string[] = [];
   failCreate = false;
 
@@ -154,9 +156,25 @@ export class FakeSfu implements Sfu {
     this.tokens.push({ room, identity, name });
     return Promise.resolve(`token-${room}-${identity}`);
   }
-  removeUser(room: string, userId: string) {
-    this.removed.push({ room, userId });
+  listIdentities(room: string) {
+    return Promise.resolve([...(this.connected.get(room) ?? [])]);
+  }
+  removeIdentity(room: string, identity: string) {
+    this.removed.push({ room, identity });
+    this.connected.get(room)?.delete(identity);
     return Promise.resolve();
+  }
+  /** Connects the holder of every token issued for `room` (for `userId` only, if given). */
+  connect(room: string, userId?: string) {
+    const set = this.connected.get(room) ?? new Set<string>();
+    for (const t of this.tokens) {
+      if (t.room === room && (!userId || t.identity.startsWith(`${userId}:`))) set.add(t.identity);
+    }
+    this.connected.set(room, set);
+    this.rooms.set(room, set.size);
+  }
+  removedUsers(room: string) {
+    return this.removed.filter((r) => r.room === room).map((r) => r.identity.split(':')[0]);
   }
   setParticipants(room: string, count: number) {
     this.rooms.set(room, count);

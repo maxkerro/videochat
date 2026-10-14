@@ -10,8 +10,9 @@ vi.mock('../db/group-calls.js', () => ({
   ]),
   endGroupCalls: vi.fn(async () => []),
   setGroupCallParticipants: vi.fn(),
+  findRunningGroupCall: vi.fn(),
 }));
-import { endGroupCalls } from '../db/group-calls.js';
+import { endGroupCalls, findRunningGroupCall } from '../db/group-calls.js';
 
 describe('controlUrl', () => {
   it('turns the client URL into the control API URL', () => {
@@ -47,5 +48,32 @@ describe('GroupCallsService.sweep', () => {
       {} as RealtimeService,
     ).onModuleInit();
     expect(setInterval).not.toHaveBeenCalled();
+  });
+});
+
+describe('identities', () => {
+  it('ties each connection to its user', async () => {
+    const { connectionIdentity, userOfIdentity } = await import('./sfu.js');
+    const id = connectionIdentity('3f0c9c7e-2b2c-4d5a-9f55-0d3b8f1a2b3c', 'device-1');
+    expect(userOfIdentity(id)).toBe('3f0c9c7e-2b2c-4d5a-9f55-0d3b8f1a2b3c');
+    expect(userOfIdentity('legacy-no-suffix')).toBe('legacy-no-suffix');
+  });
+});
+
+describe('GroupCallsService.removeFromCall', () => {
+  it("removes every connection of that person and leaves everyone else's alone", async () => {
+    vi.mocked(findRunningGroupCall).mockResolvedValue({ id: 'room' } as never);
+    const sfu = {
+      enabled: true,
+      listIdentities: vi.fn(async () => ['ben:a', 'ben:b', 'anna:a', 'benjamin:a']),
+      removeIdentity: vi.fn(async (_room: string, _identity: string) => undefined),
+    };
+    const service = new GroupCallsService(
+      {} as Database,
+      sfu as unknown as Sfu,
+      {} as RealtimeService,
+    );
+    await service.removeFromCall('conv', 'ben');
+    expect(sfu.removeIdentity.mock.calls.map((c) => c[1])).toEqual(['ben:a', 'ben:b']);
   });
 });

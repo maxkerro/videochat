@@ -1,6 +1,6 @@
 import { and, eq, inArray, isNull, sql } from 'drizzle-orm';
 import type { DbExecutor } from './client.js';
-import { groupCalls, type GroupCallRow } from './schema.js';
+import { groupCalls, memberships, users, type GroupCallRow } from './schema.js';
 
 /*
  * CHAT-070 data access. Like 1:1 calls, every transition is one conditional statement, so two
@@ -31,16 +31,38 @@ export async function startOrGetGroupCall(
   conversationId: string,
   startedBy: string,
 ): Promise<{ call: GroupCallRow; created: boolean }> {
-  const [created] = await db
-    .insert(groupCalls)
-    .values({ conversationId, startedBy })
-    .onConflictDoNothing()
-    .returning();
-  if (created) return { call: created, created: true };
-  const running = await findRunningGroupCall(db, conversationId);
-  if (running) return { call: running, created: false };
-  // The running call ended between the two statements: try once more.
-  return startOrGetGroupCall(db, conversationId, startedBy);
+  // A few tries: the running call can end between the insert and the read (then the next insert
+  // wins), but not forever.
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    const [created] = await db
+      .insert(groupCalls)
+      .values({ conversationId, startedBy })
+      .onConflictDoNothing()
+      .returning();
+    if (created) return { call: created, created: true };
+    const running = await findRunningGroupCall(db, conversationId);
+    if (running) return { call: running, created: false };
+  }
+  throw new Error(`Couldn't start or find the group call in ${conversationId}`);
+}
+
+/** Who may be in a group's call right now: its current members with a live account. */
+export async function listCallableMemberIds(
+  db: DbExecutor,
+  conversationId: string,
+): Promise<Set<string>> {
+  const rows = await db
+    .select({ userId: memberships.userId })
+    .from(memberships)
+    .innerJoin(users, eq(users.id, memberships.userId))
+    .where(
+      and(
+        eq(memberships.conversationId, conversationId),
+        isNull(memberships.leftAt),
+        isNull(users.deletedAt),
+      ),
+    );
+  return new Set(rows.map((r) => r.userId));
 }
 
 export async function listRunningGroupCalls(db: DbExecutor): Promise<GroupCallRow[]> {

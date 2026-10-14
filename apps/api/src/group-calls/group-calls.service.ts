@@ -24,6 +24,8 @@ import { findConversationForUser } from '../db/conversations.js';
 import {
   endGroupCalls,
   findRunningGroupCall,
+  getGroupCall,
+  listCallableMemberIds,
   listRunningGroupCalls,
   setGroupCallParticipants,
   startOrGetGroupCall,
@@ -34,7 +36,7 @@ import { findUserById } from '../db/users.js';
 import { DB } from '../infra/tokens.js';
 import { toMessage } from '../messages/message-mapper.js';
 import { RealtimeService } from '../realtime/realtime.service.js';
-import { connectionIdentity, SFU, type Sfu } from './sfu.js';
+import { connectionIdentity, SFU, userOfIdentity, type Sfu } from './sfu.js';
 
 /** How often each API node asks the SFU which calls are still going and how many are in them. */
 export const GROUP_CALL_SWEEP_INTERVAL_MS = 5_000;
@@ -95,26 +97,9 @@ export class GroupCallsService implements OnModuleInit, OnModuleDestroy {
     await this.requireGroupMember(conversationId, userId);
     if (!this.sfu.enabled) throw new ServiceUnavailableException('Group calls are not set up');
 
-    const { call, created } = await startOrGetGroupCall(this.db, conversationId, userId);
     const user = await findUserById(this.db, userId);
     const name = user?.displayName ?? 'Someone';
-    if (!created && call.participantCount >= GROUP_CALL_MAX_PARTICIPANTS) {
-      // The count can be a few seconds old; the room's own 20-person limit is the hard stop.
-      throw new ConflictException(
-        `The call is full (${GROUP_CALL_MAX_PARTICIPANTS} people at most)`,
-      );
-    }
-    try {
-      // Also for a running call: the SFU may have closed its room a moment before the sweep
-      // noticed, and a room it re-creates on join would lack our settings (the 20-person cap).
-      // Creating an existing room just returns it.
-      await this.sfu.createRoom(call.id);
-    } catch (err) {
-      this.logger.warn(`Couldn't create the SFU room for ${call.id}: ${(err as Error).message}`);
-      // No room, no call: a call this request created is taken back so the next try starts afresh.
-      if (created) await endGroupCalls(this.db, [call.id]);
-      throw new ServiceUnavailableException('Couldn’t start the call. Please try again.');
-    }
+    const { call, created } = await this.ensureRunningCall(conversationId, userId);
     if (created) {
       // The call is running either way; a failed announcement must not fail the request.
       try {
@@ -129,6 +114,40 @@ export class GroupCallsService implements OnModuleInit, OnModuleDestroy {
   }
 
   /**
+   * The group's running call (or a new one), with its SFU room in place. Also for a running call
+   * the room is (re)created: the SFU may have closed it a moment before the sweep noticed, and a
+   * room it re-creates on join would lack our settings (the 20-person cap); creating an existing
+   * room just returns it. If the sweep ended the call meanwhile, the room just made belongs to a
+   * dead call: start over, so the group never splits across two rooms.
+   */
+  private async ensureRunningCall(
+    conversationId: string,
+    userId: string,
+  ): Promise<{ call: GroupCallRow; created: boolean }> {
+    for (let attempt = 0; attempt < 3; attempt += 1) {
+      const { call, created } = await startOrGetGroupCall(this.db, conversationId, userId);
+      if (!created && call.participantCount >= GROUP_CALL_MAX_PARTICIPANTS) {
+        // The count can be a few seconds old; the room's own 20-person limit is the hard stop.
+        throw new ConflictException(
+          `The call is full (${GROUP_CALL_MAX_PARTICIPANTS} people at most)`,
+        );
+      }
+      try {
+        await this.sfu.createRoom(call.id);
+      } catch (err) {
+        this.logger.warn(`Couldn't create the SFU room for ${call.id}: ${(err as Error).message}`);
+        // No room, no call: a call this request created is taken back so the next try starts
+        // afresh.
+        if (created) await endGroupCalls(this.db, [call.id]);
+        throw new ServiceUnavailableException('Couldn’t start the call. Please try again.');
+      }
+      const now = await getGroupCall(this.db, call.id);
+      if (now && now.endedAt === null) return { call, created };
+    }
+    throw new ServiceUnavailableException('Couldn’t start the call. Please try again.');
+  }
+
+  /**
    * Someone left the group or was removed: take them out of its running call too. Their token was
    * checked against membership only when issued, and the SFU renews it for as long as they stay.
    */
@@ -136,7 +155,13 @@ export class GroupCallsService implements OnModuleInit, OnModuleDestroy {
     if (!this.sfu.enabled) return;
     try {
       const call = await findRunningGroupCall(this.db, conversationId);
-      if (call) await this.sfu.removeUser(call.id, userId);
+      if (!call) return;
+      const identities = await this.sfu.listIdentities(call.id);
+      await Promise.all(
+        identities
+          .filter((identity) => userOfIdentity(identity) === userId)
+          .map((identity) => this.sfu.removeIdentity(call.id, identity)),
+      );
     } catch (err) {
       this.logger.warn(
         `Couldn't remove ${userId} from the group call in ${conversationId}: ${(err as Error).message}`,
@@ -176,6 +201,7 @@ export class GroupCallsService implements OnModuleInit, OnModuleDestroy {
       for (const call of running) {
         const count = rooms.get(call.id);
         if (count === undefined) continue;
+        if (count > 0) await this.removeOutsiders(call);
         const changed = await setGroupCallParticipants(this.db, call.id, count);
         if (changed) await this.announce(changed.conversationId, changed);
       }
@@ -187,6 +213,28 @@ export class GroupCallsService implements OnModuleInit, OnModuleDestroy {
       }
     } finally {
       this.sweeping = false;
+    }
+  }
+
+  /**
+   * The server-side guarantee that only members are in a call: a join token is checked against
+   * membership once, when issued, and stays usable (and is renewed by the SFU) after that. So
+   * every sweep removes anyone connected who is no longer a member (left, removed, or account
+   * deleted) -- a kept token or a join racing a removal is cut off within a sweep or two.
+   */
+  private async removeOutsiders(call: GroupCallRow): Promise<void> {
+    try {
+      const [identities, members] = await Promise.all([
+        this.sfu.listIdentities(call.id),
+        listCallableMemberIds(this.db, call.conversationId),
+      ]);
+      const outsiders = identities.filter((identity) => !members.has(userOfIdentity(identity)));
+      await Promise.all(outsiders.map((identity) => this.sfu.removeIdentity(call.id, identity)));
+      if (outsiders.length > 0) {
+        this.logger.log(`Removed ${outsiders.length} non-member(s) from group call ${call.id}`);
+      }
+    } catch (err) {
+      this.logger.warn(`Couldn't check who is in group call ${call.id}: ${(err as Error).message}`);
     }
   }
 

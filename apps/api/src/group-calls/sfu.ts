@@ -25,8 +25,9 @@ export interface Sfu {
   listRooms(names: string[]): Promise<SfuRoom[]>;
   /** `identity` is unique per connection; `userId` goes into the token's attributes. */
   joinToken(room: string, identity: string, displayName: string): Promise<string>;
-  /** Disconnects every connection of `userId` from `room` (all their devices). */
-  removeUser(room: string, userId: string): Promise<void>;
+  /** The identities connected to `room` now. */
+  listIdentities(room: string): Promise<string[]>;
+  removeIdentity(room: string, identity: string): Promise<void>;
 }
 
 /** One identity per connection, so the same person on two devices doesn't knock one of them out
@@ -74,13 +75,12 @@ export class LiveKitSfu implements Sfu {
     });
   }
 
-  async removeUser(room: string, userId: string): Promise<void> {
-    const participants = await this.rooms!.listParticipants(room);
-    await Promise.all(
-      participants
-        .filter((p) => userOfIdentity(p.identity) === userId)
-        .map((p) => this.rooms!.removeParticipant(room, p.identity)),
-    );
+  async listIdentities(room: string): Promise<string[]> {
+    return (await this.rooms!.listParticipants(room)).map((p) => p.identity);
+  }
+
+  async removeIdentity(room: string, identity: string): Promise<void> {
+    await this.rooms!.removeParticipant(room, identity);
   }
 
   async listRooms(names: string[]): Promise<SfuRoom[]> {

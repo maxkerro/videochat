@@ -174,8 +174,11 @@ One-time setup:
    the `0.5.0` APK for the phone.
 
 Leaving a group, or being removed from it, also takes the person out of its running call (the API
-asks LiveKit to remove their connections; they see "You're no longer in this group"). Each join gets
-its own identity (`<userId>:<random>`), so the same person can be in the call from two devices.
+asks LiveKit to remove their connections; they see "You're no longer in this group"). Because a join
+token is checked against membership only when it is issued (and LiveKit renews it while connected),
+every sweep also removes anyone in a call who is no longer a member of its group or whose account was
+deleted, so a kept token or a join racing a removal is cut off within seconds. Each join gets its own
+identity (`<userId>:<random>`), so the same person can be in the call from two devices.
 
 No webhook is needed: every API node asks LiveKit every 5 s which rooms still exist and how many people
 are in them (one `ListRooms` call for all running calls). The free plan's minutes go fast with video:

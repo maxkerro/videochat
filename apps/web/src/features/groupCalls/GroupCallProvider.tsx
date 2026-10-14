@@ -68,11 +68,14 @@ export function GroupCallProvider({ children }: { children: ReactNode }) {
   // The session belongs to the person who joined: it is only ever shown to them, and it is
   // dropped when they sign out, so the next person signing in on this tab never inherits it.
   const [joined, setJoined] = useState<{ userId: string; session: GroupCallSession } | null>(null);
-  const userId = auth.status === 'anonymous' ? null : (auth.user?.id ?? null);
-  // Signed out (or someone else signed in): forget it for good, so signing back in later doesn't
+  const signedOut = auth.status === 'anonymous';
+  const userId = auth.user?.id ?? null;
+  // Signed out, or someone else signed in: forget it for good, so signing back in later doesn't
   // reconnect either. (Adjusting state while rendering, React's pattern for "reset on change".)
-  if (joined && joined.userId !== userId) setJoined(null);
-  const session = joined && joined.userId === userId ? joined.session : null;
+  // A moment without a known user while still signed in (loading) leaves it alone.
+  const otherUser = userId !== null && joined !== null && joined.userId !== userId;
+  if (joined && (signedOut || otherUser)) setJoined(null);
+  const session = joined && !signedOut && !otherUser ? joined.session : null;
   const [joining, setJoining] = useState<string | null>(null);
   const inOneToOne = calls.call !== null && calls.call.phase !== 'ended';
 

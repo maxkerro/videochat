@@ -44,7 +44,28 @@ function renderProvider() {
   );
 }
 
+function rerenderWith(view: ReturnType<typeof render>) {
+  view.rerender(
+    <ToastProvider>
+      <GroupCallProvider>
+        <Grab />
+      </GroupCallProvider>
+    </ToastProvider>,
+  );
+}
+
 describe('GroupCallProvider (CHAT-070)', () => {
+  it('keeps the call through a moment without a known user while still signed in', async () => {
+    const view = renderProvider();
+    await act(() => controller().join('conv-1', 'Team'));
+    expect(await screen.findByTestId('call-view')).toBeInTheDocument();
+    auth.current = { status: 'loading', user: null };
+    rerenderWith(view);
+    auth.current = { status: 'authenticated', user: { id: 'anna' } };
+    rerenderWith(view);
+    expect(screen.getByTestId('call-view')).toHaveTextContent('anna-token');
+  });
+
   beforeEach(() => {
     auth.current = { status: 'authenticated', user: { id: 'anna' } };
   });

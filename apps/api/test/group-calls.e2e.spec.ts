@@ -158,6 +158,7 @@ describe.skipIf(!hasInfra)('group calls (CHAT-070)', () => {
     const { call } = groupCallJoinSchema.parse((await join(anna, conversationId)).body);
     await join(ben, conversationId);
     await join(clara, conversationId);
+    sfu.connect(call.id);
 
     await request(server())
       .delete(`/conversations/${conversationId}/members/${ben.id}`)
@@ -168,19 +169,57 @@ describe.skipIf(!hasInfra)('group calls (CHAT-070)', () => {
       .set(bearer(clara.token))
       .expect((r) => expect(r.status).toBeLessThan(300));
 
-    expect(sfu.removed).toEqual(
-      expect.arrayContaining([
-        { room: call.id, userId: ben.id },
-        { room: call.id, userId: clara.id },
-      ]),
-    );
-    // ...and they can't come back in.
+    expect(sfu.removedUsers(call.id).sort()).toEqual([ben.id, clara.id].sort());
+    expect(await sfu.listIdentities(call.id)).toEqual([
+      expect.stringMatching(new RegExp(`^${anna.id}:`)),
+    ]);
+    // ...and they can't get a new token.
     await join(ben, conversationId, 404);
     await join(clara, conversationId, 404);
     await request(server())
       .get(`/conversations/${conversationId}/group-call`)
       .set(bearer(ben.token))
       .expect(404);
+  });
+
+  it('removes a former member who comes back with a token they kept', async () => {
+    const { anna, ben, conversationId } = await group();
+    const { call } = groupCallJoinSchema.parse((await join(anna, conversationId)).body);
+    await join(ben, conversationId); // Ben's token, issued while he was a member
+    sfu.connect(call.id, anna.id);
+    await request(server())
+      .delete(`/conversations/${conversationId}/members/${ben.id}`)
+      .set(bearer(anna.token))
+      .expect((r) => expect(r.status).toBeLessThan(300));
+
+    // He wasn't connected when he was removed (or reconnects later with the kept token)...
+    sfu.connect(call.id, ben.id);
+    expect(sfu.removedUsers(call.id)).not.toContain(ben.id);
+    // ...and the next sweep takes him out again; members stay.
+    await service.sweep();
+    expect(sfu.removedUsers(call.id)).toContain(ben.id);
+    expect(sfu.removedUsers(call.id)).not.toContain(anna.id);
+  });
+
+  it('does not hand out a room for a call the sweep ended a moment ago', async () => {
+    const { anna, ben, conversationId } = await group();
+    const { call } = groupCallJoinSchema.parse((await join(anna, conversationId)).body);
+    // The sweep ends the call right as Ben's join recreates its room.
+    const original = sfu.createRoom.bind(sfu);
+    sfu.createRoom = async (name: string) => {
+      await original(name);
+      if (name === call.id) {
+        sfu.closeRoom(call.id);
+        await service.sweep(later(GROUP_CALL_START_GRACE_MS));
+      }
+    };
+    try {
+      const res = groupCallJoinSchema.parse((await join(ben, conversationId)).body);
+      expect(res.call.id).not.toBe(call.id);
+      expect((await running(anna, conversationId))?.id).toBe(res.call.id);
+    } finally {
+      sfu.createRoom = original;
+    }
   });
 
   it('gives each device its own identity, so a second device does not knock out the first', async () => {
