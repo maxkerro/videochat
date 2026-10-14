@@ -159,6 +159,13 @@ export class FakeSfu implements Sfu {
   listIdentities(room: string) {
     return Promise.resolve([...(this.connected.get(room) ?? [])]);
   }
+  readonly deleted: string[] = [];
+  deleteRoom(room: string) {
+    this.deleted.push(room);
+    this.rooms.delete(room);
+    this.connected.delete(room);
+    return Promise.resolve();
+  }
   removeIdentity(room: string, identity: string) {
     this.removed.push({ room, identity });
     this.connected.get(room)?.delete(identity);

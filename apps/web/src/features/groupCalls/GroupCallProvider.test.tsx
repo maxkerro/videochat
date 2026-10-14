@@ -55,6 +55,10 @@ function rerenderWith(view: ReturnType<typeof render>) {
 }
 
 describe('GroupCallProvider (CHAT-070)', () => {
+  beforeEach(() => {
+    auth.current = { status: 'authenticated', user: { id: 'anna' } };
+  });
+
   it('keeps the call through a moment without a known user while still signed in', async () => {
     const view = renderProvider();
     await act(() => controller().join('conv-1', 'Team'));
@@ -64,10 +68,6 @@ describe('GroupCallProvider (CHAT-070)', () => {
     auth.current = { status: 'authenticated', user: { id: 'anna' } };
     rerenderWith(view);
     expect(screen.getByTestId('call-view')).toHaveTextContent('anna-token');
-  });
-
-  beforeEach(() => {
-    auth.current = { status: 'authenticated', user: { id: 'anna' } };
   });
 
   it('never hands one person’s call to the next person signing in on the same tab', async () => {

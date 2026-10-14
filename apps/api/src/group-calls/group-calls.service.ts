@@ -187,15 +187,31 @@ export class GroupCallsService implements OnModuleInit, OnModuleDestroy {
         this.sweepFailing = false;
         this.logger.log('Group call sweep recovered');
       }
-      const gone = running.filter(
+      const looksGone = running.filter(
         (c) =>
           !rooms.has(c.id) && now.getTime() - c.startedAt.getTime() >= GROUP_CALL_START_GRACE_MS,
       );
+      // Ask again for just these, right before ending them: a join may have re-created a room
+      // since the list above.
+      const stillThere = new Set(
+        looksGone.length > 0
+          ? (await this.sfu.listRooms(looksGone.map((c) => c.id))).map((r) => r.name)
+          : [],
+      );
+      const gone = looksGone.filter((c) => !stillThere.has(c.id));
       for (const call of await endGroupCalls(
         this.db,
         gone.map((c) => c.id),
         now,
       )) {
+        // A join that re-created this room after the second look would leave someone in a room
+        // no call points at (the group split in two): close it, which disconnects them; their
+        // next Join starts a fresh call that everyone sees.
+        await this.sfu
+          .deleteRoom(call.id)
+          .catch((err: Error) =>
+            this.logger.warn(`Couldn't close the room of ended call ${call.id}: ${err.message}`),
+          );
         await this.announceEnded(call);
       }
       for (const call of running) {
@@ -234,7 +250,9 @@ export class GroupCallsService implements OnModuleInit, OnModuleDestroy {
         this.logger.log(`Removed ${outsiders.length} non-member(s) from group call ${call.id}`);
       }
     } catch (err) {
-      this.logger.warn(`Couldn't check who is in group call ${call.id}: ${(err as Error).message}`);
+      this.logger.warn(
+        `Couldn't check or remove non-members in group call ${call.id}: ${(err as Error).message}`,
+      );
     }
   }
 

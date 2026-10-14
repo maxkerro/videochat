@@ -239,8 +239,9 @@ export class ConversationsService {
     if (!result.left) throw new NotFoundException('User is not a member of this conversation');
     // AC: "removed members stop receiving messages immediately".
     this.realtime.removeConversationForUser(targetUserId, conversationId);
-    // CHAT-070: ...and stop hearing and seeing the group's call.
-    await this.groupCalls.removeFromCall(conversationId, targetUserId);
+    // CHAT-070: ...and stop hearing and seeing the group's call. Not awaited: a slow SFU must not
+    // hold up the removal (it logs its own failures, and the call sweep is the backstop).
+    void this.groupCalls.removeFromCall(conversationId, targetUserId);
 
     const actor = await findUserById(this.db, userId);
     await this.postSystemMessage(
@@ -260,7 +261,7 @@ export class ConversationsService {
     const actor = await findUserById(this.db, userId);
     const result = await leaveConversation(this.db, conversationId, userId);
     this.realtime.removeConversationForUser(userId, conversationId);
-    await this.groupCalls.removeFromCall(conversationId, userId);
+    void this.groupCalls.removeFromCall(conversationId, userId); // not awaited, as in removeMember
 
     await this.postSystemMessage(conversationId, `${actor!.displayName} left`);
     await this.announcePromotionIfAny(conversationId, result.promotedUserId);

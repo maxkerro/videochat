@@ -13,6 +13,7 @@ import {
   GroupCallsService,
 } from '../src/group-calls/group-calls.service.js';
 import { bearer, startE2eApp, type E2eUser, type FakeSfu, type TestSocket } from './e2e-app.js';
+import { createPool } from '../src/db/client.js';
 import { hasInfra } from './helpers.js';
 
 describe.skipIf(!hasInfra)('group calls (CHAT-070)', () => {
@@ -169,7 +170,10 @@ describe.skipIf(!hasInfra)('group calls (CHAT-070)', () => {
       .set(bearer(clara.token))
       .expect((r) => expect(r.status).toBeLessThan(300));
 
-    expect(sfu.removedUsers(call.id).sort()).toEqual([ben.id, clara.id].sort());
+    // Done in the background (a slow SFU must not hold up the removal).
+    await vi.waitFor(() =>
+      expect(sfu.removedUsers(call.id).sort()).toEqual([ben.id, clara.id].sort()),
+    );
     expect(await sfu.listIdentities(call.id)).toEqual([
       expect.stringMatching(new RegExp(`^${anna.id}:`)),
     ]);
@@ -254,5 +258,48 @@ describe.skipIf(!hasInfra)('group calls (CHAT-070)', () => {
         e.type === 'message.new' && /started a group call/.test((e.payload as Message).body ?? ''),
     );
     expect(started).toHaveLength(1);
+  });
+
+  it('removes someone whose account was deleted', async () => {
+    const { anna, ben, conversationId } = await group();
+    const { call } = groupCallJoinSchema.parse((await join(anna, conversationId)).body);
+    await join(ben, conversationId);
+    sfu.connect(call.id);
+    const pool = createPool(process.env.TEST_DATABASE_URL!, 1);
+    try {
+      await pool.query('update users set deleted_at = now() where id = $1', [ben.id]);
+    } finally {
+      await pool.end();
+    }
+    await service.sweep();
+    expect(sfu.removedUsers(call.id)).toEqual([ben.id]);
+  });
+
+  it('does not end a call whose room a join re-created during the sweep', async () => {
+    const { anna, conversationId } = await group();
+    const { call } = groupCallJoinSchema.parse((await join(anna, conversationId)).body);
+    sfu.closeRoom(call.id);
+    // First look: gone. Second look (right before ending): a join has re-created it.
+    const listRooms = sfu.listRooms.bind(sfu);
+    let looks = 0;
+    sfu.listRooms = async (names: string[]) => {
+      looks += 1;
+      if (looks === 2) sfu.rooms.set(call.id, 1);
+      return listRooms(names);
+    };
+    try {
+      await service.sweep(later(GROUP_CALL_START_GRACE_MS));
+    } finally {
+      sfu.listRooms = listRooms;
+    }
+    expect((await running(anna, conversationId))?.id).toBe(call.id);
+  });
+
+  it('closes the room of a call it ends, so nobody is left in a room no call points at', async () => {
+    const { anna, conversationId } = await group();
+    const { call } = groupCallJoinSchema.parse((await join(anna, conversationId)).body);
+    sfu.closeRoom(call.id);
+    await service.sweep(later(GROUP_CALL_START_GRACE_MS));
+    expect(sfu.deleted).toContain(call.id);
   });
 });

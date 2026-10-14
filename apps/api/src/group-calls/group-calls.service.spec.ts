@@ -77,3 +77,15 @@ describe('GroupCallsService.removeFromCall', () => {
     expect(sfu.removeIdentity.mock.calls.map((c) => c[1])).toEqual(['ben:a', 'ben:b']);
   });
 });
+
+describe('isNotFound', () => {
+  it('recognises the control API saying something is already gone', async () => {
+    const { isNotFound } = await import('./sfu.js');
+    expect(isNotFound({ status: 404 })).toBe(true);
+    expect(isNotFound({ code: 'not_found' })).toBe(true);
+    expect(isNotFound(new Error('participant not found'))).toBe(true);
+    expect(isNotFound(new Error('requested room does not exist'))).toBe(true);
+    expect(isNotFound(new Error('connect ETIMEDOUT'))).toBe(false);
+    expect(isNotFound(null)).toBe(false);
+  });
+});

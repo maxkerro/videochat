@@ -49,9 +49,13 @@ export function GroupCallProvider({ children }: { children: ReactNode }) {
   // in next on this phone never inherits it (whatever the routing does with this provider).
   const [joined, setJoined] = useState<{ userId: string; session: GroupCallSession } | null>(null);
   const [joining, setJoining] = useState<string | null>(null);
+  const signedOut = state.status === 'signedOut';
   const userId = state.status === 'signedIn' ? state.user.id : null;
-  if (joined && joined.userId !== userId) setJoined(null);
-  const session = joined && joined.userId === userId ? joined.session : null;
+  // Dropped for good on sign-out or when someone else signs in (as on the web); a moment without a
+  // known user while not signed out (loading) leaves it alone.
+  const otherUser = userId !== null && joined !== null && joined.userId !== userId;
+  if (joined && (signedOut || otherUser)) setJoined(null);
+  const session = joined && !signedOut && !otherUser ? joined.session : null;
   const inOneToOne = calls.call !== null && calls.call.phase !== 'ended';
 
   const join = useCallback(

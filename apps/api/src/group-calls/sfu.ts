@@ -27,7 +27,20 @@ export interface Sfu {
   joinToken(room: string, identity: string, displayName: string): Promise<string>;
   /** The identities connected to `room` now. */
   listIdentities(room: string): Promise<string[]>;
+  /** Resolves also when that connection is already gone (another node removed it first). */
   removeIdentity(room: string, identity: string): Promise<void>;
+  /** Closes a room, disconnecting everyone in it. Resolves also when it no longer exists. */
+  deleteRoom(room: string): Promise<void>;
+}
+
+/** The control API's answer for a room or participant that doesn't exist (any more). */
+export function isNotFound(err: unknown): boolean {
+  const e = err as { status?: number; code?: string; message?: string } | null;
+  return (
+    e?.status === 404 ||
+    e?.code === 'not_found' ||
+    /not.?found|does not exist/i.test(e?.message ?? '')
+  );
 }
 
 /** One identity per connection, so the same person on two devices doesn't knock one of them out
@@ -80,7 +93,19 @@ export class LiveKitSfu implements Sfu {
   }
 
   async removeIdentity(room: string, identity: string): Promise<void> {
-    await this.rooms!.removeParticipant(room, identity);
+    try {
+      await this.rooms!.removeParticipant(room, identity);
+    } catch (err) {
+      if (!isNotFound(err)) throw err;
+    }
+  }
+
+  async deleteRoom(room: string): Promise<void> {
+    try {
+      await this.rooms!.deleteRoom(room);
+    } catch (err) {
+      if (!isNotFound(err)) throw err;
+    }
   }
 
   async listRooms(names: string[]): Promise<SfuRoom[]> {
