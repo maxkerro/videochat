@@ -281,7 +281,9 @@ describe('CallSignalingService: only the callee may answer, decline or ring (CHA
       {} as S3Service,
     );
     vi.mocked(getCall).mockResolvedValue(ringing);
-    // The real UPDATE matches on callee_id and status = 'ringing'; a stranger matches nothing.
+    // The real UPDATE matches on callee_id and status = 'ringing'; a stranger matches nothing. That
+    // SQL is exercised against Postgres in test/call-signaling.e2e.spec.ts ("an outsider cannot
+    // answer...": the call stays ringing and nobody is told it was accepted).
     vi.mocked(acceptCall).mockResolvedValue(undefined);
   });
 

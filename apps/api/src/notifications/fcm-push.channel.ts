@@ -46,6 +46,9 @@ export function buildFcmMessage(token: string, payload: PushPayload) {
 /** How long FCM keeps a ring request: a call nobody can answer any more must not ring later. */
 export const CALL_PUSH_TTL_SEC = 30;
 
+/** How long one FCM request may take before it is given up as failed. */
+export const FCM_TIMEOUT_MS = 10_000;
+
 /**
  * CHAT-061: a data-only, high-priority message. The native call library's FCM service (in the
  * app) recognises `messageType: 'incomingCall'` and shows the system call screen, even with the
@@ -132,6 +135,8 @@ export class FcmPushChannel implements PushChannel {
             'Content-Type': 'application/json',
           },
           body: JSON.stringify(message),
+          // A hung request must not pile up behind every call (the call push is fire-and-forget).
+          signal: AbortSignal.timeout(FCM_TIMEOUT_MS),
         },
       );
       if (res.ok) return 'sent';

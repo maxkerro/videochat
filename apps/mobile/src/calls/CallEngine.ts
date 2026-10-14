@@ -28,8 +28,8 @@ export const RECONNECT_TIMEOUT_MS = 15_000;
 /** A brief `disconnected` often recovers by itself; restart ICE only if it hasn't by then. */
 export const ICE_RESTART_DELAY_MS = 2_000;
 export const STATS_INTERVAL_MS = 2_000;
-/** Tries at sending a decline while the socket comes and goes (CHAT-061). */
-export const DECLINE_ATTEMPTS = 3;
+/** Tries at sending an accept or a decline while the socket comes and goes (CHAT-061). */
+export const SIGNAL_ATTEMPTS = 3;
 
 export type CallPhase =
   'outgoing' | 'incoming' | 'connecting' | 'active' | 'reconnecting' | 'ended';
@@ -219,10 +219,23 @@ export class CallEngine {
       if (this.isCurrent(callId)) this.finish('failed');
       return;
     }
-    // The call may have ended (the caller gave up) while the socket was coming up.
-    if (!this.isCurrent(callId) || (this.snap as CallSnapshot | null)?.phase === 'ended') return;
+    // The socket can flap right after `realtime.ready`: a lost accept would leave this phone in
+    // "connecting" while the caller rings out, so it is tried again, and the call fails if it never
+    // gets through.
+    for (let attempt = 1; ; attempt += 1) {
+      // The call may have ended (the caller gave up) while the socket was coming up.
+      if (!this.isCurrent(callId) || (this.snap as CallSnapshot | null)?.phase === 'ended') return;
+      if (this.deps.send(CALL_EVENTS.accept, { callId }) !== false) break;
+      const retry =
+        attempt < SIGNAL_ATTEMPTS &&
+        this.deps.waitForSignalling !== undefined &&
+        (await this.deps.waitForSignalling());
+      if (!retry) {
+        if (this.isCurrent(callId)) this.finish('failed');
+        return;
+      }
+    }
     this.acceptSent = true;
-    this.deps.send(CALL_EVENTS.accept, { callId });
     await this.startPeer();
   }
 
@@ -254,7 +267,7 @@ export class CallEngine {
    * A decline must reach the server, or the caller rings on until the timeout. On a phone started
    * by the call (CHAT-061) the socket is often not up yet: then it goes out once it is.
    */
-  private sendDecline(callId: string, attemptsLeft = DECLINE_ATTEMPTS): void {
+  private sendDecline(callId: string, attemptsLeft = SIGNAL_ATTEMPTS): void {
     if (this.deps.send(CALL_EVENTS.decline, { callId }) !== false) return;
     if (!this.deps.waitForSignalling || attemptsLeft <= 1) return; // the server's ring timeout ends it
     // Another try once the socket is (back) up -- it can flap between `realtime.ready` and here.

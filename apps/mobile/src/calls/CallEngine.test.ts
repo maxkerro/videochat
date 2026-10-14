@@ -438,16 +438,38 @@ describe('CallEngine (CHAT-042)', () => {
         expect(ups).toBe(2);
       });
 
-      it('copes with every send failing while the socket is down', async () => {
-        const { engine, event, pcs } = setUp({ send: () => false });
-        event(CALL_EVENTS.incoming, incoming);
+      it('tries the accept again when the socket drops right after coming up', async () => {
+        let ups = 0;
+        const sent: string[] = [];
+        const { engine } = setUp({
+          waitForSignalling: async () => {
+            ups += 1;
+            return true;
+          },
+          send: (type) => {
+            if (ups < 2) return false; // flapped after the first `ready`
+            sent.push(type);
+            return true;
+          },
+        });
+        engine.presentIncoming(incoming as never);
         await engine.accept(avStream());
-        event(CALL_EVENTS.offer, { callId: CALL_ID, sdp: 'remote-offer' });
-        await flush();
-        await flush();
-        // Nothing threw; the call carries on and the answer is ready for when the socket returns.
+        expect(sent).toContain(CALL_EVENTS.accept);
         expect(engine.getSnapshot()?.phase).toBe('connecting');
-        expect(pcs[0]!.remoteDescriptions[0]).toEqual({ type: 'offer', sdp: 'remote-offer' });
+      });
+
+      it('fails the call instead of hanging in "connecting" when the accept never gets out', async () => {
+        const { engine } = setUp({ send: () => false, waitForSignalling: async () => true });
+        engine.presentIncoming(incoming as never);
+        await engine.accept(avStream());
+        expect(engine.getSnapshot()).toMatchObject({ phase: 'ended', endCause: 'failed' });
+      });
+
+      it('fails at once without a way to wait for the socket', async () => {
+        const { engine } = setUp({ send: () => false });
+        engine.presentIncoming(incoming as never);
+        await engine.accept(avStream());
+        expect(engine.getSnapshot()?.endCause).toBe('failed');
       });
 
       it('a timed-out ring ends locally without telling the server "declined"', () => {

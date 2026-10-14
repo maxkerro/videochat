@@ -137,6 +137,8 @@ describe('FcmPushChannel.send', () => {
     const [url, init] = fetchImpl.mock.calls[0] as unknown as [string, RequestInit];
     expect(url).toBe('https://fcm.googleapis.com/v1/projects/proj/messages:send');
     expect((init.headers as Record<string, string>).Authorization).toBe('Bearer access');
+    // Never waits forever on FCM.
+    expect(init.signal).toBeInstanceOf(AbortSignal);
   });
 
   it('reports an unregistered token as gone', async () => {
