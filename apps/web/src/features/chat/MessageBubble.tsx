@@ -98,7 +98,8 @@ export function MessageBubble(props: MessageBubbleProps) {
   const mentioned = new Map<string, boolean>();
   for (const id of message.mentions ?? []) {
     const username = props.usernameFor?.(id);
-    if (username) mentioned.set(username, id === myUserId);
+    // mentionParts reports usernames lowercased.
+    if (username) mentioned.set(username.toLowerCase(), id === myUserId);
   }
   const mentionStyle =
     mentioned.size > 0

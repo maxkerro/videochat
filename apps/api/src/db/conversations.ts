@@ -164,17 +164,18 @@ async function loadUnreadMentions(
   return new Map(rows.map((r) => [r.conversationId, r.count]));
 }
 
-/** CHAT-073: 'direct' or 'group' (undefined for an unknown id). */
-export async function findConversationType(
+/** CHAT-073: just a conversation's type and title (undefined for an unknown id) -- for hot paths
+ *  (every send, every notification) that need nothing else. */
+export async function findConversationBasics(
   db: DbExecutor,
   conversationId: string,
-): Promise<Conversation['type'] | undefined> {
+): Promise<Pick<Conversation, 'type' | 'title'> | undefined> {
   const [row] = await db
-    .select({ type: conversations.type })
+    .select({ type: conversations.type, title: conversations.title })
     .from(conversations)
     .where(eq(conversations.id, conversationId))
     .limit(1);
-  return row?.type;
+  return row;
 }
 
 /** CHAT-073: the current members (other than `senderId`) with these usernames, as ids. */
@@ -193,7 +194,12 @@ export async function findMentionedMembers(
       and(
         eq(memberships.conversationId, conversationId),
         isNull(memberships.leftAt),
-        inArray(users.username, usernames),
+        // Usernames are stored lowercase (usernameSchema), but match the way the unique index
+        // does, so a mention can never miss on case.
+        inArray(
+          sql`lower(${users.username})`,
+          usernames.map((u) => u.toLowerCase()),
+        ),
         ne(memberships.userId, senderId),
       ),
     );
@@ -732,6 +738,9 @@ export async function listMutedMentionRecipients(
         isNull(memberships.leftAt),
         sql`${memberships.mutedUntil} > ${now}`,
         eq(users.notifyMentions, true),
+        // "Notifications off" means off (push() checks it again for every recipient).
+        eq(users.notifyEnabled, true),
+        isNull(users.deletedAt),
       ),
     );
   return rows.map((r) => r.userId);

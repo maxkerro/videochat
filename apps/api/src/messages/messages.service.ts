@@ -21,7 +21,7 @@ import { findAttachmentsForMessage } from '../db/attachments.js';
 import { deleteReactionsForMessage } from '../db/reactions.js';
 import {
   findConversationForUser,
-  findConversationType,
+  findConversationBasics,
   findMentionedMembers,
   isConversationMember,
 } from '../db/conversations.js';
@@ -249,7 +249,7 @@ export class MessagesService {
   ): Promise<string[]> {
     const usernames = mentionedUsernames(body);
     if (usernames.length === 0) return [];
-    if ((await findConversationType(this.db, conversationId)) !== 'group') return [];
+    if ((await findConversationBasics(this.db, conversationId))?.type !== 'group') return [];
     return findMentionedMembers(this.db, conversationId, usernames, senderId);
   }
 

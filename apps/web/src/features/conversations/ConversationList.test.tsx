@@ -225,6 +225,12 @@ describe('ConversationList', () => {
       await within(screen.getByRole('link', { name: /Team/ })).findByLabelText('2 unread mentions'),
     ).toBeInTheDocument();
     expect(screen.getByRole('button', { name: /Mentions/ })).toHaveTextContent('Mentions 2');
+    // A replayed delivery of the same message doesn't count twice.
+    socket.emit('message', {
+      data: JSON.stringify(makeEnvelope('message.new', incoming, incoming.id)),
+    });
+    await new Promise((r) => setTimeout(r, 50));
+    expect(screen.getByRole('button', { name: /Mentions/ })).toHaveTextContent('Mentions 2');
 
     await userEvent.click(screen.getByRole('button', { name: 'All' }));
     expect(screen.getByRole('link', { name: /Ben Okafor/ })).toBeInTheDocument();

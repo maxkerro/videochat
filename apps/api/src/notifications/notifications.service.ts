@@ -4,7 +4,7 @@ import { Redis } from 'ioredis';
 import { isBlocked } from '../db/blocks.js';
 import type { Database } from '../db/client.js';
 import {
-  findConversationForUser,
+  findConversationBasics,
   listMutedMentionRecipients,
   listNotifiableMembers,
 } from '../db/conversations.js';
@@ -89,11 +89,10 @@ export class NotificationsService implements OnModuleInit {
       );
       const plain = recipients.filter((id) => !mentions.has(id));
       const mentioned = [...recipients.filter((id) => mentions.has(id)), ...mutedMentioned];
-      const anyone = plain[0] ?? mentioned[0];
-      if (!anyone) return;
+      if (plain.length === 0 && mentioned.length === 0) return;
       const sender = await findUserById(this.db, row.senderId);
       const senderName = sender?.displayName ?? 'Someone';
-      const conversation = await findConversationForUser(this.db, row.conversationId, anyone);
+      const conversation = await findConversationBasics(this.db, row.conversationId);
       const groupTitle = conversation?.type === 'group' ? conversation.title : null;
       const payload = {
         body: notificationText(row),

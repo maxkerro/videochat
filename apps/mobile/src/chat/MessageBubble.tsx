@@ -40,7 +40,8 @@ function BodyText({
   const mentioned = new Map<string, boolean>();
   for (const id of message.mentions ?? []) {
     const username = usernames?.get(id);
-    if (username) mentioned.set(username, id === myId);
+    // mentionParts reports usernames lowercased.
+    if (username) mentioned.set(username.toLowerCase(), id === myId);
   }
   const parts =
     mentioned.size > 0

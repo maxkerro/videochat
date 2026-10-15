@@ -1,7 +1,13 @@
 import type { INestApplication } from '@nestjs/common';
 import { randomUUID } from 'node:crypto';
 import request from 'supertest';
-import { bearer, startE2eApp, type E2eUser, type FakePushChannel } from './e2e-app.js';
+import {
+  bearer,
+  startE2eApp,
+  type E2eUser,
+  type FakePushChannel,
+  type FakeS3Service,
+} from './e2e-app.js';
 import { hasInfra } from './helpers.js';
 
 describe.skipIf(!hasInfra)('@mentions (CHAT-073)', () => {
@@ -9,9 +15,10 @@ describe.skipIf(!hasInfra)('@mentions (CHAT-073)', () => {
   let signUp: () => Promise<E2eUser>;
   let closeAll: () => Promise<void>;
   let push: FakePushChannel;
+  let s3: FakeS3Service;
 
   beforeAll(async () => {
-    ({ server, signUp, close: closeAll, push } = await startE2eApp('mn'));
+    ({ server, signUp, close: closeAll, push, s3 } = await startE2eApp('mn'));
   });
   afterAll(() => closeAll());
 
@@ -159,5 +166,75 @@ describe.skipIf(!hasInfra)('@mentions (CHAT-073)', () => {
     await send(anna, groupId, `@${usernameOf(ben)} again`);
     await settle();
     expect(sentTo(benPush)).toHaveLength(2);
+  });
+  it('keeps the attachment when a captioned file is edited to mention someone', async () => {
+    const { anna, ben, groupId } = await setUp();
+    const upload = await request(server())
+      .post(`/conversations/${groupId}/attachments`)
+      .set(bearer(anna.token))
+      .send({ filename: 'plan.pdf', contentType: 'application/pdf', sizeBytes: 5 })
+      .expect(201);
+    s3.upload(upload.body.uploadUrl, Buffer.from('%PDF-'), 'application/pdf');
+    const sent = await request(server())
+      .post(`/conversations/${groupId}/messages`)
+      .set(bearer(anna.token))
+      .send({ clientMsgId: randomUUID(), attachmentId: upload.body.attachmentId, body: 'plan' })
+      .expect(201);
+    const edited = await request(server())
+      .patch(`/conversations/${groupId}/messages/${sent.body.id}`)
+      .set(bearer(anna.token))
+      .send({ body: `plan for @${usernameOf(ben)}` })
+      .expect(200);
+    expect(edited.body.mentions).toEqual([ben.id]);
+    expect(edited.body.attachment).toMatchObject({ filename: 'plan.pdf' });
+    const cleared = await request(server())
+      .patch(`/conversations/${groupId}/messages/${sent.body.id}`)
+      .set(bearer(anna.token))
+      .send({ body: 'plan' })
+      .expect(200);
+    expect(cleared.body.mentions).toBeUndefined();
+    expect(cleared.body.attachment).toMatchObject({ filename: 'plan.pdf' });
+  });
+
+  it('ignores mentions of someone who left, and stops counting them after they leave', async () => {
+    const { anna, ben, clara, groupId } = await setUp();
+    const claraPush = await subscribe(clara);
+    await send(anna, groupId, `@${usernameOf(clara)} before`);
+    await request(server())
+      .post(`/conversations/${groupId}/leave`)
+      .set(bearer(clara.token))
+      .expect((r) => expect(r.status).toBeLessThan(300));
+    await settle();
+    const before = sentTo(claraPush).length;
+
+    const after = await send(anna, groupId, `@${usernameOf(clara)} @${usernameOf(ben)} after`);
+    expect(after.body.mentions).toEqual([ben.id]);
+    await settle();
+    expect(sentTo(claraPush)).toHaveLength(before);
+    const list = await request(server()).get('/conversations').set(bearer(clara.token));
+    expect(list.body.find((c: { id: string }) => c.id === groupId)).toBeUndefined();
+  });
+
+  it('a muted mention respects "notifications off" and blocks', async () => {
+    const { anna, ben, clara, groupId } = await setUp();
+    const benPush = await subscribe(ben);
+    const claraPush = await subscribe(clara);
+    await mute(ben, groupId);
+    await mute(clara, groupId);
+    // Ben turned notifications off altogether; Clara blocked Anna.
+    await request(server())
+      .patch('/me/settings')
+      .set(bearer(ben.token))
+      .send({ notifications: { enabled: false } })
+      .expect(200);
+    await request(server())
+      .post(`/users/${anna.id}/block`)
+      .set(bearer(clara.token))
+      .expect((r) => expect(r.status).toBeLessThan(300));
+
+    await send(anna, groupId, `@${usernameOf(ben)} @${usernameOf(clara)} hello`);
+    await settle();
+    expect(sentTo(benPush)).toHaveLength(0);
+    expect(sentTo(claraPush)).toHaveLength(0);
   });
 });

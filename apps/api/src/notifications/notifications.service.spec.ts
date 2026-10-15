@@ -12,7 +12,7 @@ vi.mock('../db/blocks.js', () => ({ isBlocked: vi.fn() }));
 vi.mock('../db/conversations.js', () => ({
   listNotifiableMembers: vi.fn(),
   listMutedMentionRecipients: vi.fn(async () => []),
-  findConversationForUser: vi.fn(),
+  findConversationBasics: vi.fn(),
 }));
 vi.mock('../db/devices.js', () => ({
   listPushDevices: vi.fn(),
@@ -68,7 +68,7 @@ describe('NotificationsService', () => {
       [channel as unknown as PushChannel],
     );
     vi.mocked(conversationsDb.listNotifiableMembers).mockResolvedValue(['ben', 'clara']);
-    vi.mocked(conversationsDb.findConversationForUser).mockResolvedValue({
+    vi.mocked(conversationsDb.findConversationBasics).mockResolvedValue({
       type: 'direct',
     } as never);
     vi.mocked(blocksDb.isBlocked).mockResolvedValue(false);
