@@ -124,6 +124,12 @@ describe.skipIf(!hasInfra)('call signalling over WebSocket (CHAT-041)', () => {
     calleeLaptop.send(CALL_EVENTS.media, { callId, audio: false, video: true });
     const media = await callerSocket.waitFor(CALL_EVENTS.media, byCall(callId));
     expect(media.payload).toEqual({ callId, audio: false, video: true });
+    // CHAT-071: "this video is a shared screen" travels with it.
+    calleeLaptop.send(CALL_EVENTS.media, { callId, audio: true, video: true, screen: true });
+    await callerSocket.waitFor(
+      CALL_EVENTS.media,
+      (p) => byCall(callId)(p) && (p as { screen?: boolean }).screen === true,
+    );
 
     // The callee's other device is not in the call and hears none of the negotiation.
     await calleePhone.expectNone(CALL_EVENTS.offer, byCall(callId));

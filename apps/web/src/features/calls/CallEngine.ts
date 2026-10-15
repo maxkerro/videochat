@@ -52,9 +52,15 @@ export interface CallSnapshot {
   remoteStream: MediaStream | null;
   audioEnabled: boolean;
   videoEnabled: boolean;
+  /** CHAT-071: this side is sending a shared screen instead of the camera. */
+  sharingScreen: boolean;
+  /** The screen being shared, for the local preview (null when not sharing). */
+  screenStream: MediaStream | null;
   /** The other side's mute/camera state, relayed via `call.media`. */
   remoteAudioEnabled: boolean;
   remoteVideoEnabled: boolean;
+  /** CHAT-071: what the other side sends is a shared screen. */
+  remoteScreenSharing: boolean;
   endCause: CallEndCause | null;
   /** CHAT-043: from getStats -- 'poor' above 5% packet loss or 400 ms round trip. */
   quality: 'unknown' | 'good' | 'poor';
@@ -73,6 +79,8 @@ export interface CallEngineDeps {
   newCallId: () => string;
   /** CHAT-043: end-of-call quality summary, fire-and-forget. */
   reportStats?: (callId: string, stats: CallStats) => void;
+  /** CHAT-071: the browser's screen picker (undefined where screen sharing isn't supported). */
+  getDisplayMedia?: (constraints: DisplayMediaStreamOptions) => Promise<MediaStream>;
 }
 
 export class CallBusyError extends Error {
@@ -95,6 +103,9 @@ export class CallEngine {
   private snap: CallSnapshot | null = null;
   private readonly listeners = new Set<() => void>();
   private pc: RTCPeerConnection | null = null;
+  /** CHAT-071: the video sender carrying the shared screen, when the call had no camera to swap
+   *  out (its track is null once sharing stops; turning the camera on reuses it). */
+  private spareVideoSender: RTCRtpSender | null = null;
   private polite = false;
   private makingOffer = false;
   private ignoreOffer = false;
@@ -152,6 +163,9 @@ export class CallEngine {
       videoEnabled: args.stream.getVideoTracks().length > 0,
       remoteAudioEnabled: true,
       remoteVideoEnabled: args.media === 'video',
+      sharingScreen: false,
+      screenStream: null,
+      remoteScreenSharing: false,
       endCause: null,
       quality: 'unknown',
       lowBandwidth: false,
@@ -248,8 +262,14 @@ export class CallEngine {
         return;
       }
       snap.localStream.addTrack(track);
-      // Triggers `negotiationneeded`, which sends a fresh offer to the other side.
-      this.pc?.addTrack(track, snap.localStream);
+      if (this.snap.sharingScreen) {
+        // The screen keeps the video slot; the camera takes over when sharing stops.
+      } else if (this.spareVideoSender) {
+        await this.spareVideoSender.replaceTrack(track);
+      } else {
+        // Triggers `negotiationneeded`, which sends a fresh offer to the other side.
+        this.pc?.addTrack(track, snap.localStream);
+      }
       this.update({ videoEnabled: true });
     }
     this.sendMediaState();
@@ -271,15 +291,76 @@ export class CallEngine {
       isAudio ? snap.localStream.getAudioTracks() : snap.localStream.getVideoTracks()
     )[0];
     next.enabled = isAudio ? snap.audioEnabled : snap.videoEnabled;
-    const sender = this.pc?.getSenders().find((s) => s.track?.kind === next.kind);
-    if (sender) await sender.replaceTrack(next);
-    else this.pc?.addTrack(next, snap.localStream);
+    // While a screen is shared the video sender carries the screen: just swap the camera kept
+    // for afterwards.
+    if (!(snap.sharingScreen && !isAudio)) {
+      const sender =
+        this.pc?.getSenders().find((s) => s.track === current && current) ??
+        this.pc?.getSenders().find((s) => s.track?.kind === next.kind);
+      if (sender) await sender.replaceTrack(next);
+      else this.pc?.addTrack(next, snap.localStream);
+    }
     if (current) {
       snap.localStream.removeTrack(current);
       current.stop();
     }
     snap.localStream.addTrack(next);
     this.update({});
+  }
+
+  /** CHAT-071: whether this browser can share a screen at all. */
+  canShareScreen(): boolean {
+    return this.deps.getDisplayMedia !== undefined;
+  }
+
+  /**
+   * CHAT-071: sends a tab, window or screen (the browser asks which) in place of the camera. The
+   * camera track is kept, and comes back when sharing stops. A call without a camera gets a video
+   * track added (one renegotiation). The browser's own "Stop sharing" ends it too.
+   */
+  async startScreenShare(): Promise<void> {
+    const snap = this.snap;
+    if (!snap?.localStream || !this.pc || snap.sharingScreen || !this.deps.getDisplayMedia) return;
+    if (snap.phase !== 'active' && snap.phase !== 'reconnecting') return;
+    const display = await this.deps.getDisplayMedia({ video: true, audio: false });
+    const screen = display.getVideoTracks()[0];
+    if (!screen || !this.snap || this.snap.callId !== snap.callId || this.snap.phase === 'ended') {
+      stopStream(display);
+      return;
+    }
+    // Text and detail stay sharp rather than smooth.
+    if ('contentHint' in screen) screen.contentHint = 'detail';
+    screen.addEventListener('ended', () => void this.stopScreenShare());
+
+    const camera = snap.localStream.getVideoTracks()[0];
+    const sender =
+      (camera && this.pc.getSenders().find((s) => s.track === camera)) ?? this.spareVideoSender;
+    if (sender) {
+      await sender.replaceTrack(screen);
+    } else {
+      // No video sender yet (audio call): add one, which renegotiates.
+      this.spareVideoSender = this.pc.addTrack(screen, display);
+    }
+    this.update({ sharingScreen: true, screenStream: display });
+    this.sendMediaState();
+  }
+
+  /** CHAT-071: back to the camera (or to no video, if it was off or there is none). */
+  async stopScreenShare(): Promise<void> {
+    const snap = this.snap;
+    if (!snap?.sharingScreen) return;
+    const screen = snap.screenStream?.getVideoTracks()[0] ?? null;
+    const camera = snap.localStream?.getVideoTracks()[0] ?? null;
+    const sender =
+      (screen && this.pc?.getSenders().find((s) => s.track === screen)) ?? this.spareVideoSender;
+    if (sender) {
+      await sender.replaceTrack(camera);
+      if (!camera) this.spareVideoSender = sender;
+    }
+    stopStream(snap.screenStream);
+    if (!this.snap || this.snap.callId !== snap.callId) return;
+    this.update({ sharingScreen: false, screenStream: null });
+    this.sendMediaState();
   }
 
   /** Feeds a realtime envelope in. Anything not about this device's call is ignored. */
@@ -318,6 +399,7 @@ export class CallEngine {
           this.update({
             remoteAudioEnabled: media.data.audio,
             remoteVideoEnabled: media.data.video,
+            remoteScreenSharing: media.data.screen === true,
           });
         }
         return;
@@ -352,6 +434,9 @@ export class CallEngine {
       videoEnabled: false,
       remoteAudioEnabled: true,
       remoteVideoEnabled: media === 'video',
+      sharingScreen: false,
+      screenStream: null,
+      remoteScreenSharing: false,
       endCause: null,
       quality: 'unknown',
       lowBandwidth: false,
@@ -542,7 +627,9 @@ export class CallEngine {
     this.deps.send(CALL_EVENTS.media, {
       callId: snap.callId,
       audio: snap.audioEnabled,
-      video: snap.videoEnabled,
+      video: snap.videoEnabled || snap.sharingScreen,
+      // Only while sharing: an absent flag means "camera" (and older clients never send it).
+      ...(snap.sharingScreen ? { screen: true } : {}),
     });
   }
 
@@ -553,7 +640,9 @@ export class CallEngine {
     if (hadConnection) this.reportStats(cause);
     this.pc?.close();
     this.pc = null;
+    this.spareVideoSender = null;
     stopStream(this.snap.localStream);
+    stopStream(this.snap.screenStream);
     this.update({ phase: 'ended', endCause: cause });
   }
 

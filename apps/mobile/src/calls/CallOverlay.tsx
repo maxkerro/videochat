@@ -20,11 +20,12 @@ function streamUrl(stream: RtcStream | null): string | null {
 
 /** The other person's picture. On iOS it is the view that becomes the picture-in-picture window
  *  when the app is left. */
-function RemoteVideo({ url }: { url: string }) {
+function RemoteVideo({ url, screen = false }: { url: string; screen?: boolean }) {
   return (
     <RTCPIPView
       streamURL={url}
-      objectFit="cover"
+      // CHAT-071: a shared screen is shown whole (letterboxed); a face fills the screen.
+      objectFit={screen ? 'contain' : 'cover'}
       style={StyleSheet.absoluteFill}
       zOrder={0}
       {...(Platform.OS === 'ios'
@@ -180,7 +181,7 @@ function InCall({ call }: { call: CallSnapshot }) {
 
   return (
     <>
-      {showRemoteVideo ? <RemoteVideo url={remoteUrl} /> : null}
+      {showRemoteVideo ? <RemoteVideo url={remoteUrl} screen={call.remoteScreenSharing} /> : null}
       <View style={styles.top}>
         <Text style={styles.topName} numberOfLines={1}>
           {call.peer.displayName}
@@ -190,6 +191,9 @@ function InCall({ call }: { call: CallSnapshot }) {
         </Text>
         {call.quality === 'poor' && call.phase === 'active' ? (
           <Text style={styles.warning}>Poor connection</Text>
+        ) : null}
+        {call.remoteScreenSharing && call.remoteVideoEnabled ? (
+          <Text style={styles.topStatus}>{call.peer.displayName} is sharing their screen</Text>
         ) : null}
       </View>
       {calls.enterPip ? (
@@ -268,7 +272,7 @@ function InCall({ call }: { call: CallSnapshot }) {
 function PipContent({ call }: { call: CallSnapshot }) {
   const remoteUrl = streamUrl(call.remoteStream);
   return remoteUrl !== null && call.remoteVideoEnabled ? (
-    <RemoteVideo url={remoteUrl} />
+    <RemoteVideo url={remoteUrl} screen={call.remoteScreenSharing} />
   ) : (
     <View style={styles.centre}>
       <Avatar name={call.peer.displayName} uri={call.peer.avatarUrl} size={64} />

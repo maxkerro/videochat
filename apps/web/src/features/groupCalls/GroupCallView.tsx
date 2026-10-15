@@ -1,14 +1,24 @@
 import '@livekit/components-styles';
 import {
+  CarouselLayout,
   ControlBar,
+  FocusLayout,
+  FocusLayoutContainer,
   GridLayout,
+  isTrackReference,
   LiveKitRoom,
   ParticipantTile,
   RoomAudioRenderer,
   useParticipants,
   useTracks,
 } from '@livekit/components-react';
-import { DisconnectReason, Track, VideoPresets, type RoomOptions } from 'livekit-client';
+import {
+  DisconnectReason,
+  ScreenSharePresets,
+  Track,
+  VideoPresets,
+  type RoomOptions,
+} from 'livekit-client';
 import { useEffect, useState } from 'react';
 import { useCalls } from '../calls/CallProvider';
 import { useToast } from '../../components/ui';
@@ -20,6 +30,11 @@ import styles from './GroupCalls.module.css';
  * viewer receives only the size its tile needs (adaptive stream), and layers nobody watches are
  * not sent at all (dynacast).
  */
+/** Desktop browsers can share a screen; phones' browsers can't. */
+function canShareScreen(): boolean {
+  return typeof navigator !== 'undefined' && Boolean(navigator.mediaDevices?.getDisplayMedia);
+}
+
 export const ROOM_OPTIONS: RoomOptions = {
   adaptiveStream: true,
   dynacast: true,
@@ -28,6 +43,8 @@ export const ROOM_OPTIONS: RoomOptions = {
     simulcast: true,
     videoSimulcastLayers: [VideoPresets.h180, VideoPresets.h360],
     red: true,
+    // Shared screens stay sharp (text) rather than smooth.
+    screenShareEncoding: ScreenSharePresets.h1080fps15.encoding,
   },
 };
 
@@ -39,6 +56,20 @@ function Stage() {
     ],
     { onlySubscribed: false },
   );
+  // CHAT-071: a shared screen takes the main stage; the cameras move to a strip beside it.
+  const screen = tracks.find(
+    (t) => isTrackReference(t) && t.publication.source === Track.Source.ScreenShare,
+  );
+  if (screen) {
+    return (
+      <FocusLayoutContainer className={styles.grid}>
+        <CarouselLayout tracks={tracks.filter((t) => t !== screen)}>
+          <ParticipantTile />
+        </CarouselLayout>
+        <FocusLayout trackRef={screen} />
+      </FocusLayoutContainer>
+    );
+  }
   return (
     <GridLayout tracks={tracks} className={styles.grid}>
       {/* Speaking participants get `data-lk-speaking`, which the stylesheet outlines. */}
@@ -129,7 +160,12 @@ export default function GroupCallView({
       {!minimised && <Stage />}
       <ControlBar
         variation={minimised ? 'minimal' : 'verbose'}
-        controls={{ chat: false, screenShare: false, settings: false }}
+        controls={{
+          chat: false,
+          // CHAT-071: where the browser can share a screen.
+          screenShare: canShareScreen(),
+          settings: false,
+        }}
       />
       <RoomAudioRenderer />
     </LiveKitRoom>

@@ -10,6 +10,21 @@ class FakeTrack {
   }
 }
 
+/** A shared screen: also ends by itself (the browser's "Stop sharing"). */
+class FakeScreenTrack extends FakeTrack {
+  contentHint = '';
+  private onEnded: (() => void) | null = null;
+  constructor() {
+    super('video');
+  }
+  addEventListener(type: string, cb: () => void) {
+    if (type === 'ended') this.onEnded = cb;
+  }
+  endFromBrowser() {
+    this.onEnded?.();
+  }
+}
+
 class FakeStream {
   tracks: FakeTrack[];
   constructor(tracks: FakeTrack[] = []) {
@@ -39,7 +54,7 @@ class FakePeerConnection {
   localDescription: { type: RTCSdpType; sdp: string } | null = null;
   remoteDescriptions: { type: RTCSdpType; sdp: string }[] = [];
   candidates: unknown[] = [];
-  senders: { track: FakeTrack; replaceTrack: (t: FakeTrack) => Promise<void> }[] = [];
+  senders: { track: FakeTrack | null; replaceTrack: (t: FakeTrack | null) => Promise<void> }[] = [];
   closed = false;
   restarted = 0;
   statsReport: Record<string, unknown>[] = [];
@@ -53,8 +68,8 @@ class FakePeerConnection {
 
   addTrack(track: FakeTrack) {
     const sender = {
-      track,
-      replaceTrack: async (t: FakeTrack) => {
+      track: track as FakeTrack | null,
+      replaceTrack: async (t: FakeTrack | null) => {
         sender.track = t;
       },
     };
@@ -191,7 +206,7 @@ describe('CallEngine (CHAT-042)', () => {
 
       expect(pcs).toHaveLength(1);
       expect(pcs[0]!.config.iceServers).toEqual([{ urls: 'stun:stun.test' }]);
-      expect(pcs[0]!.senders.map((s) => s.track.kind)).toEqual(['audio', 'video']);
+      expect(pcs[0]!.senders.map((s) => s.track?.kind)).toEqual(['audio', 'video']);
       expect(lastSent(CALL_EVENTS.offer)?.payload).toEqual({ callId: CALL_ID, sdp: 'offer-sdp' });
 
       event(CALL_EVENTS.answer, { callId: CALL_ID, sdp: 'remote-answer' });
@@ -336,6 +351,106 @@ describe('CallEngine (CHAT-042)', () => {
       return { ...ctx, stream, pc: ctx.pcs[0]! };
     }
 
+    describe('screen sharing (CHAT-071)', () => {
+      function withScreen(media: 'video' | 'audio' = 'video') {
+        const screen = new FakeScreenTrack();
+        const ctx = setUp({
+          getDisplayMedia: async () => new FakeStream([screen]) as unknown as MediaStream,
+        });
+        const stream = media === 'video' ? avStream() : audioStream();
+        ctx.engine.startOutgoing({ conversationId: CONV_ID, peer: PEER, media, stream });
+        ctx.event(CALL_EVENTS.accepted, { callId: CALL_ID, connectionId: 'their-conn' });
+        return { ...ctx, stream, screen };
+      }
+      const connect = async (ctx: ReturnType<typeof withScreen>) => {
+        await flush();
+        ctx.pcs[0]!.setConnectionState('connected');
+        return ctx.pcs[0]!;
+      };
+
+      it('sends the screen in place of the camera, and the camera again after', async () => {
+        const ctx = withScreen();
+        const pc = await connect(ctx);
+        const camera = ctx.stream.getVideoTracks()[0] as unknown as FakeTrack;
+        const videoSender = () => pc.senders.find((s) => s.track?.kind === 'video')!;
+
+        await ctx.engine.startScreenShare();
+        expect(videoSender().track).toBe(ctx.screen);
+        expect(ctx.screen.contentHint).toBe('detail');
+        expect(ctx.engine.getSnapshot()).toMatchObject({ sharingScreen: true });
+        expect(ctx.lastSent(CALL_EVENTS.media)?.payload).toEqual({
+          callId: CALL_ID,
+          audio: true,
+          video: true,
+          screen: true,
+        });
+
+        await ctx.engine.stopScreenShare();
+        expect(videoSender().track).toBe(camera);
+        expect(ctx.screen.stopped).toBe(true);
+        expect(ctx.engine.getSnapshot()?.sharingScreen).toBe(false);
+        expect(ctx.lastSent(CALL_EVENTS.media)?.payload).toEqual({
+          callId: CALL_ID,
+          audio: true,
+          video: true,
+        });
+      });
+
+      it('stops when the browser’s own "Stop sharing" ends the screen', async () => {
+        const ctx = withScreen();
+        await connect(ctx);
+        await ctx.engine.startScreenShare();
+        ctx.screen.endFromBrowser();
+        await flush();
+        expect(ctx.engine.getSnapshot()?.sharingScreen).toBe(false);
+      });
+
+      it('adds a video track in an audio-only call, and turns it off again after', async () => {
+        const ctx = withScreen('audio');
+        const pc = await connect(ctx);
+        await ctx.engine.startScreenShare();
+        const sender = pc.senders.find((s) => s.track === ctx.screen);
+        expect(sender).toBeDefined();
+        await ctx.engine.stopScreenShare();
+        expect(sender!.track).toBeNull();
+        expect(ctx.lastSent(CALL_EVENTS.media)?.payload).toMatchObject({ video: false });
+
+        // Turning the camera on later reuses that sender instead of adding another.
+        await ctx.engine.toggleVideo();
+        expect(
+          pc.senders.filter((s) => s.track?.kind === 'video' || s.track === null),
+        ).toHaveLength(1);
+        expect(sender!.track?.kind).toBe('video');
+      });
+
+      it('keeps sharing when the camera is switched or toggled meanwhile', async () => {
+        const ctx = withScreen();
+        const pc = await connect(ctx);
+        await ctx.engine.startScreenShare();
+        await ctx.engine.switchDevice('videoinput', 'cam-2');
+        await ctx.engine.toggleVideo();
+        expect(pc.senders.find((s) => s.track?.kind === 'video')!.track).toBe(ctx.screen);
+      });
+
+      it('shows what the other side shares as a screen', async () => {
+        const ctx = withScreen();
+        await connect(ctx);
+        ctx.event(CALL_EVENTS.media, { callId: CALL_ID, audio: true, video: true, screen: true });
+        expect(ctx.engine.getSnapshot()?.remoteScreenSharing).toBe(true);
+        ctx.event(CALL_EVENTS.media, { callId: CALL_ID, audio: true, video: true });
+        expect(ctx.engine.getSnapshot()?.remoteScreenSharing).toBe(false);
+      });
+
+      it('is not offered where the browser cannot share, and stops with the call', async () => {
+        expect(setUp().engine.canShareScreen()).toBe(false);
+        const ctx = withScreen();
+        await connect(ctx);
+        await ctx.engine.startScreenShare();
+        ctx.engine.hangUp();
+        expect(ctx.screen.stopped).toBe(true);
+      });
+    });
+
     it('mute disables the microphone track and tells the other side', async () => {
       const { engine, stream, lastSent } = await liveCall();
       engine.toggleAudio();
@@ -386,7 +501,7 @@ describe('CallEngine (CHAT-042)', () => {
       await flush();
 
       expect(ctx.engine.getSnapshot()?.videoEnabled).toBe(true);
-      expect(ctx.pcs[0]!.senders.map((s) => s.track.kind)).toContain('video');
+      expect(ctx.pcs[0]!.senders.map((s) => s.track?.kind)).toContain('video');
       expect(ctx.lastSent(CALL_EVENTS.offer)).toBeDefined();
     });
 
@@ -397,7 +512,7 @@ describe('CallEngine (CHAT-042)', () => {
 
       await engine.switchDevice('videoinput', 'cam-2');
 
-      const sentVideo = pc.senders.find((s) => s.track.kind === 'video')!.track;
+      const sentVideo = pc.senders.find((s) => s.track?.kind === 'video')!.track;
       expect(sentVideo).not.toBe(oldVideo);
       expect(oldVideo.stopped).toBe(true);
       expect(sent.find((m) => m.type === CALL_EVENTS.offer)).toBeUndefined();

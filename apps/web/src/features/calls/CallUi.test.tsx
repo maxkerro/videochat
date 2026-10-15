@@ -28,6 +28,9 @@ function snapshot(overrides: Partial<CallSnapshot> = {}): CallSnapshot {
     videoEnabled: true,
     remoteAudioEnabled: true,
     remoteVideoEnabled: true,
+    sharingScreen: false,
+    screenStream: null,
+    remoteScreenSharing: false,
     endCause: null,
     quality: 'good',
     lowBandwidth: false,
@@ -47,6 +50,8 @@ function controller(call: CallSnapshot | null, overrides: Partial<CallController
     toggleAudio: vi.fn(),
     toggleVideo: vi.fn().mockResolvedValue(undefined),
     switchDevice: vi.fn().mockResolvedValue(undefined),
+    canShareScreen: true,
+    toggleScreenShare: vi.fn().mockResolvedValue(undefined),
     ...overrides,
   } satisfies CallController;
 }
@@ -141,6 +146,40 @@ describe('call UI (CHAT-042)', () => {
       renderWith(controller(snapshot({ remoteAudioEnabled: false })));
       expect(screen.getByRole('status')).toHaveTextContent('1:05');
       expect(screen.getByText('Ben Peer is muted')).toBeInTheDocument();
+    });
+
+    describe('screen sharing (CHAT-071)', () => {
+      it('offers to share during a call, and to stop while sharing', async () => {
+        const ctrl = controller(snapshot());
+        renderWith(ctrl);
+        await userEvent.click(screen.getByRole('button', { name: 'Share your screen' }));
+        expect(ctrl.toggleScreenShare).toHaveBeenCalled();
+      });
+
+      it('says you are sharing and offers to stop', () => {
+        renderWith(controller(snapshot({ sharingScreen: true })));
+        expect(screen.getByText('You’re sharing your screen')).toBeInTheDocument();
+        expect(screen.getByRole('button', { name: 'Stop sharing your screen' })).toHaveAttribute(
+          'aria-pressed',
+          'true',
+        );
+      });
+
+      it('is not offered where the browser cannot share, or before the call connects', () => {
+        renderWith(controller(snapshot(), { canShareScreen: false }));
+        expect(screen.queryByRole('button', { name: 'Share your screen' })).not.toBeInTheDocument();
+      });
+
+      it('ignores closing the browser’s picker, and explains a refusal', async () => {
+        const cancelled = controller(snapshot(), {
+          toggleScreenShare: vi
+            .fn()
+            .mockRejectedValue(new DOMException('Permission denied', 'NotAllowedError')),
+        });
+        renderWith(cancelled);
+        await userEvent.click(screen.getByRole('button', { name: 'Share your screen' }));
+        expect(screen.queryByText('Can’t share your screen')).not.toBeInTheDocument();
+      });
     });
 
     it('shows "Ringing…" while the callee\'s device rings', () => {

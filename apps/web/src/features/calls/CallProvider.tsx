@@ -33,6 +33,10 @@ export interface CallController {
   toggleAudio: () => void;
   toggleVideo: () => Promise<void>;
   switchDevice: (kind: 'audioinput' | 'videoinput', deviceId: string) => Promise<void>;
+  /** CHAT-071: this browser can share a screen (desktop browsers). */
+  canShareScreen: boolean;
+  /** Starts sharing (the browser asks what to share) or stops it. */
+  toggleScreenShare: () => Promise<void>;
 }
 
 export const CallContext = createContext<CallController | null>(null);
@@ -98,6 +102,10 @@ function createBrowserCallEngine(realtime: ReturnType<typeof useRealtime>) {
     createMediaStream: () => new MediaStream(),
     now: () => Date.now(),
     newCallId: () => crypto.randomUUID(),
+    getDisplayMedia:
+      typeof navigator !== 'undefined' && navigator.mediaDevices?.getDisplayMedia
+        ? (constraints) => navigator.mediaDevices.getDisplayMedia(constraints)
+        : undefined,
     reportStats: (callId, stats) => {
       if (!auth) return;
       void withAuthRetry(auth, (token) => postCallStats(token, callId, stats)).catch(
@@ -200,6 +208,9 @@ export function CallProvider({ children }: { children: ReactNode }) {
       toggleAudio: () => engine.toggleAudio(),
       toggleVideo: () => engine.toggleVideo(),
       switchDevice: (kind, deviceId) => engine.switchDevice(kind, deviceId),
+      canShareScreen: engine.canShareScreen(),
+      toggleScreenShare: () =>
+        call?.sharingScreen ? engine.stopScreenShare() : engine.startScreenShare(),
     }),
     [call, expanded, startCall, accept, engine],
   );

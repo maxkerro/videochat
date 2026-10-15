@@ -208,8 +208,15 @@ function RoomBody({
   const tracks = useTracks([{ source: Track.Source.Camera, withPlaceholder: true }], {
     onlySubscribed: false,
   });
+  // CHAT-071: a screen someone shares (from the web) takes the main stage, above the tiles.
+  const screens = useTracks([Track.Source.ScreenShare]).filter(isTrackReference);
+  const screen = screens[0] ?? null;
   const { width, height } = useWindowDimensions();
-  const size = tileSize(tracks.length, width, height - 200);
+  const size = tileSize(
+    tracks.length,
+    width,
+    height - 200 - (screen ? Math.round(height * 0.45) : 0),
+  );
 
   if (minimised) {
     return (
@@ -240,6 +247,18 @@ function RoomBody({
           <Text style={styles.link}>Minimise</Text>
         </Pressable>
       </View>
+      {screen ? (
+        <View
+          accessible
+          accessibilityLabel={`${screen.participant.name || 'Someone'} is sharing their screen`}
+          style={{ height: Math.round(height * 0.45), backgroundColor: '#000' }}
+        >
+          <VideoTrack trackRef={screen} style={StyleSheet.absoluteFill} objectFit="contain" />
+          <Text style={styles.name}>
+            {screen.participant.name || screen.participant.identity}’s screen
+          </Text>
+        </View>
+      ) : null}
       <FlatList
         key={gridColumns(tracks.length)}
         numColumns={gridColumns(tracks.length)}

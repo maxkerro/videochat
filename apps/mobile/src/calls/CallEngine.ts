@@ -70,6 +70,9 @@ export interface CallSnapshot {
   /** The other side's mute/camera state, relayed via `call.media`. */
   remoteAudioEnabled: boolean;
   remoteVideoEnabled: boolean;
+  /** CHAT-071: what the other side sends is a shared screen (shown whole, not cropped). Phones
+   *  only view shared screens; sharing from the phone is later. */
+  remoteScreenSharing: boolean;
   endCause: CallEndCause | null;
   /** When the call ended (ms since epoch); null while it is going on. */
   endedAt: number | null;
@@ -185,6 +188,7 @@ export class CallEngine {
       videoPaused: false,
       remoteAudioEnabled: true,
       remoteVideoEnabled: args.media === 'video',
+      remoteScreenSharing: false,
       endCause: null,
       endedAt: null,
       quality: 'unknown',
@@ -412,6 +416,7 @@ export class CallEngine {
           this.update({
             remoteAudioEnabled: media.data.audio,
             remoteVideoEnabled: media.data.video,
+            remoteScreenSharing: media.data.screen === true,
           });
         }
         return;
@@ -453,6 +458,7 @@ export class CallEngine {
       videoPaused: false,
       remoteAudioEnabled: true,
       remoteVideoEnabled: media === 'video',
+      remoteScreenSharing: false,
       endCause: null,
       endedAt: null,
       quality: 'unknown',

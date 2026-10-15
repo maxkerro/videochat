@@ -565,6 +565,14 @@ describe('CallEngine (CHAT-042)', () => {
       });
     });
 
+    it('shows a shared screen from the other side as a screen (CHAT-071)', async () => {
+      const { engine, event } = await liveCall();
+      event(CALL_EVENTS.media, { callId: CALL_ID, audio: true, video: true, screen: true });
+      expect(engine.getSnapshot()?.remoteScreenSharing).toBe(true);
+      event(CALL_EVENTS.media, { callId: CALL_ID, audio: true, video: true });
+      expect(engine.getSnapshot()?.remoteScreenSharing).toBe(false);
+    });
+
     it('turning the camera on in an audio call acquires it and renegotiates', async () => {
       const ctx = setUp();
       ctx.engine.startOutgoing({

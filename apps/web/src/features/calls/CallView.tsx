@@ -128,6 +128,24 @@ export function CallView({ call }: { call: CallSnapshot }) {
     call.phase !== 'outgoing';
   const status = callStatusText(call, timer);
 
+  const sharing = call.sharingScreen;
+  const canShare =
+    calls.canShareScreen && (call.phase === 'active' || call.phase === 'reconnecting');
+  const toggleScreenShare = async () => {
+    try {
+      await calls.toggleScreenShare();
+    } catch (err) {
+      // Closing the browser's picker without choosing is not an error worth a message.
+      if (err instanceof DOMException && err.name === 'NotAllowedError') return;
+      toast({
+        title: 'Can’t share your screen',
+        description:
+          'Your browser or system didn’t allow it. Check its screen-recording permission.',
+        tone: 'danger',
+      });
+    }
+  };
+
   const toggleVideo = async () => {
     try {
       await calls.toggleVideo();
@@ -143,8 +161,12 @@ export function CallView({ call }: { call: CallSnapshot }) {
         {showRemoteVideo ? (
           <StreamVideo
             stream={call.remoteStream}
-            className={styles.remoteVideo}
-            label={`${call.peer.displayName}'s video`}
+            className={call.remoteScreenSharing ? styles.remoteScreen : styles.remoteVideo}
+            label={
+              call.remoteScreenSharing
+                ? `${call.peer.displayName}'s screen`
+                : `${call.peer.displayName}'s video`
+            }
           />
         ) : (
           <div className={styles.placeholder}>
@@ -159,6 +181,14 @@ export function CallView({ call }: { call: CallSnapshot }) {
           <span className={styles.badges}>
             {call.quality === 'poor' && call.phase === 'active' && (
               <span className={`${styles.badge} ${styles.badgeWarn}`}>Poor connection</span>
+            )}
+            {call.remoteScreenSharing && showRemoteVideo && (
+              <span className={styles.badge}>{call.peer.displayName} is sharing their screen</span>
+            )}
+            {sharing && (
+              <span className={`${styles.badge} ${styles.badgeShare}`}>
+                You’re sharing your screen
+              </span>
             )}
             {!call.remoteAudioEnabled && (
               <span className={styles.badge}>{call.peer.displayName} is muted</span>
@@ -216,6 +246,17 @@ export function CallView({ call }: { call: CallSnapshot }) {
             V
           </span>
         </button>
+        {canShare && (
+          <button
+            type="button"
+            className={`${styles.control} ${sharing ? styles.controlActive : ''}`}
+            aria-pressed={sharing}
+            aria-label={sharing ? 'Stop sharing your screen' : 'Share your screen'}
+            onClick={() => void toggleScreenShare()}
+          >
+            {sharing ? 'Stop sharing' : 'Share screen'}
+          </button>
+        )}
         {devices.length > 0 && (
           <Menu
             trigger={

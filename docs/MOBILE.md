@@ -271,3 +271,12 @@ over the app. Sound goes to a headset or Bluetooth device when one is connected,
   don't register yet; leaving the app mutes you to the others until you come back.
 - **iOS** is not built or tested (no Apple account). Its audio session for group calls is set up with
   `setupIOSAudioManagement` while the call runs.
+
+## Screen sharing (CHAT-071)
+
+Sharing a screen is a desktop-browser feature (web): in a 1:1 call the shared screen replaces the
+camera on the same video track (a call without a camera adds one, one renegotiation), and
+`call.media` carries `screen: true` so the other side shows it whole rather than cropped. In group
+calls it is LiveKit's screen-share track, and a shared screen takes the main stage. The phone app
+only _views_ shared screens: full-size and letterboxed in a 1:1 call, above the tiles in a group
+call. Sharing from the phone is later.

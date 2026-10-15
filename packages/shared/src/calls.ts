@@ -107,7 +107,14 @@ export const callIceSchema = z.object({
 });
 export type CallIce = z.infer<typeof callIceSchema>;
 
-export const callMediaStateSchema = z.object({ callId, audio: z.boolean(), video: z.boolean() });
+export const callMediaStateSchema = z.object({
+  callId,
+  audio: z.boolean(),
+  video: z.boolean(),
+  /** CHAT-071: the video is a shared screen, not a camera (shown whole, not cropped or mirrored).
+   *  Optional so older clients' messages still validate. */
+  screen: z.boolean().optional(),
+});
 export type CallMediaState = z.infer<typeof callMediaStateSchema>;
 
 /** Sent by the server in `realtime.ready`: this socket's id, so a device can tell whether a

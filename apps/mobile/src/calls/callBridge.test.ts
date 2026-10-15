@@ -32,6 +32,7 @@ function snapshot(patch: Partial<CallSnapshot> = {}): CallSnapshot {
     videoPaused: false,
     remoteAudioEnabled: true,
     remoteVideoEnabled: false,
+    remoteScreenSharing: false,
     endCause: null,
     endedAt: null,
     quality: 'unknown',
