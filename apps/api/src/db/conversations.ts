@@ -1,6 +1,7 @@
 import { and, asc, desc, eq, inArray, isNull, ne, sql } from 'drizzle-orm';
 import type { Database, DbExecutor } from './client.js';
 import {
+  blocks,
   conversations,
   memberships,
   messages,
@@ -157,7 +158,11 @@ async function loadUnreadMentions(
         inArray(messages.conversationId, conversationIds),
         sql`${messages.seq} > ${memberships.lastReadSeq}`,
         isNull(messages.deletedAt),
+        // Lets the planner use messages_mentions_idx: only messages with mentions are visited.
+        sql`${messages.meta} ? 'mentions'`,
         sql`${messages.meta} -> 'mentions' ? ${userId}`,
+        // Someone you blocked can't get your attention this way either.
+        sql`not exists (select 1 from ${blocks} where ${blocks.blockerId} = ${userId} and ${blocks.blockedId} = ${messages.senderId})`,
       ),
     )
     .groupBy(messages.conversationId);
@@ -201,6 +206,7 @@ export async function findMentionedMembers(
           usernames.map((u) => u.toLowerCase()),
         ),
         ne(memberships.userId, senderId),
+        isNull(users.deletedAt),
       ),
     );
   return rows.map((r) => r.userId);

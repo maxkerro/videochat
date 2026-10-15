@@ -1,0 +1,1 @@
+CREATE INDEX IF NOT EXISTS "messages_mentions_idx" ON "messages" USING btree ("conversation_id","seq") WHERE "meta" ? 'mentions';

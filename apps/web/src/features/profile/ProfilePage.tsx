@@ -40,7 +40,11 @@ export function ProfilePage() {
   });
   const unblockMutation = useMutation({
     mutationFn: (userId: string) => withAuthRetry(auth, (token) => unblockUser(token, userId)),
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['blocked-users'] }),
+    // CHAT-073: blocking changes which mentions count as unread.
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: ['blocked-users'] });
+      void queryClient.invalidateQueries({ queryKey: ['conversations'] });
+    },
     onError: () => toast({ title: "Couldn't unblock that person", tone: 'danger' }),
   });
 

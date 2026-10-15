@@ -236,6 +236,80 @@ describe('ConversationList', () => {
     expect(screen.getByRole('link', { name: /Ben Okafor/ })).toBeInTheDocument();
   });
 
+  it('CHAT-073: a mention from someone I blocked is not counted; an edit that mentions me recounts', async () => {
+    const groupId = '66666666-6666-4666-8666-666666666666';
+    const group = {
+      id: groupId,
+      type: 'group' as const,
+      title: 'Team',
+      lastSeq: 4,
+      lastMessageAt: '2026-01-01T08:00:00.000Z',
+      role: 'member' as const,
+      lastReadSeq: 2,
+      peer: null,
+      unreadMentions: 0,
+    };
+    let listFetches = 0;
+    let blockListLoaded = false;
+    vi.stubGlobal(
+      'fetch',
+      routedFetch({
+        'POST /auth/refresh': () => jsonResponse(session()),
+        'GET /conversations': () => {
+          listFetches += 1;
+          return jsonResponse([benConversation(), group]);
+        },
+        // Opening the chat with Ben loads the block list: Ben is blocked.
+        [`GET /conversations/${conversationWithBen}`]: () => jsonResponse(benConversation()),
+        [`GET /conversations/${conversationWithBen}/messages`]: () =>
+          jsonResponse({ messages: [], hasMore: false }),
+        'GET /users/blocked': () => {
+          blockListLoaded = true;
+          return jsonResponse({ users: [peer] });
+        },
+      }),
+    );
+    renderApp(`/c/${conversationWithBen}`);
+    await screen.findByRole('link', { name: /Team/ });
+    await waitFor(() => expect(blockListLoaded).toBe(true));
+
+    await waitFor(() => expect(FakeWebSocket.instances).toHaveLength(1));
+    const socket = FakeWebSocket.instances[0]!;
+    socket.emit('open');
+    const fromBen = {
+      ...baseMessage(),
+      conversationId: groupId,
+      seq: 5,
+      senderId: peer.id,
+      body: '@anna hey',
+      mentions: [baseUser.id],
+    };
+    socket.emit('message', {
+      data: JSON.stringify(makeEnvelope('message.new', fromBen, fromBen.id)),
+    });
+    await waitFor(() =>
+      expect(screen.getByRole('link', { name: /Team/ })).toHaveTextContent('@anna hey'),
+    );
+    expect(screen.queryByLabelText(/unread mention/)).not.toBeInTheDocument();
+
+    // Clara edits an unread message to mention me: the inbox is fetched again.
+    const before = listFetches;
+    const edited = {
+      ...baseMessage(),
+      id: '01ARZ3NDEKTSV4RRFFQ69G5FAW',
+      conversationId: groupId,
+      seq: 4,
+      senderId: otherPeer.id,
+      body: '@anna see this',
+      editedAt: '2026-01-01T12:00:00.000Z',
+      mentions: [baseUser.id],
+    };
+    socket.emit('message', {
+      data: JSON.stringify(makeEnvelope('message.updated', edited, 'e1')),
+    });
+    await waitFor(() => expect(listFetches).toBeGreaterThan(before));
+  });
+
   it('does not mark our own outgoing message as unread in the inbox', async () => {
     // Includes a second conversation (Clara's, with an earlier lastMessageAt) so there's a
     // positive signal to wait on -- Ben's conversation moving to the top -- before asserting the

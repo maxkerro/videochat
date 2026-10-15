@@ -282,6 +282,10 @@ export const messages = pgTable(
       name: 'messages_reply_to_fk',
     }).onDelete('set null'),
     index('messages_search_idx').using('gin', MESSAGE_SEARCH_VECTOR),
+    // CHAT-073: the inbox's unread-mention count only visits messages that mention someone.
+    index('messages_mentions_idx')
+      .on(t.conversationId, t.seq)
+      .where(sql`${t.meta} ? 'mentions'`),
     check('messages_body_length_ck', sql`${t.body} IS NULL OR char_length(${t.body}) <= 4000`),
     check('messages_seq_positive_ck', sql`${t.seq} > 0`),
   ],

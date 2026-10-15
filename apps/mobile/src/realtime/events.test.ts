@@ -99,6 +99,18 @@ describe('applyRealtimeEvent', () => {
     expect(spy).toHaveBeenCalledWith({ queryKey: keys.messages(CONV) });
   });
 
+  it('CHAT-073: a live mention or an edit re-reads the inbox, whose count comes from the server', async () => {
+    const { queryClient, events, keys } = await load();
+    events.resetInboxThrottle();
+    const spy = vi.spyOn(queryClient, 'invalidateQueries');
+    events.applyRealtimeEvent(env('message.new', { ...msg(2), mentions: [ME] }), ctx());
+    expect(spy).toHaveBeenCalledWith({ queryKey: keys.conversations });
+    spy.mockClear();
+    events.resetInboxThrottle();
+    events.applyRealtimeEvent(env('message.updated', { ...msg(2), mentions: [ME] }), ctx());
+    expect(spy).toHaveBeenCalledWith({ queryKey: keys.conversations });
+  });
+
   it('does not create a cache entry for a conversation that is not open', async () => {
     const { queryClient, events, keys } = await load();
     events.applyRealtimeEvent(env('message.new', msg(1)), ctx());

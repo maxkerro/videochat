@@ -3,6 +3,7 @@ import { MessageSearch } from '../search/MessageSearch';
 import {
   conversationReadEventSchema,
   messageSchema,
+  type BlockedUsersList,
   type ConversationSummary,
   type Message,
   type WsEnvelope,
@@ -85,6 +86,12 @@ export function ConversationList() {
   const queryClient = useQueryClient();
   const [query, setQuery] = useState('');
   const [onlyMentions, setOnlyMentions] = useState(false);
+  // CHAT-073: whoever I blocked, when that list is loaded (the server's count is exact anyway).
+  const blockedSender = (userId: string | null) =>
+    !!userId &&
+    !!queryClient
+      .getQueryData<BlockedUsersList>(['blocked-users'])
+      ?.users.some((u) => u.id === userId);
 
   const { data: conversations = [] } = useQuery({
     queryKey: ['conversations'],
@@ -144,11 +151,13 @@ export function ConversationList() {
         // Sending counts as having read your own message (mirrors appendMessage's own
         // bookkeeping server-side), so your own outgoing messages never show up as unread here.
         lastReadSeq: message.senderId === auth.user?.id ? message.seq : current.lastReadSeq,
-        // CHAT-073: one more unread @mention of me.
+        // CHAT-073: one more unread @mention of me -- not from someone I blocked (the server
+        // leaves those out of the count too).
         unreadMentions:
           message.senderId !== auth.user?.id &&
           auth.user &&
-          message.mentions?.includes(auth.user.id)
+          message.mentions?.includes(auth.user.id) &&
+          !blockedSender(message.senderId)
             ? current.unreadMentions + 1
             : message.senderId === auth.user?.id
               ? 0
@@ -167,6 +176,18 @@ export function ConversationList() {
     const parsed = messageSchema.safeParse(envelope.payload);
     if (!parsed.success) return;
     const message = parsed.data;
+    // CHAT-073: an edit can add (or remove) a mention of me in an unread message; the server
+    // recounts.
+    const known = queryClient
+      .getQueryData<ConversationSummary[]>(['conversations'])
+      ?.find((c) => c.id === message.conversationId);
+    if (
+      known &&
+      message.seq > known.lastReadSeq &&
+      ((!!auth.user && message.mentions?.includes(auth.user.id)) || known.unreadMentions > 0)
+    ) {
+      void queryClient.invalidateQueries({ queryKey: ['conversations'] });
+    }
     queryClient.setQueryData<ConversationSummary[]>(['conversations'], (list) => {
       if (!list) return list;
       const i = list.findIndex((c) => c.id === message.conversationId);

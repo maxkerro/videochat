@@ -99,6 +99,42 @@ describe.skipIf(!hasInfra)('message search (CHAT-072)', () => {
     expect((await search(ben, { q: secret })).results).toHaveLength(2);
   });
 
+  it("filters and cursors can't reach chats you're not in (or left)", async () => {
+    const { anna, ben, clara, directId, groupId } = await setUp();
+    const word = `scope${randomUUID().slice(0, 6)}`;
+    for (let i = 0; i < 35; i += 1) await send(anna, directId, `${word} direct ${i}`);
+    await send(ben, groupId, `${word} group`);
+    const outsider = await signUp();
+
+    // Naming a chat you're not in, or someone in it, finds nothing.
+    for (const params of <Record<string, string>[]>[
+      { q: word, conversationId: directId },
+      { q: word, from: anna.id },
+      { q: word, conversationId: directId, from: anna.id },
+    ]) {
+      expect((await search(outsider, params)).results).toEqual([]);
+    }
+    expect((await search(clara, { q: word, conversationId: directId })).results).toEqual([]);
+
+    // Someone else's cursor only positions a search: it never widens it.
+    const annas = await search(anna, { q: word });
+    expect(annas.nextCursor).not.toBeNull();
+    expect((await search(outsider, { q: word, cursor: annas.nextCursor! })).results).toEqual([]);
+    expect(
+      bodies(await search(clara, { q: word, cursor: annas.nextCursor! })).every(
+        (b) => b === `${word} group`,
+      ),
+    ).toBe(true);
+
+    // A former member: nothing, however the search is narrowed.
+    await request(server())
+      .post(`/conversations/${groupId}/leave`)
+      .set(bearer(clara.token))
+      .expect((r) => expect(r.status).toBeLessThan(300));
+    expect((await search(clara, { q: word, conversationId: groupId })).results).toEqual([]);
+    expect((await search(clara, { q: word, from: ben.id })).results).toEqual([]);
+  });
+
   it('filters by conversation, person, date and files', async () => {
     const { anna, ben, directId, groupId } = await setUp();
     const word = `plan${randomUUID().slice(0, 6)}`;

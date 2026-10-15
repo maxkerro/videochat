@@ -237,4 +237,21 @@ describe.skipIf(!hasInfra)('@mentions (CHAT-073)', () => {
     expect(sentTo(benPush)).toHaveLength(0);
     expect(sentTo(claraPush)).toHaveLength(0);
   });
+  it("doesn't count mentions from someone you blocked", async () => {
+    const { anna, ben, clara, groupId } = await setUp();
+    await request(server())
+      .post(`/users/${anna.id}/block`)
+      .set(bearer(ben.token))
+      .expect((r) => expect(r.status).toBeLessThan(300));
+    await send(anna, groupId, `@${usernameOf(ben)} from a blocked sender`);
+    await send(clara, groupId, `@${usernameOf(ben)} from Clara`);
+    const list = await request(server()).get('/conversations').set(bearer(ben.token));
+    expect(list.body.find((c: { id: string }) => c.id === groupId).unreadMentions).toBe(1);
+    await request(server())
+      .delete(`/users/${anna.id}/block`)
+      .set(bearer(ben.token))
+      .expect((r) => expect(r.status).toBeLessThan(300));
+    const again = await request(server()).get('/conversations').set(bearer(ben.token));
+    expect(again.body.find((c: { id: string }) => c.id === groupId).unreadMentions).toBe(2);
+  });
 });
