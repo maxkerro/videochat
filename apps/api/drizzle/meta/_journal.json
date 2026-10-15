@@ -99,6 +99,13 @@
       "when": 1791992250980,
       "tag": "0013_group_calls",
       "breakpoints": true
+    },
+    {
+      "idx": 14,
+      "version": "7",
+      "when": 1792065537329,
+      "tag": "0014_message_search",
+      "breakpoints": true
     }
   ]
 }

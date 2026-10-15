@@ -22,7 +22,7 @@ import {
   type FormEvent,
   type KeyboardEvent,
 } from 'react';
-import { Link, useNavigate, useParams } from 'react-router';
+import { Link, useNavigate, useParams, useSearchParams } from 'react-router';
 import { Avatar, Button, Menu, Modal, useToast } from '../../components/ui';
 import { ApiError } from '../../lib/api';
 import { cx } from '../../lib/cx';
@@ -348,10 +348,19 @@ export function ChatPane() {
     onError: () => toast({ title: "Couldn't unblock that person", tone: 'danger' }),
   });
 
+  // CHAT-072: while jumping far back to a search result, older pages come in bigger chunks.
+  const jumpPageLimit = useRef<number | undefined>(undefined);
   const messagesQuery = useInfiniteQuery({
     queryKey: ['messages', conversationId],
     queryFn: ({ pageParam }) =>
-      withAuthRetry(auth, (token) => fetchMessages(token, conversationId!, pageParam)),
+      withAuthRetry(auth, (token) =>
+        fetchMessages(
+          token,
+          conversationId!,
+          pageParam,
+          pageParam !== undefined ? jumpPageLimit.current : undefined,
+        ),
+      ),
     enabled,
     retry: shouldRetryQuery,
     initialPageParam: undefined as number | undefined,
@@ -805,14 +814,20 @@ export function ChatPane() {
 
   /** CHAT-032 AC: a reply quote links to its original "even if it is far up in history" --
    *  older pages are loaded until it's in, then it's scrolled to and briefly highlighted. */
-  async function jumpTo(reply: ReplyPreview) {
+  async function jumpTo(reply: Pick<ReplyPreview, 'id'>) {
     const isLoaded = () =>
       (
         queryClient.getQueryData<MessagesData>(['messages', conversationId]) ?? { pages: [] }
       ).pages.some((page) => page.messages.some((m) => m.id === reply.id));
-    for (let i = 0; i < 40 && !isLoaded(); i++) {
-      const result = await messagesQuery.fetchPreviousPage();
-      if (!result.hasPreviousPage) break;
+    // Big pages while jumping (a search result can be thousands of messages back).
+    jumpPageLimit.current = LIMITS.messageJumpPageSize;
+    try {
+      for (let i = 0; i < 100 && !isLoaded(); i++) {
+        const result = await messagesQuery.fetchPreviousPage();
+        if (!result.hasPreviousPage) break;
+      }
+    } finally {
+      jumpPageLimit.current = undefined;
     }
     if (!isLoaded()) {
       toast({ title: 'That message is no longer available' });
@@ -828,6 +843,27 @@ export function ChatPane() {
       setTimeout(() => setHighlightId((id) => (id === reply.id ? null : id)), 2000);
     });
   }
+
+  // CHAT-072: opened from a search result (`?msg=<id>`): jump to that message once the history is
+  // in, then drop the parameter (so going back doesn't jump again).
+  const [searchParams, setSearchParams] = useSearchParams();
+  const targetMessage = searchParams.get('msg');
+  const historyReady = messagesQuery.isSuccess;
+  const jumpRef = useRef(jumpTo);
+  useEffect(() => {
+    jumpRef.current = jumpTo;
+  });
+  useEffect(() => {
+    if (!targetMessage || !historyReady) return;
+    void jumpRef.current({ id: targetMessage });
+    setSearchParams(
+      (params) => {
+        params.delete('msg');
+        return params;
+      },
+      { replace: true },
+    );
+  }, [targetMessage, historyReady, setSearchParams]);
 
   // CHAT-019: "Seen" for a direct conversation once the peer's own `lastReadSeq` catches up to
   // the latest message; "Seen by N" for a group, with the names available on hover (a native

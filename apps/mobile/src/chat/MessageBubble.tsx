@@ -18,6 +18,8 @@ interface Props {
   onReply: (message: Message) => void;
   onCopy: (message: Message) => void;
   onReact: (message: Message, emoji: string) => void;
+  /** CHAT-072: briefly outlined after jumping to it from search. */
+  highlighted?: boolean;
 }
 
 function ReplyQuote({ message, mine }: { message: Message; mine: boolean }) {
@@ -85,6 +87,7 @@ function MessageBubbleBase({
   onReply,
   onCopy,
   onReact,
+  highlighted = false,
 }: Props) {
   const t = useTheme();
 
@@ -129,6 +132,7 @@ function MessageBubbleBase({
               ? { backgroundColor: t.accent }
               : { backgroundColor: t.card, borderColor: t.border },
             !mine && styles.bubbleBorder,
+            highlighted && [styles.highlighted, { borderColor: mine ? t.text : t.accent }],
           ]}
         >
           {deleted ? (
@@ -173,6 +177,7 @@ const styles = StyleSheet.create({
   sender: { fontSize: 12, marginBottom: 2, marginLeft: 4 },
   bubble: { borderRadius: 16, paddingHorizontal: 12, paddingVertical: 8, gap: 4 },
   bubbleBorder: { borderWidth: StyleSheet.hairlineWidth },
+  highlighted: { borderWidth: 2 },
   quote: { borderLeftWidth: 3, paddingLeft: 8, marginBottom: 2 },
   meta: { fontSize: 11, alignSelf: 'flex-end', opacity: 0.8 },
   reactions: { flexDirection: 'row', flexWrap: 'wrap', gap: 4, marginTop: 2 },

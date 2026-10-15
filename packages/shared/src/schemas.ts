@@ -541,6 +541,8 @@ export const messagesPageQuerySchema = z
   .object({
     before: z.coerce.number().int().positive().optional(),
     after: z.coerce.number().int().nonnegative().optional(),
+    /** CHAT-072: bigger history pages, for jumping far back to a search result (`before` only). */
+    limit: z.coerce.number().int().min(1).max(LIMITS.messageJumpPageSize).optional(),
   })
   .refine((v) => v.before === undefined || v.after === undefined, {
     message: 'Pass only one of `before` or `after`',

@@ -199,3 +199,17 @@ the plan stops accepting connections until the next month (or upgrade to Ship).
 
 Locally: `docker compose --profile sfu up -d livekit` and the `LIVEKIT_*` dev values from
 `.env.example` (`ws://localhost:7880`, `devkey`, `secret`).
+
+## Message search (CHAT-072)
+
+`GET /search` uses a GIN expression index (`messages_search_idx`, migration `0014`) over the
+message text plus attachment file names, with the `simple` text configuration so every language
+is matched word by word (prefixes too: "budg" finds "budget"). Nothing to configure.
+
+- The migration builds the index with a plain `CREATE INDEX`, which locks writes to `messages`
+  while it runs: seconds for a small database. On a big one (millions of messages), create it by
+  hand first with `CREATE INDEX CONCURRENTLY` (the statement in `0014_message_search.sql`), then
+  deploy: the migration uses `IF NOT EXISTS`, so it skips an index that is already there.
+- Measured on 1,000,000 messages (local Postgres 16): rare words 11–45 ms, the most common word
+  ~250 ms, a two-letter prefix ~300 ms (the worst case), any search within one chat ~30 ms. Results
+  are always limited to chats the person is currently in, newest first, 30 per page.

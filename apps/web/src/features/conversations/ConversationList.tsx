@@ -1,4 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { MessageSearch } from '../search/MessageSearch';
 import {
   conversationReadEventSchema,
   messageSchema,
@@ -232,10 +233,10 @@ export function ConversationList() {
     <div className={styles.wrap}>
       <div className={styles.search}>
         <Input
-          label="Search conversations"
+          label="Search conversations and messages"
           hideLabel
           type="search"
-          placeholder="Search"
+          placeholder="Search chats and messages"
           value={query}
           onChange={(e) => setQuery(e.target.value)}
           leading={
@@ -350,6 +351,7 @@ export function ConversationList() {
           </ul>
         )}
       </nav>
+      <MessageSearch query={query} conversations={conversations} />
     </div>
   );
 }

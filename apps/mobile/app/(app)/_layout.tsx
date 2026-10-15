@@ -33,6 +33,7 @@ function ThemedStack() {
       <Stack.Screen name="c/[id]/index" options={{ headerShown: false }} />
       <Stack.Screen name="c/[id]/info" options={{ title: 'Chat info' }} />
       <Stack.Screen name="new" options={{ title: 'New chat' }} />
+      <Stack.Screen name="search" options={{ title: 'Search' }} />
       <Stack.Screen name="profile" options={{ title: 'Profile' }} />
       <Stack.Screen name="settings" options={{ title: 'Settings' }} />
     </Stack>

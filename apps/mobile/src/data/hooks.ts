@@ -1,10 +1,11 @@
 import { useQuery, type UseQueryResult } from '@tanstack/react-query';
-import type { ConversationSummary, MemberSummary } from '@videochat/shared';
+import { LIMITS, type ConversationSummary, type MemberSummary } from '@videochat/shared';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { getLocalStore } from '../db/expoDb';
 import type { OutboxItem } from '../db/store';
 import { session } from '../lib/api';
 import * as api from './api';
+import { loadUntilLoaded } from './jump';
 import { keys } from './keys';
 import { mergeLatestPage, prependOlder, type MessagesState } from './messagesState';
 import { queryClient, sameSession } from './queryClient';
@@ -60,6 +61,8 @@ export interface MessagesView {
   error: unknown;
   loadingOlder: boolean;
   loadOlder: () => Promise<void>;
+  /** CHAT-072: loads older history (in big pages) until this message is in; whether it is. */
+  loadUntil: (messageId: string) => Promise<boolean>;
 }
 
 const HYDRATE_COUNT = 200;
@@ -74,7 +77,7 @@ export function useMessages(id: string): MessagesView {
   const key = keys.messages(id);
   const refetchInterval = useLiveInterval(6_000, 30_000);
   const [loadingOlder, setLoadingOlder] = useState(false);
-  const busy = useRef(false);
+  const inflight = useRef<Promise<boolean> | null>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -105,27 +108,56 @@ export function useMessages(id: string): MessagesView {
     },
   });
 
+  const fetchPage = useCallback(
+    async (before: number, limit?: number): Promise<boolean> => {
+      const startedAt = session.generation();
+      try {
+        const page = await api.fetchMessages(id, before, limit);
+        // The account may have changed while the page was in flight (the cache was cleared then):
+        // writing now would resurrect the old account's messages in a fresh cache entry.
+        if (!sameSession(startedAt)) return false;
+        queryClient.setQueryData<MessagesState>(key, (old) => prependOlder(old, page));
+        bestEffort(getLocalStore().then((s) => s.saveMessages(id, page.messages)));
+        return true;
+      } catch {
+        // offline or a hiccup: the next scroll to the top tries again
+        return false;
+      }
+    },
+    [id, key],
+  );
+
+  /** One older page; whether it loaded. A page already on its way is waited for instead. */
+  const loadPage = useCallback(
+    (limit?: number): Promise<boolean> => {
+      if (inflight.current) return inflight.current;
+      const current = queryClient.getQueryData<MessagesState>(key);
+      const oldest = current?.messages[0];
+      if (!current || !oldest || !current.hasMore) return Promise.resolve(false);
+      const run = fetchPage(oldest.seq, limit).finally(() => {
+        inflight.current = null;
+        setLoadingOlder(false);
+      });
+      inflight.current = run;
+      setLoadingOlder(true);
+      return run;
+    },
+    [key, fetchPage],
+  );
+
   const loadOlder = useCallback(async () => {
-    const current = queryClient.getQueryData<MessagesState>(key);
-    const oldest = current?.messages[0];
-    if (!current || !oldest || !current.hasMore || busy.current) return;
-    busy.current = true;
-    setLoadingOlder(true);
-    const startedAt = session.generation();
-    try {
-      const page = await api.fetchMessages(id, oldest.seq);
-      // The account may have changed while the page was in flight (the cache was cleared then):
-      // writing now would resurrect the old account's messages in a fresh cache entry.
-      if (!sameSession(startedAt)) return;
-      queryClient.setQueryData<MessagesState>(key, (old) => prependOlder(old, page));
-      bestEffort(getLocalStore().then((s) => s.saveMessages(id, page.messages)));
-    } catch {
-      // offline or a hiccup: the next scroll to the top tries again
-    } finally {
-      busy.current = false;
-      setLoadingOlder(false);
-    }
-  }, [id, key]);
+    await loadPage();
+  }, [loadPage]);
+
+  const loadUntil = useCallback(
+    (messageId: string) =>
+      loadUntilLoaded(
+        messageId,
+        () => queryClient.getQueryData<MessagesState>(key),
+        () => loadPage(LIMITS.messageJumpPageSize),
+      ),
+    [key, loadPage],
+  );
 
   return {
     state: query.data,
@@ -133,6 +165,7 @@ export function useMessages(id: string): MessagesView {
     error: query.error,
     loadingOlder,
     loadOlder,
+    loadUntil,
   };
 }
 

@@ -149,12 +149,14 @@ export class MessagesService {
 
   /** CHAT-016: a cursor-paged page of history, oldest first. `beforeSeq` omitted loads the most
    *  recent page; otherwise the page immediately before that `seq`. */
-  async listPage(conversationId: string, userId: string, beforeSeq?: number): Promise<MessagePage> {
+  async listPage(
+    conversationId: string,
+    userId: string,
+    beforeSeq?: number,
+    limit: number = LIMITS.messageHistoryPageSize,
+  ): Promise<MessagePage> {
     await this.requireMember(conversationId, userId);
-    const { rows, hasMore } = await listMessagesPage(this.db, conversationId, {
-      beforeSeq,
-      limit: LIMITS.messageHistoryPageSize,
-    });
+    const { rows, hasMore } = await listMessagesPage(this.db, conversationId, { beforeSeq, limit });
     return { messages: await toMessages(this.db, rows), hasMore };
   }
 

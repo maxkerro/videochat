@@ -86,6 +86,13 @@ export default function Inbox() {
         options={{
           headerRight: () => (
             <View style={styles.headerButtons}>
+              <Pressable
+                accessibilityRole="button"
+                accessibilityLabel="Search messages"
+                onPress={() => router.push('/search')}
+              >
+                <Text style={{ color: t.accent, fontSize: 16, fontWeight: '600' }}>Search</Text>
+              </Pressable>
               <Pressable accessibilityRole="button" onPress={() => router.push('/new')}>
                 <Text style={{ color: t.accent, fontSize: 16, fontWeight: '600' }}>New</Text>
               </Pressable>

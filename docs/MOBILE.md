@@ -280,3 +280,10 @@ camera on the same video track (a call without a camera adds one, one renegotiat
 calls it is LiveKit's screen-share track, and a shared screen takes the main stage. The phone app
 only _views_ shared screens: full-size and letterboxed in a 1:1 call, above the tiles in a group
 call. Sharing from the phone is later.
+
+## Message search (CHAT-072)
+
+"Search" on the Chats screen searches the text and file names of every chat you're in; "Search in
+this chat" on a chat's info screen limits it to that chat. Filter chips narrow to files or photos
+and to the past week, month or year. Tapping a result opens the chat, loads history back to that
+message (200 at a time) and outlines it for a moment. Needs no native changes.

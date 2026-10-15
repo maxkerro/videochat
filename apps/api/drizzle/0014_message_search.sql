@@ -1,0 +1,1 @@
+CREATE INDEX IF NOT EXISTS "messages_search_idx" ON "messages" USING gin (to_tsvector('simple'::regconfig, coalesce(body, '') || ' ' || coalesce(meta->'attachment'->>'filename', '')));

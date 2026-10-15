@@ -96,6 +96,12 @@ export default function ChatInfo() {
       </View>
 
       <Button
+        title="Search in this chat"
+        kind="link"
+        onPress={() => router.push(`/search?in=${id}`)}
+      />
+
+      <Button
         title="Mark as unread"
         kind="link"
         onPress={() =>

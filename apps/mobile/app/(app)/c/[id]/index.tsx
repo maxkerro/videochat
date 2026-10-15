@@ -65,7 +65,7 @@ function fail(title: string, e: unknown) {
 }
 
 export default function ConversationScreen() {
-  const { id } = useLocalSearchParams<{ id: string }>();
+  const { id, msg } = useLocalSearchParams<{ id: string; msg?: string }>();
   const t = useTheme();
   const router = useRouter();
   const insets = useSafeAreaInsets();
@@ -114,6 +114,40 @@ export default function ConversationScreen() {
       }),
     [messages, outbox, uploading, myId, isGroup, conversation.data?.peerLastReadSeq],
   );
+
+  // CHAT-072: opened from a search result (`?msg=<id>`): load history back to that message, scroll
+  // to it and highlight it for a moment. The parameter is dropped so it happens once.
+  const listRef = useRef<FlatList<ChatRow>>(null);
+  const rowsRef = useRef(rows);
+  useEffect(() => {
+    rowsRef.current = rows;
+  }, [rows]);
+  const [highlightId, setHighlightId] = useState<string | null>(null);
+  const jumped = useRef<string | null>(null);
+  const hasHistory = messages !== undefined;
+  const { loadUntil } = view;
+  useEffect(() => {
+    if (!msg || !hasHistory || jumped.current === msg) return;
+    jumped.current = msg;
+    router.setParams({ msg: undefined });
+    void loadUntil(msg).then((found) => {
+      if (!found) {
+        Alert.alert('That message is no longer available');
+        return;
+      }
+      setHighlightId(msg);
+      setTimeout(() => setHighlightId((h) => (h === msg ? null : h)), 2500);
+      // The rows include it on the next render.
+      requestAnimationFrame(() => {
+        const index = rowsRef.current.findIndex(
+          (r) => r.kind === 'message' && r.message.id === msg,
+        );
+        if (index >= 0) {
+          listRef.current?.scrollToIndex({ index, viewPosition: 0.5, animated: true });
+        }
+      });
+    });
+  }, [msg, hasHistory, loadUntil, router]);
 
   // Reading: once the newest message is on screen and the app is in front, tell the server.
   const newestSeq = messages?.at(-1)?.seq ?? 0;
@@ -318,10 +352,11 @@ export default function ConversationScreen() {
           onReply={onReply}
           onCopy={onCopy}
           onReact={onReact}
+          highlighted={item.message.id === highlightId}
         />
       );
     },
-    [t, online, myId, names, onReact, onReply, onCopy],
+    [t, online, myId, names, onReact, onReply, onCopy, highlightId],
   );
 
   const title = conversation.data ? conversationTitle(conversation.data) : 'Chat';
@@ -399,8 +434,26 @@ export default function ConversationScreen() {
           </View>
         ) : (
           <FlatList
+            ref={listRef}
             style={styles.flex}
             data={rows}
+            extraData={highlightId}
+            onScrollToIndexFailed={(info) => {
+              // Rows have different heights: get close first, then try again once it's rendered.
+              listRef.current?.scrollToOffset({
+                offset: info.averageItemLength * info.index,
+                animated: false,
+              });
+              setTimeout(() => {
+                if (info.index < rowsRef.current.length) {
+                  listRef.current?.scrollToIndex({
+                    index: info.index,
+                    viewPosition: 0.5,
+                    animated: true,
+                  });
+                }
+              }, 150);
+            }}
             inverted
             keyExtractor={(r) => r.key}
             renderItem={renderItem}

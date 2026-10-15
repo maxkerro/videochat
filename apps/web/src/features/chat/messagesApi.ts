@@ -20,8 +20,13 @@ export function fetchMessages(
   accessToken: string,
   conversationId: string,
   before?: number,
+  /** CHAT-072: a bigger page, when jumping far back to a search result. */
+  limit?: number,
 ): Promise<MessagePage> {
-  const query = before !== undefined ? `?before=${before}` : '';
+  const params = new URLSearchParams();
+  if (before !== undefined) params.set('before', String(before));
+  if (limit !== undefined) params.set('limit', String(limit));
+  const query = params.size > 0 ? `?${params.toString()}` : '';
   return apiGet(`/conversations/${conversationId}/messages${query}`, messagePageSchema, {
     headers: authHeader(accessToken),
   });

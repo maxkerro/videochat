@@ -33,6 +33,15 @@ import {
   uuid,
 } from 'drizzle-orm/pg-core';
 
+/**
+ * CHAT-072: what message search matches -- the text and an attachment's file name. The `simple`
+ * configuration (no stemming, no stop words) because people write in several languages; searches
+ * match word prefixes instead. An expression (not a stored column), so rows stay as they were and
+ * edits/deletes (the body is wiped) are reflected with no application code; queries must use this
+ * exact expression for the index to apply.
+ */
+export const MESSAGE_SEARCH_VECTOR = sql`to_tsvector('simple'::regconfig, coalesce(body, '') || ' ' || coalesce(meta->'attachment'->>'filename', ''))`;
+
 /*
  * Schema v1 (CHAT-004).
  *
@@ -268,6 +277,7 @@ export const messages = pgTable(
       foreignColumns: [t.id],
       name: 'messages_reply_to_fk',
     }).onDelete('set null'),
+    index('messages_search_idx').using('gin', MESSAGE_SEARCH_VECTOR),
     check('messages_body_length_ck', sql`${t.body} IS NULL OR char_length(${t.body}) <= 4000`),
     check('messages_seq_positive_ck', sql`${t.seq} > 0`),
   ],

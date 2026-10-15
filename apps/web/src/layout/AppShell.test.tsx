@@ -96,6 +96,7 @@ function authedFetch(extra: Record<string, (url: URL, init?: RequestInit) => Res
   return routedFetch({
     'POST /auth/refresh': () => jsonResponse(session()),
     'GET /conversations': () => jsonResponse(conversations()),
+    'GET /search': () => jsonResponse({ results: [], nextCursor: null }),
     ...extra,
   });
 }
@@ -139,7 +140,7 @@ describe('App shell', () => {
     vi.stubGlobal('fetch', authedFetch());
     renderApp('/');
     await screen.findByRole('link', { name: /Clara Novak/ });
-    await userEvent.type(screen.getByLabelText('Search conversations'), 'clara');
+    await userEvent.type(screen.getByLabelText('Search conversations and messages'), 'clara');
     expect(screen.getByRole('link', { name: /Clara Novak/ })).toBeInTheDocument();
     expect(screen.queryByRole('link', { name: /Ben Okafor/ })).not.toBeInTheDocument();
   });
@@ -317,7 +318,10 @@ describe('App shell', () => {
     vi.stubGlobal('fetch', authedFetch());
     renderApp('/');
     await screen.findByRole('link', { name: /Ben Okafor/ });
-    await userEvent.type(screen.getByLabelText('Search conversations'), 'nobody-has-this-name');
+    await userEvent.type(
+      screen.getByLabelText('Search conversations and messages'),
+      'nobody-has-this-name',
+    );
     expect(screen.getByText('No conversations match "nobody-has-this-name".')).toBeInTheDocument();
     expect(screen.queryByRole('link', { name: /Ben Okafor/ })).not.toBeInTheDocument();
   });

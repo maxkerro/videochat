@@ -573,6 +573,35 @@ describe('ChatPane', () => {
     expect(await screen.findByText('msg one')).toBeInTheDocument();
   });
 
+  it('CHAT-072: opened at ?msg=<id>, loads big older pages until that message is in, then drops the parameter', async () => {
+    const limits: (string | null)[] = [];
+    vi.stubGlobal(
+      'fetch',
+      routedFetch({
+        'POST /auth/refresh': () => jsonResponse(session()),
+        [`GET /conversations/${conversationId}`]: () => jsonResponse(conversation()),
+        [`GET /conversations/${conversationId}/messages`]: (url) => {
+          const before = url.searchParams.get('before');
+          if (!before) {
+            return jsonResponse({
+              messages: [message({ id: 'D'.repeat(26), seq: 4, body: 'msg four' })],
+              hasMore: true,
+            });
+          }
+          limits.push(url.searchParams.get('limit'));
+          return jsonResponse({
+            messages: [message({ id: 'A'.repeat(26), seq: 1, body: 'the found one' })],
+            hasMore: false,
+          });
+        },
+      }),
+    );
+    const { router } = renderApp(`/c/${conversationId}?msg=${'A'.repeat(26)}`);
+    expect(await screen.findByText('the found one')).toBeInTheDocument();
+    expect(limits).toEqual(['200']);
+    await waitFor(() => expect(router.state.location.search).toBe(''));
+  });
+
   it('shows a growing "new messages" count instead of auto-jumping while scrolled away from the latest message', async () => {
     vi.stubGlobal(
       'fetch',

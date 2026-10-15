@@ -186,6 +186,35 @@ describe.skipIf(!hasInfra)('messages HTTP flow (CHAT-014)', () => {
     expect(olderThan1.body).toEqual({ messages: [], hasMore: false });
   });
 
+  it('CHAT-072: `limit` sets the page size (up to 200) and is validated', async () => {
+    const a = await signUpAndLogIn();
+    const b = await signUpAndLogIn();
+    const conversationId = await startDirectConversation(a, b);
+    for (let i = 1; i <= 4; i += 1) {
+      await request(server())
+        .post(`/conversations/${conversationId}/messages`)
+        .set(auth(a.accessToken))
+        .send({ clientMsgId: `c-limit-${i}`, body: `msg ${i}` })
+        .expect(201);
+    }
+
+    const page = await request(server())
+      .get(`/conversations/${conversationId}/messages`)
+      .query({ before: 4, limit: 2 })
+      .set(auth(a.accessToken))
+      .expect(200);
+    expect(page.body.messages.map((m: { seq: number }) => m.seq)).toEqual([2, 3]);
+    expect(page.body.hasMore).toBe(true);
+
+    for (const limit of [0, 201, 'x']) {
+      await request(server())
+        .get(`/conversations/${conversationId}/messages`)
+        .query({ limit })
+        .set(auth(a.accessToken))
+        .expect(400);
+    }
+  });
+
   it('rejects a non-numeric or non-positive `before` with 400', async () => {
     const a = await signUpAndLogIn();
     const b = await signUpAndLogIn();

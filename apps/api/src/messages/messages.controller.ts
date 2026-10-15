@@ -51,7 +51,7 @@ export class MessagesController {
     if (query.after !== undefined) {
       return this.messages.listAfter(conversationId, userId, query.after);
     }
-    return this.messages.listPage(conversationId, userId, query.before);
+    return this.messages.listPage(conversationId, userId, query.before, query.limit);
   }
 
   /** CHAT-021: rate-limited per signed-in user ("more than 20 messages in 10s" -- see

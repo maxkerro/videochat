@@ -14,6 +14,7 @@ import {
   messageSchema,
   renameConversationSchema,
   reportMessageSchema,
+  searchResponseSchema,
   sendMessageSchema,
   startDirectConversationSchema,
   updateProfileSchema,
@@ -25,12 +26,14 @@ import {
   type CreateAttachmentUploadInput,
   type CreateGroupConversationInput,
   type ReportMessageInput,
+  type SearchQuery,
   type SendMessageInput,
   type UpdateProfileInput,
   type UpdateSettingsInput,
 } from '@videochat/shared';
 import { z } from 'zod';
 import { UploadError } from '../lib/errors';
+import { queryString } from './search';
 import { apiDelete, apiGet, apiPatch, apiPost, apiPut, apiUpload, session } from '../lib/api';
 
 // Conversations ------------------------------------------------------------------------------
@@ -97,10 +100,16 @@ export const setConversationMuted = (id: string, muted: boolean) =>
 
 // Messages -----------------------------------------------------------------------------------
 
-/** `before`: the `seq` of the oldest message already loaded. Omit it for the newest page. */
-export function fetchMessages(conversationId: string, before?: number) {
-  const query = before !== undefined ? `?before=${before}` : '';
+/** `before`: the `seq` of the oldest message already loaded. Omit it for the newest page.
+ *  `limit`: a bigger page, for jumping far back to a search result (CHAT-072). */
+export function fetchMessages(conversationId: string, before?: number, limit?: number) {
+  const query = queryString({ before, limit });
   return apiGet(`/conversations/${conversationId}/messages${query}`, messagePageSchema);
+}
+
+/** CHAT-072: search the messages and files of every conversation you're in. */
+export function searchMessages(query: SearchQuery) {
+  return apiGet(`/search${queryString({ ...query })}`, searchResponseSchema);
 }
 
 /** `clientMsgId` makes a retry safe: the server returns the original instead of a duplicate. */
