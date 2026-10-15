@@ -55,6 +55,7 @@ function makeUser(overrides: Partial<User> = {}): User {
     notifyEnabled: true,
     notifySound: true,
     notifyPreviews: true,
+    notifyMentions: true,
     theme: 'system' as const,
     deletedAt: null,
     passwordChangedAt: null,

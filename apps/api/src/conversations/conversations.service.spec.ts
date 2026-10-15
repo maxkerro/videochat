@@ -48,6 +48,7 @@ function makeUser(overrides: Partial<Record<string, unknown>> = {}) {
     notifyEnabled: true,
     notifySound: true,
     notifyPreviews: true,
+    notifyMentions: true,
     theme: 'system' as const,
     deletedAt: null,
     passwordChangedAt: null,

@@ -106,7 +106,10 @@ export function applyRealtimeEvent(envelope: WsEnvelope, ctx: EventContext): voi
       if (!parsed.success) return;
       const { conversationId, userId, lastReadSeq } = parsed.data;
       const patch = (c: ConversationSummary): ConversationSummary => {
-        if (userId === ctx.myId) return { ...c, lastReadSeq };
+        // CHAT-073: all read clears the unread mentions; part of it needs the server's count.
+        if (userId === ctx.myId) {
+          return { ...c, lastReadSeq, ...(lastReadSeq >= c.lastSeq ? { unreadMentions: 0 } : {}) };
+        }
         return c.peer?.id === userId ? { ...c, peerLastReadSeq: lastReadSeq } : c;
       };
       queryClient.setQueryData<ConversationSummary>(keys.conversation(conversationId), (old) =>
@@ -118,6 +121,12 @@ export function applyRealtimeEvent(envelope: WsEnvelope, ctx: EventContext): voi
       queryClient.setQueryData<MemberSummary[]>(keys.members(conversationId), (old) =>
         old?.map((m) => (m.userId === userId ? { ...m, lastReadSeq } : m)),
       );
+      if (userId === ctx.myId) {
+        const c = queryClient
+          .getQueryData<ConversationSummary[]>(keys.conversations)
+          ?.find((x) => x.id === conversationId);
+        if (c && c.unreadMentions > 0) refreshInbox();
+      }
       return;
     }
     case 'conversation.typing': {

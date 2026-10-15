@@ -29,6 +29,7 @@ export function toConversationSummary(
     peer,
     peerLastReadSeq,
     lastMessage: toLastMessagePreview('lastMessage' in row ? row.lastMessage : undefined),
+    unreadMentions: ('unreadMentions' in row ? row.unreadMentions : undefined) ?? 0,
   };
 }
 

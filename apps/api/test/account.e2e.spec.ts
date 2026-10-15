@@ -47,18 +47,18 @@ describe.skipIf(!hasInfra)('settings and account (CHAT-037)', () => {
     expect((await me(anna)).settings).toEqual({
       readReceipts: true,
       lastSeenVisibility: 'everyone',
-      notifications: { enabled: true, sound: true, previews: true },
+      notifications: { enabled: true, sound: true, previews: true, mentions: true },
       theme: 'system',
     });
     const otherDevice = await connect(anna);
     const res = await request(server())
       .patch('/me/settings')
       .set(bearer(anna.token))
-      .send({ theme: 'dark', notifications: { previews: false } })
+      .send({ theme: 'dark', notifications: { previews: false, mentions: false } })
       .expect(200);
     expect(res.body.settings).toMatchObject({
       theme: 'dark',
-      notifications: { enabled: true, sound: true, previews: false },
+      notifications: { enabled: true, sound: true, previews: false, mentions: false },
     });
     await otherDevice.waitFor(
       'me.updated',

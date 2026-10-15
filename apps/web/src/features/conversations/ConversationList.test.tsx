@@ -1,4 +1,5 @@
 import { screen, waitFor, within } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
 import { makeEnvelope } from '@videochat/shared';
 import { jsonResponse } from '../../test/mockFetch';
 import { renderApp } from '../../test/renderApp';
@@ -179,6 +180,56 @@ describe('ConversationList', () => {
     expect(within(benLink).getByLabelText('1 unread')).toBeInTheDocument();
   });
 
+  it('CHAT-073: shows unread mentions, filters to them, and counts a live mention', async () => {
+    const groupId = '66666666-6666-4666-8666-666666666666';
+    const group = {
+      id: groupId,
+      type: 'group' as const,
+      title: 'Team',
+      lastSeq: 4,
+      lastMessageAt: '2026-01-01T08:00:00.000Z',
+      role: 'member' as const,
+      lastReadSeq: 2,
+      peer: null,
+      unreadMentions: 1,
+    };
+    vi.stubGlobal(
+      'fetch',
+      routedFetch({
+        'POST /auth/refresh': () => jsonResponse(session()),
+        'GET /conversations': () => jsonResponse([claraConversation(), benConversation(), group]),
+      }),
+    );
+    renderApp('/');
+    const teamLink = await screen.findByRole('link', { name: /Team/ });
+    expect(within(teamLink).getByLabelText('1 unread mention')).toBeInTheDocument();
+
+    await userEvent.click(screen.getByRole('button', { name: /Mentions/ }));
+    expect(screen.queryByRole('link', { name: /Ben Okafor/ })).not.toBeInTheDocument();
+    expect(screen.getByRole('link', { name: /Team/ })).toBeInTheDocument();
+
+    await waitFor(() => expect(FakeWebSocket.instances).toHaveLength(1));
+    const socket = FakeWebSocket.instances[0]!;
+    socket.emit('open');
+    const incoming = {
+      ...baseMessage(),
+      conversationId: groupId,
+      seq: 5,
+      body: '@anna again',
+      mentions: [baseUser.id],
+    };
+    socket.emit('message', {
+      data: JSON.stringify(makeEnvelope('message.new', incoming, incoming.id)),
+    });
+    expect(
+      await within(screen.getByRole('link', { name: /Team/ })).findByLabelText('2 unread mentions'),
+    ).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /Mentions/ })).toHaveTextContent('Mentions 2');
+
+    await userEvent.click(screen.getByRole('button', { name: 'All' }));
+    expect(screen.getByRole('link', { name: /Ben Okafor/ })).toBeInTheDocument();
+  });
+
   it('does not mark our own outgoing message as unread in the inbox', async () => {
     // Includes a second conversation (Clara's, with an earlier lastMessageAt) so there's a
     // positive signal to wait on -- Ben's conversation moving to the top -- before asserting the
@@ -297,6 +348,7 @@ describe('previewFor (CHAT-030 attachments)', () => {
     peer: null,
     peerLastReadSeq: null,
     muted: false,
+    unreadMentions: 0,
   };
 
   it('previews a photo, a file and a captioned attachment', () => {
@@ -331,6 +383,7 @@ describe('previewFor drafts (CHAT-036)', () => {
       peer: null,
       peerLastReadSeq: null,
       muted: false,
+      unreadMentions: 0,
       lastMessage: { type: 'text' as const, senderId: 'x', body: 'hi' },
     };
     expect(previewFor(c, 'me', 'see you\n at 5')).toBe('Draft: see you at 5');

@@ -1,0 +1,1 @@
+ALTER TABLE "users" ADD COLUMN "notify_mentions" boolean DEFAULT true NOT NULL;

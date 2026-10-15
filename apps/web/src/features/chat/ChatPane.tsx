@@ -51,6 +51,7 @@ import { askForPushAfterFirstSend } from '../notifications/push';
 import { useViewingReporter } from '../notifications/useViewingReporter';
 import { CallHistoryEntry } from '../calls/CallHistoryEntry';
 import { useAuth, withAuthRetry } from '../auth/AuthContext';
+import { MentionSuggestions, useMentionAutocomplete } from './MentionSuggestions';
 import { linkify } from './linkify';
 import {
   appendToLatestPage,
@@ -314,6 +315,16 @@ export function ChatPane() {
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [dragging, setDragging] = useState(false);
   const composerPreview = useComposerLinkPreview(draft);
+  // CHAT-073: "@" in a group offers its members.
+  const composerRef = useRef<HTMLTextAreaElement>(null);
+  const mentionAutocomplete = useMentionAutocomplete({
+    text: draft,
+    setText: setDraft,
+    members: membersQuery.data ?? [],
+    myUserId: auth.user?.id,
+    enabled: conversationQuery.data?.type === 'group',
+    inputRef: composerRef,
+  });
   const attachmentUploads = useAttachmentUploads({
     conversationId,
     onSent: (message) => {
@@ -547,7 +558,13 @@ export function ChatPane() {
             queryClient.setQueryData(['conversation', targetConversationId], summary);
             queryClient.setQueryData<ConversationSummary[]>(['conversations'], (list) =>
               list?.map((c) =>
-                c.id === targetConversationId ? { ...c, lastReadSeq: summary.lastReadSeq } : c,
+                c.id === targetConversationId
+                  ? {
+                      ...c,
+                      lastReadSeq: summary.lastReadSeq,
+                      unreadMentions: summary.unreadMentions,
+                    }
+                  : c,
               ),
             );
           })
@@ -726,6 +743,7 @@ export function ChatPane() {
   }
 
   function handleKeyDown(event: KeyboardEvent<HTMLTextAreaElement>) {
+    if (mentionAutocomplete.onKeyDown(event)) return;
     if (event.key === 'Enter' && !event.shiftKey) {
       event.preventDefault();
       event.currentTarget.form?.requestSubmit();
@@ -748,6 +766,14 @@ export function ChatPane() {
   );
   const isGroupAdmin =
     conversationQuery.data?.type === 'group' && conversationQuery.data.role === 'admin';
+  // CHAT-073: for highlighting @mentions.
+  const usernameFor = useCallback(
+    (userId: string) =>
+      userId === auth.user?.id
+        ? auth.user.username
+        : membersQuery.data?.find((m) => m.userId === userId)?.username,
+    [auth.user?.id, auth.user?.username, membersQuery.data],
+  );
 
   function startReply(message: Message) {
     setEditingId(null);
@@ -1097,6 +1123,7 @@ export function ChatPane() {
                           highlighted={highlightId === row.message.id}
                           editing={editingId === row.message.id}
                           nameFor={nameFor}
+                          usernameFor={usernameFor}
                           onReply={startReply}
                           onStartEdit={(m) => setEditingId(m.id)}
                           onCancelEdit={() => setEditingId(null)}
@@ -1202,6 +1229,11 @@ export function ChatPane() {
         </div>
       )}
 
+      <MentionSuggestions
+        options={mentionAutocomplete.options}
+        index={mentionAutocomplete.index}
+        onPick={mentionAutocomplete.pick}
+      />
       <form className={styles.composer} onSubmit={handleSubmit}>
         <input
           ref={fileInputRef}
@@ -1237,14 +1269,18 @@ export function ChatPane() {
         </label>
         <textarea
           id="composer"
+          ref={composerRef}
           className={styles.input}
           rows={1}
           placeholder="Write a message…"
           value={draft}
           maxLength={LIMITS.messageMaxLength}
+          {...mentionAutocomplete.inputProps}
+          onSelect={mentionAutocomplete.track}
           onChange={(event) => {
             const value = event.target.value;
             setDraft(value);
+            mentionAutocomplete.track(event);
             // AC: "throttled to one per 3s per user" -- only while there's actually something
             // being typed; clearing the composer (or never having typed anything) sends nothing.
             if (value.trim() && conversationId) typingThrottle.notifyTyping(conversationId);

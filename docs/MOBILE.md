@@ -287,3 +287,11 @@ call. Sharing from the phone is later.
 this chat" on a chat's info screen limits it to that chat. Filter chips narrow to files or photos
 and to the past week, month or year. Tapping a result opens the chat, loads history back to that
 message (200 at a time) and outlines it for a moment. Needs no native changes.
+
+## @mentions (CHAT-073)
+
+In a group, typing "@" in the composer lists matching members (by username or name); tap one to
+insert `@username`. Messages that mention you are marked with an accent edge and your name is
+highlighted. Chats with unread mentions show an "@" badge, and a "Mentions" filter appears on the
+Chats screen while there are any. Being mentioned notifies you even in a muted group; Settings →
+"Mentions in muted chats" turns that off. Needs no native changes.

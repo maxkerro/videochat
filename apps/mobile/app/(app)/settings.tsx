@@ -196,6 +196,11 @@ export default function Settings() {
         value={s.notifications.previews}
         onChange={(previews) => void save({ notifications: { previews } })}
       />
+      <ToggleRow
+        label="Mentions in muted chats"
+        value={s.notifications.mentions}
+        onChange={(mentions) => void save({ notifications: { mentions } })}
+      />
 
       <Heading>Appearance</Heading>
       <Choice

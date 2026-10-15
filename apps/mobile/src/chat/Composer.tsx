@@ -1,4 +1,11 @@
-import { LIMITS, type Message } from '@videochat/shared';
+import {
+  activeMention,
+  insertMention,
+  LIMITS,
+  matchMembers,
+  type MemberSummary,
+  type Message,
+} from '@videochat/shared';
 import { useState } from 'react';
 import { Pressable, StyleSheet, Text, TextInput, View } from 'react-native';
 import { useTheme } from '../ui/theme';
@@ -11,6 +18,9 @@ export interface ComposerProps {
   onTyping?: () => void;
   onAttach: () => void;
   onCancelContext: () => void;
+  /** CHAT-073: a group's members, offered after typing "@" (omit for a direct chat). */
+  members?: MemberSummary[];
+  myId?: string;
 }
 
 function quotePreview(m: Message): string {
@@ -25,9 +35,28 @@ export function Composer({
   onTyping,
   onAttach,
   onCancelContext,
+  members,
+  myId,
 }: ComposerProps) {
   const t = useTheme();
   const [text, setText] = useState('');
+  // CHAT-073: where the caret is, for "@" suggestions; `forced` moves it after picking a name.
+  const [caret, setCaret] = useState<number | null>(null);
+  const [forced, setForced] = useState<{ start: number; end: number } | undefined>(undefined);
+  const [dismissedAt, setDismissedAt] = useState<number | null>(null);
+  const mention = members && caret !== null ? activeMention(text, caret) : null;
+  const suggestions =
+    mention && mention.start !== dismissedAt
+      ? matchMembers(members ?? [], mention.query, myId ?? null, 5)
+      : [];
+
+  function pickMention(member: MemberSummary) {
+    if (!mention || caret === null) return;
+    const next = insertMention(text, mention.start, caret, member.username);
+    setText(next.text);
+    setCaret(next.caret);
+    setForced({ start: next.caret, end: next.caret });
+  }
 
   // Starting an edit puts the message's text in the box (adjusting state while rendering, the
   // supported way to reset state when a prop changes).
@@ -82,6 +111,33 @@ export function Composer({
           </Pressable>
         </View>
       ) : null}
+      {suggestions.length > 0 ? (
+        <View
+          accessibilityLabel="Mention someone"
+          style={[styles.mentions, { borderColor: t.border, backgroundColor: t.bg }]}
+        >
+          {suggestions.map((m) => (
+            <Pressable
+              key={m.userId}
+              accessibilityRole="button"
+              accessibilityLabel={`Mention ${m.displayName}`}
+              onPress={() => pickMention(m)}
+              style={styles.mention}
+            >
+              <Text style={{ color: t.text, fontWeight: '600' }}>{m.displayName}</Text>
+              <Text style={{ color: t.muted }}>@{m.username}</Text>
+            </Pressable>
+          ))}
+          <Pressable
+            accessibilityRole="button"
+            accessibilityLabel="Close suggestions"
+            onPress={() => setDismissedAt(mention!.start)}
+            style={styles.mention}
+          >
+            <Text style={{ color: t.muted }}>Close</Text>
+          </Pressable>
+        </View>
+      ) : null}
       <View style={styles.row}>
         {!editing ? (
           <Pressable
@@ -99,6 +155,11 @@ export function Composer({
           onChangeText={(value) => {
             setText(value);
             if (!editing && value.trim().length > 0) onTyping?.();
+          }}
+          selection={forced}
+          onSelectionChange={(e) => {
+            setCaret(e.nativeEvent.selection.end);
+            if (forced) setForced(undefined);
           }}
           placeholder="Message"
           placeholderTextColor={t.muted}
@@ -146,5 +207,7 @@ const styles = StyleSheet.create({
     paddingBottom: 10,
     fontSize: 16,
   },
+  mentions: { borderWidth: 1, borderRadius: 12, overflow: 'hidden' },
+  mention: { flexDirection: 'row', gap: 8, paddingHorizontal: 12, paddingVertical: 10 },
   send: { height: 40, borderRadius: 20, paddingHorizontal: 16, justifyContent: 'center' },
 });

@@ -90,5 +90,6 @@ export function toMessage(
       : {}),
     ...(replyTarget && !row.deletedAt ? { replyTo: toReplyPreview(replyTarget) } : {}),
     ...(reactions?.length && !row.deletedAt ? { reactions } : {}),
+    ...(row.meta?.mentions?.length && !row.deletedAt ? { mentions: row.meta.mentions } : {}),
   };
 }

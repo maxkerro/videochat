@@ -455,3 +455,21 @@
     grid-template-columns: repeat(6, 1fr);
   }
 }
+
+/* CHAT-073: @mentions */
+.mention {
+  font-weight: 600;
+  color: var(--color-accent);
+}
+.own .mention {
+  color: inherit;
+  text-decoration: underline;
+}
+.mentionMe {
+  background: var(--color-accent-soft);
+  border-radius: var(--radius-sm);
+  padding: 0 2px;
+}
+.mentionsMe .bubble {
+  border-left: 3px solid var(--color-accent);
+}

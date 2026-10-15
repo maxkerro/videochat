@@ -62,6 +62,9 @@ export const userSettingsSchema = z.object({
     sound: z.boolean(),
     /** Off: notifications say "New message" instead of showing the text. */
     previews: z.boolean(),
+    /** CHAT-073: on: being @mentioned notifies you even in a chat you muted. Defaults so older
+     *  cached/mocked responses without it still parse. */
+    mentions: z.boolean().default(true),
   }),
   theme: z.enum(THEME_PREFERENCES),
 });
@@ -70,7 +73,7 @@ export type UserSettings = z.infer<typeof userSettingsSchema>;
 export const DEFAULT_USER_SETTINGS: UserSettings = {
   readReceipts: true,
   lastSeenVisibility: 'everyone',
-  notifications: { enabled: true, sound: true, previews: true },
+  notifications: { enabled: true, sound: true, previews: true, mentions: true },
   theme: 'system',
 };
 
@@ -78,7 +81,14 @@ export const DEFAULT_USER_SETTINGS: UserSettings = {
 export const updateSettingsSchema = z.object({
   readReceipts: z.boolean().optional(),
   lastSeenVisibility: z.enum(LAST_SEEN_VISIBILITY).optional(),
-  notifications: userSettingsSchema.shape.notifications.partial().optional(),
+  notifications: z
+    .object({
+      enabled: z.boolean().optional(),
+      sound: z.boolean().optional(),
+      previews: z.boolean().optional(),
+      mentions: z.boolean().optional(),
+    })
+    .optional(),
   theme: z.enum(THEME_PREFERENCES).optional(),
 });
 export type UpdateSettingsInput = z.infer<typeof updateSettingsSchema>;
@@ -270,6 +280,8 @@ export const conversationSummarySchema = z.object({
   peerLastReadSeq: z.number().int().nonnegative().nullable().default(null),
   /** CHAT-035: notifications for this conversation are off. */
   muted: z.boolean().default(false),
+  /** CHAT-073: unread messages that @mention you (groups). */
+  unreadMentions: z.number().int().nonnegative().default(0),
   /** CHAT-044 (and CHAT-015's "last message preview"): the newest message, for the inbox
    *  preview line. Null for a conversation with no messages yet; defaults to null so older
    *  cached/mocked responses without this field still parse. */
@@ -509,6 +521,8 @@ export const messageSchema = z.object({
   replyTo: replyPreviewSchema.optional(),
   /** CHAT-033: grouped by emoji, in the order each was first used. Omitted when there are none. */
   reactions: z.array(reactionSchema).optional(),
+  /** CHAT-073: ids of the group members this message @mentions. Omitted when there are none. */
+  mentions: z.array(z.uuid()).optional(),
 });
 export type Message = z.infer<typeof messageSchema>;
 

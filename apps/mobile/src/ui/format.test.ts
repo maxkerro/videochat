@@ -26,6 +26,7 @@ const conv = (extra: Partial<ConversationSummary> = {}): ConversationSummary => 
   peer: { id: PEER, username: 'anna', displayName: 'Anna', avatarUrl: null },
   peerLastReadSeq: null,
   muted: false,
+  unreadMentions: 0,
   lastMessage: null,
   ...extra,
 });

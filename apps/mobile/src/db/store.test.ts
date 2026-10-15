@@ -19,6 +19,7 @@ function conversation(id: string, extra: Partial<ConversationSummary> = {}): Con
     peer: null,
     peerLastReadSeq: null,
     muted: false,
+    unreadMentions: 0,
     lastMessage: null,
     ...extra,
   };

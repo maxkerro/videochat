@@ -213,3 +213,10 @@ is matched word by word (prefixes too: "budg" finds "budget"). Nothing to config
 - Measured on 1,000,000 messages (local Postgres 16): rare words 11–45 ms, the most common word
   ~250 ms, a two-letter prefix ~300 ms (the worst case), any search within one chat ~30 ms. Results
   are always limited to chats the person is currently in, newest first, 30 per page.
+
+## @mentions (CHAT-073)
+
+Migration `0015` adds `users.notify_mentions` (default on): a plain `ADD COLUMN ... DEFAULT`, no
+table rewrite. Mentions are resolved on send and edit to the ids of current group members and
+stored in `messages.meta.mentions`; the inbox's unread-mention count only scans each chat's unread
+range of the `(conversation_id, seq)` index. Nothing to configure.

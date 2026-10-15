@@ -129,6 +129,75 @@ export interface ConversationListRow extends ConversationWithMembership {
   peerLastReadSeq?: number;
   /** CHAT-044: the newest message, for the inbox preview (undefined if there are none). */
   lastMessage?: MessageRow;
+  /** CHAT-073: unread messages that @mention this user. */
+  unreadMentions?: number;
+}
+
+/** CHAT-073: per conversation, how many of `userId`'s unread messages @mention them. One query;
+ *  each conversation only scans its unread range of the `(conversation_id, seq)` index. */
+async function loadUnreadMentions(
+  db: DbExecutor,
+  userId: string,
+  conversationIds: string[],
+): Promise<Map<string, number>> {
+  if (conversationIds.length === 0) return new Map();
+  const rows = await db
+    .select({ conversationId: messages.conversationId, count: sql<number>`count(*)::int` })
+    .from(messages)
+    .innerJoin(
+      memberships,
+      and(
+        eq(memberships.conversationId, messages.conversationId),
+        eq(memberships.userId, userId),
+        isNull(memberships.leftAt),
+      ),
+    )
+    .where(
+      and(
+        inArray(messages.conversationId, conversationIds),
+        sql`${messages.seq} > ${memberships.lastReadSeq}`,
+        isNull(messages.deletedAt),
+        sql`${messages.meta} -> 'mentions' ? ${userId}`,
+      ),
+    )
+    .groupBy(messages.conversationId);
+  return new Map(rows.map((r) => [r.conversationId, r.count]));
+}
+
+/** CHAT-073: 'direct' or 'group' (undefined for an unknown id). */
+export async function findConversationType(
+  db: DbExecutor,
+  conversationId: string,
+): Promise<Conversation['type'] | undefined> {
+  const [row] = await db
+    .select({ type: conversations.type })
+    .from(conversations)
+    .where(eq(conversations.id, conversationId))
+    .limit(1);
+  return row?.type;
+}
+
+/** CHAT-073: the current members (other than `senderId`) with these usernames, as ids. */
+export async function findMentionedMembers(
+  db: DbExecutor,
+  conversationId: string,
+  usernames: string[],
+  senderId: string,
+): Promise<string[]> {
+  if (usernames.length === 0) return [];
+  const rows = await db
+    .select({ userId: memberships.userId })
+    .from(memberships)
+    .innerJoin(users, eq(users.id, memberships.userId))
+    .where(
+      and(
+        eq(memberships.conversationId, conversationId),
+        isNull(memberships.leftAt),
+        inArray(users.username, usernames),
+        ne(memberships.userId, senderId),
+      ),
+    );
+  return rows.map((r) => r.userId);
 }
 
 /** CHAT-044: each conversation's newest message, keyed by conversation id. One query for the
@@ -181,6 +250,10 @@ export async function findConversationForUser(
       ? (await loadDirectPeers(db, [conversationId], userId)).get(conversationId)
       : undefined;
   const lastMessage = (await loadLastMessages(db, [conversationId])).get(conversationId);
+  const unreadMentions =
+    row.conversation.type === 'group'
+      ? ((await loadUnreadMentions(db, userId, [conversationId])).get(conversationId) ?? 0)
+      : 0;
   return {
     ...row.conversation,
     role: row.role,
@@ -189,6 +262,7 @@ export async function findConversationForUser(
     peer: peerEntry?.user,
     peerLastReadSeq: peerEntry?.lastReadSeq,
     lastMessage,
+    unreadMentions,
   };
 }
 
@@ -222,6 +296,11 @@ export async function listConversationsForUser(
     db,
     rows.map((r) => r.conversation.id),
   );
+  const unreadMentions = await loadUnreadMentions(
+    db,
+    userId,
+    rows.filter((r) => r.conversation.type === 'group').map((r) => r.conversation.id),
+  );
 
   return rows.map((r) => {
     const peerEntry = peersByConversationId.get(r.conversation.id);
@@ -233,6 +312,7 @@ export async function listConversationsForUser(
       peer: peerEntry?.user,
       peerLastReadSeq: peerEntry?.lastReadSeq,
       lastMessage: lastMessages.get(r.conversation.id),
+      unreadMentions: unreadMentions.get(r.conversation.id) ?? 0,
     };
   });
 }
@@ -627,6 +707,31 @@ export async function listNotifiableMembers(
         isNull(memberships.leftAt),
         sql`(${memberships.mutedUntil} is null or ${memberships.mutedUntil} <= ${now})`,
         ...(excludeUserId ? [sql`${memberships.userId} <> ${excludeUserId}`] : []),
+      ),
+    );
+  return rows.map((r) => r.userId);
+}
+
+/** CHAT-073: of `userIds`, the current members who muted this conversation and still want
+ *  @mentions to reach them (their "mentions" notification setting). */
+export async function listMutedMentionRecipients(
+  db: DbExecutor,
+  conversationId: string,
+  userIds: string[],
+  now: Date = new Date(),
+): Promise<string[]> {
+  if (userIds.length === 0) return [];
+  const rows = await db
+    .select({ userId: memberships.userId })
+    .from(memberships)
+    .innerJoin(users, eq(users.id, memberships.userId))
+    .where(
+      and(
+        eq(memberships.conversationId, conversationId),
+        inArray(memberships.userId, userIds),
+        isNull(memberships.leftAt),
+        sql`${memberships.mutedUntil} > ${now}`,
+        eq(users.notifyMentions, true),
       ),
     );
   return rows.map((r) => r.userId);

@@ -19,6 +19,7 @@ const conversation: ConversationSummary = {
   peer: null,
   peerLastReadSeq: null,
   muted: false,
+  unreadMentions: 0,
   lastMessage: null,
 };
 

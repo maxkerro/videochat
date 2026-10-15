@@ -87,6 +87,8 @@ export const users = pgTable(
     notifyEnabled: boolean('notify_enabled').notNull().default(true),
     notifySound: boolean('notify_sound').notNull().default(true),
     notifyPreviews: boolean('notify_previews').notNull().default(true),
+    /** CHAT-073: an @mention notifies even in a muted chat. */
+    notifyMentions: boolean('notify_mentions').notNull().default(true),
     theme: themePreference('theme').notNull().default('system'),
     /** CHAT-037: set when the account was deleted (personal data already erased). */
     deletedAt: timestamp('deleted_at', { withTimezone: true }),
@@ -262,6 +264,8 @@ export const messages = pgTable(
       linkPreview?: LinkPreview;
       /** CHAT-031: the sender removed the preview; it's never added back to this message. */
       linkPreviewDismissed?: boolean;
+      /** CHAT-073: ids of the members the text @mentions (resolved when sent or edited). */
+      mentions?: string[];
     }>(),
   },
   (t) => [

@@ -1279,6 +1279,90 @@ describe('ChatPane', () => {
     });
   });
 
+  describe('CHAT-073 mentions', () => {
+    const groupId = '99999999-9999-4999-8999-999999999999';
+    const members = [baseUser, peer, otherPeer].map((u, i) => ({
+      userId: u.id,
+      username: u.username,
+      displayName: u.displayName,
+      avatarUrl: null,
+      role: i === 0 ? 'admin' : 'member',
+      joinedAt: '2026-01-01T00:00:00.000Z',
+    }));
+
+    function setUp(messages: unknown[], onSend?: (body: unknown) => void) {
+      vi.stubGlobal(
+        'fetch',
+        routedFetch({
+          'POST /auth/refresh': () => jsonResponse(session()),
+          [`GET /conversations/${groupId}`]: () =>
+            jsonResponse({
+              id: groupId,
+              type: 'group',
+              title: 'Team',
+              lastSeq: messages.length,
+              lastMessageAt: '2026-01-01T10:00:00.000Z',
+              role: 'admin',
+              lastReadSeq: messages.length,
+              peer: null,
+            }),
+          [`GET /conversations/${groupId}/messages`]: () =>
+            jsonResponse({ messages, hasMore: false }),
+          [`GET /conversations/${groupId}/members`]: () => jsonResponse(members),
+          [`POST /conversations/${groupId}/messages`]: (_url, init) => {
+            const body = JSON.parse(String(init?.body));
+            onSend?.(body);
+            return jsonResponse(
+              message({ id: 'N'.repeat(26), conversationId: groupId, seq: 9, body: body.body }),
+            );
+          },
+        }),
+      );
+      renderApp(`/c/${groupId}`);
+    }
+
+    it('offers members after "@", picks with the keyboard and sends the mention', async () => {
+      let sent: { body?: string } | undefined;
+      setUp([], (b) => (sent = b as { body: string }));
+      await screen.findByRole('heading', { name: 'Team' });
+      const input = screen.getByLabelText('Message');
+      await userEvent.type(input, 'hi @');
+      const list = await screen.findByRole('listbox', { name: 'Mention someone' });
+      // Everyone but me.
+      expect(within(list).getAllByRole('option')).toHaveLength(2);
+
+      await userEvent.type(input, 'cl');
+      expect(within(list).getAllByRole('option')).toHaveLength(1);
+      expect(input).toHaveAttribute('aria-activedescendant', `mention-${otherPeer.id}`);
+      await userEvent.keyboard('{Enter}');
+      expect(input).toHaveValue('hi @clara ');
+      expect(screen.queryByRole('listbox')).not.toBeInTheDocument();
+
+      await userEvent.type(input, 'and @b{ArrowDown}{Escape}');
+      expect(screen.queryByRole('listbox')).not.toBeInTheDocument();
+      await userEvent.keyboard('{Enter}');
+      await waitFor(() => expect(sent?.body).toBe('hi @clara and @b'));
+    });
+
+    it('highlights mentions, and the whole message when it mentions me', async () => {
+      setUp([
+        message({
+          id: 'M'.repeat(26),
+          conversationId: groupId,
+          body: '@anna and @clara, look',
+          mentions: [baseUser.id, otherPeer.id],
+        } as Partial<ReturnType<typeof baseMessage>>),
+      ]);
+      const me = await screen.findByText('@anna');
+      expect(me.className).toMatch(/mentionMe/);
+      // Others' usernames come with the member list.
+      const clara = await screen.findByText('@clara');
+      expect(clara.className).toMatch(/mention/);
+      expect(clara.className).not.toMatch(/mentionMe/);
+      expect(me.closest('[data-message-id]')?.className).toMatch(/mentionsMe/);
+    });
+  });
+
   describe('CHAT-021 blocking', () => {
     const groupId = '88888888-8888-4888-8888-888888888888';
 

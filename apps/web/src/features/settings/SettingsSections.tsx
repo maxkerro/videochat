@@ -164,6 +164,13 @@ export function NotificationsSection() {
         disabled={!n.enabled}
         onChange={(previews) => void save({ notifications: { previews } })}
       />
+      <Toggle
+        label="Mentions in muted chats"
+        hint="Notify me when someone @mentions me, even in a group I muted."
+        checked={n.mentions}
+        disabled={!n.enabled}
+        onChange={(mentions) => void save({ notifications: { mentions } })}
+      />
       <p className={styles.hint}>
         {permission === 'unsupported'
           ? 'This browser doesn’t support notifications.'

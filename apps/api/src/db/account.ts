@@ -33,6 +33,9 @@ export async function updateUserSettings(
   if (input.notifications?.previews !== undefined) {
     set.notifyPreviews = input.notifications.previews;
   }
+  if (input.notifications?.mentions !== undefined) {
+    set.notifyMentions = input.notifications.mentions;
+  }
   const [row] = Object.keys(set).length
     ? await db.update(users).set(set).where(eq(users.id, userId)).returning()
     : await db.select().from(users).where(eq(users.id, userId)).limit(1);

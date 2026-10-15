@@ -22,6 +22,7 @@ export function toMe(user: User, avatarUrl: string | null): Me {
         enabled: user.notifyEnabled,
         sound: user.notifySound,
         previews: user.notifyPreviews,
+        mentions: user.notifyMentions,
       },
       theme: user.theme,
     },

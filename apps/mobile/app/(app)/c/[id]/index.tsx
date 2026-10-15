@@ -100,6 +100,11 @@ export default function ConversationScreen() {
     () => new Map((members.data ?? []).map((m) => [m.userId, m.displayName])),
     [members.data],
   );
+  // CHAT-073: for highlighting @mentions.
+  const usernames = useMemo(
+    () => new Map((members.data ?? []).map((m) => [m.userId, m.username])),
+    [members.data],
+  );
 
   const messages = view.state?.messages;
   const rows = useMemo(
@@ -353,10 +358,11 @@ export default function ConversationScreen() {
           onCopy={onCopy}
           onReact={onReact}
           highlighted={item.message.id === highlightId}
+          usernames={usernames}
         />
       );
     },
-    [t, online, myId, names, onReact, onReply, onCopy, highlightId],
+    [t, online, myId, names, usernames, onReact, onReply, onCopy, highlightId],
   );
 
   const title = conversation.data ? conversationTitle(conversation.data) : 'Chat';
@@ -476,6 +482,8 @@ export default function ConversationScreen() {
           style={{ paddingBottom: keyboardVisible ? 0 : insets.bottom, backgroundColor: t.card }}
         >
           <Composer
+            members={isGroup ? members.data : undefined}
+            myId={myId}
             replyTo={replyTo}
             editing={editing}
             onSend={onSend}

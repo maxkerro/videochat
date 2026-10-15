@@ -1,4 +1,4 @@
-import type { Message, Reaction } from '@videochat/shared';
+import { mentionParts, type Message, type Reaction } from '@videochat/shared';
 import { memo } from 'react';
 import { Pressable, StyleSheet, Text, View } from 'react-native';
 import { callLabel, formatClock } from '../ui/format';
@@ -20,6 +20,51 @@ interface Props {
   onReact: (message: Message, emoji: string) => void;
   /** CHAT-072: briefly outlined after jumping to it from search. */
   highlighted?: boolean;
+  /** CHAT-073: members' usernames by id, for highlighting @mentions. */
+  usernames?: ReadonlyMap<string, string>;
+}
+
+/** CHAT-073: the text with its @mentions highlighted (strongly when it's you). */
+function BodyText({
+  message,
+  myId,
+  color,
+  usernames,
+}: {
+  message: Message;
+  myId: string;
+  color: string;
+  usernames?: ReadonlyMap<string, string>;
+}) {
+  const t = useTheme();
+  const mentioned = new Map<string, boolean>();
+  for (const id of message.mentions ?? []) {
+    const username = usernames?.get(id);
+    if (username) mentioned.set(username, id === myId);
+  }
+  const parts =
+    mentioned.size > 0
+      ? mentionParts(message.body ?? '', (u) => mentioned.has(u))
+      : [{ text: message.body ?? '' }];
+  return (
+    <Text selectable style={{ color, fontSize: 16 }}>
+      {parts.map((part, i) =>
+        part.mention ? (
+          <Text
+            key={i}
+            style={[
+              { fontWeight: '700' },
+              mentioned.get(part.mention) && { backgroundColor: t.border },
+            ]}
+          >
+            {part.text}
+          </Text>
+        ) : (
+          part.text
+        ),
+      )}
+    </Text>
+  );
 }
 
 function ReplyQuote({ message, mine }: { message: Message; mine: boolean }) {
@@ -88,6 +133,7 @@ function MessageBubbleBase({
   onCopy,
   onReact,
   highlighted = false,
+  usernames,
 }: Props) {
   const t = useTheme();
 
@@ -133,6 +179,13 @@ function MessageBubbleBase({
               : { backgroundColor: t.card, borderColor: t.border },
             !mine && styles.bubbleBorder,
             highlighted && [styles.highlighted, { borderColor: mine ? t.text : t.accent }],
+            // CHAT-073: a message that mentions you stands out.
+            !mine &&
+              !deleted &&
+              message.mentions?.includes(myId) && [
+                styles.mentionsMe,
+                { borderLeftColor: t.accent },
+              ],
           ]}
         >
           {deleted ? (
@@ -144,9 +197,7 @@ function MessageBubbleBase({
               <ReplyQuote message={message} mine={mine} />
               {message.attachment ? <AttachmentView attachment={message.attachment} /> : null}
               {message.body ? (
-                <Text selectable style={{ color: textColor, fontSize: 16 }}>
-                  {message.body}
-                </Text>
+                <BodyText message={message} myId={myId} color={textColor} usernames={usernames} />
               ) : null}
             </>
           )}
@@ -178,6 +229,7 @@ const styles = StyleSheet.create({
   bubble: { borderRadius: 16, paddingHorizontal: 12, paddingVertical: 8, gap: 4 },
   bubbleBorder: { borderWidth: StyleSheet.hairlineWidth },
   highlighted: { borderWidth: 2 },
+  mentionsMe: { borderLeftWidth: 3 },
   quote: { borderLeftWidth: 3, paddingLeft: 8, marginBottom: 2 },
   meta: { fontSize: 11, alignSelf: 'flex-end', opacity: 0.8 },
   reactions: { flexDirection: 'row', flexWrap: 'wrap', gap: 4, marginTop: 2 },

@@ -84,6 +84,7 @@ export function ConversationList() {
   const auth = useAuth();
   const queryClient = useQueryClient();
   const [query, setQuery] = useState('');
+  const [onlyMentions, setOnlyMentions] = useState(false);
 
   const { data: conversations = [] } = useQuery({
     queryKey: ['conversations'],
@@ -143,6 +144,15 @@ export function ConversationList() {
         // Sending counts as having read your own message (mirrors appendMessage's own
         // bookkeeping server-side), so your own outgoing messages never show up as unread here.
         lastReadSeq: message.senderId === auth.user?.id ? message.seq : current.lastReadSeq,
+        // CHAT-073: one more unread @mention of me.
+        unreadMentions:
+          message.senderId !== auth.user?.id &&
+          auth.user &&
+          message.mentions?.includes(auth.user.id)
+            ? current.unreadMentions + 1
+            : message.senderId === auth.user?.id
+              ? 0
+              : current.unreadMentions,
       };
       const copy = list.slice();
       copy[i] = next;
@@ -179,11 +189,17 @@ export function ConversationList() {
     const event = parsed.data;
     if (event.userId !== auth.user?.id) return;
 
+    let partlyRead = false;
     queryClient.setQueryData<ConversationSummary[]>(['conversations'], (list) =>
-      list?.map((c) =>
-        c.id === event.conversationId ? { ...c, lastReadSeq: event.lastReadSeq } : c,
-      ),
+      list?.map((c) => {
+        if (c.id !== event.conversationId) return c;
+        // CHAT-073: all read clears the mentions; part of it needs the server's count.
+        const allRead = event.lastReadSeq >= c.lastSeq;
+        if (!allRead && c.unreadMentions > 0) partlyRead = true;
+        return { ...c, lastReadSeq: event.lastReadSeq, ...(allRead ? { unreadMentions: 0 } : {}) };
+      }),
     );
+    if (partlyRead) void queryClient.invalidateQueries({ queryKey: ['conversations'] });
   });
 
   // CHAT-019: "Mark as unread" from each conversation's menu. Optimistic -- the badge reappears
@@ -225,8 +241,14 @@ export function ConversationList() {
     },
   });
 
-  const items = conversations.filter((c) =>
-    titleFor(c).toLowerCase().includes(query.trim().toLowerCase()),
+  const mentionCount = conversations.reduce((n, c) => n + c.unreadMentions, 0);
+  // CHAT-073: "Mentions" shows only chats with unread @mentions of you (and turns itself off
+  // once there are none left).
+  const mentionsOnly = onlyMentions && mentionCount > 0;
+  const items = conversations.filter(
+    (c) =>
+      titleFor(c).toLowerCase().includes(query.trim().toLowerCase()) &&
+      (!mentionsOnly || c.unreadMentions > 0),
   );
 
   return (
@@ -252,6 +274,26 @@ export function ConversationList() {
           }
         />
       </div>
+      {mentionCount > 0 && (
+        <div className={styles.filters}>
+          <button
+            type="button"
+            className={cx(styles.filter, !mentionsOnly && styles.filterOn)}
+            aria-pressed={!mentionsOnly}
+            onClick={() => setOnlyMentions(false)}
+          >
+            All
+          </button>
+          <button
+            type="button"
+            className={cx(styles.filter, mentionsOnly && styles.filterOn)}
+            aria-pressed={mentionsOnly}
+            onClick={() => setOnlyMentions(true)}
+          >
+            Mentions <span className={styles.filterCount}>{mentionCount}</span>
+          </button>
+        </div>
+      )}
       <nav aria-label="Conversations" className={styles.scroll}>
         {items.length === 0 ? (
           <p className={styles.empty}>
@@ -313,6 +355,14 @@ export function ConversationList() {
                           >
                             {previewFor(c, auth.user?.id, drafts[c.id])}
                           </span>
+                          {c.unreadMentions > 0 && (
+                            <span
+                              className={styles.mentionBadge}
+                              aria-label={`${c.unreadMentions} unread ${c.unreadMentions === 1 ? 'mention' : 'mentions'}`}
+                            >
+                              @
+                            </span>
+                          )}
                           {unread > 0 && (
                             <span className={styles.badge} aria-label={`${unread} unread`}>
                               {unread > 99 ? '99+' : unread}

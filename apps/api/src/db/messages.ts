@@ -310,13 +310,20 @@ export async function editMessageBody(
   db: DbExecutor,
   messageId: string,
   body: string,
+  mentions: string[] = [],
 ): Promise<MessageRow | undefined> {
+  // The old link preview goes (the new text may get its own); CHAT-073: the mentions are the new
+  // text's. A plain text message with neither keeps a null meta.
+  const kept = sql`(coalesce(${messages.meta}, '{}'::jsonb) - 'linkPreview' - 'mentions')`;
+  const next = mentions.length
+    ? sql`${kept} || jsonb_build_object('mentions', ${JSON.stringify(mentions)}::jsonb)`
+    : kept;
   const [row] = await db
     .update(messages)
     .set({
       body,
       editedAt: sql`now()`,
-      meta: sql`case when ${messages.meta} is null then null else ${messages.meta} - 'linkPreview' end`,
+      meta: sql`nullif(${next}, '{}'::jsonb)`,
     })
     .where(and(eq(messages.id, messageId), isNull(messages.deletedAt)))
     .returning();

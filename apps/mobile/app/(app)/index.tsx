@@ -1,6 +1,6 @@
 import { Stack, useRouter } from 'expo-router';
 import type { ConversationSummary } from '@videochat/shared';
-import { useCallback } from 'react';
+import { useCallback, useState } from 'react';
 import {
   ActivityIndicator,
   FlatList,
@@ -39,7 +39,7 @@ function Row({
   return (
     <Pressable
       accessibilityRole="button"
-      accessibilityLabel={`${title}${unread ? `, ${unread} unread` : ''}`}
+      accessibilityLabel={`${title}${unread ? `, ${unread} unread` : ''}${c.unreadMentions ? `, mentioned you` : ''}`}
       onPress={() => onOpen(c.id)}
       style={[styles.row, { borderBottomColor: t.border }]}
     >
@@ -58,6 +58,11 @@ function Row({
             {c.muted ? '🔕 ' : ''}
             {lastMessagePreview(c, myId)}
           </Text>
+          {c.unreadMentions ? (
+            <View style={[styles.badge, { backgroundColor: t.accent }]}>
+              <Text style={{ color: t.accentText, fontSize: 12, fontWeight: '700' }}>@</Text>
+            </View>
+          ) : null}
           {unread ? (
             <View style={[styles.badge, { backgroundColor: c.muted ? t.muted : t.accent }]}>
               <Text style={{ color: t.accentText, fontSize: 12, fontWeight: '700' }}>
@@ -79,6 +84,11 @@ export default function Inbox() {
   const online = useIsOnline();
   const query = useConversations();
   const open = useCallback((id: string) => router.push(`/c/${id}`), [router]);
+  // CHAT-073: "Mentions" lists only chats with unread @mentions of you.
+  const [onlyMentions, setOnlyMentions] = useState(false);
+  const mentionCount = (query.data ?? []).reduce((n, c) => n + c.unreadMentions, 0);
+  const mentionsOnly = onlyMentions && mentionCount > 0;
+  const shown = mentionsOnly ? (query.data ?? []).filter((c) => c.unreadMentions > 0) : query.data;
 
   return (
     <View style={[styles.flex, { backgroundColor: t.bg }]}>
@@ -104,6 +114,30 @@ export default function Inbox() {
         }}
       />
       {!online ? <Banner>You’re offline. Showing saved chats.</Banner> : null}
+      {mentionCount > 0 ? (
+        <View style={styles.filters}>
+          {(
+            [
+              [false, 'All'],
+              [true, `Mentions ${mentionCount}`],
+            ] as const
+          ).map(([value, label]) => (
+            <Pressable
+              key={label}
+              accessibilityRole="button"
+              accessibilityState={{ selected: mentionsOnly === value }}
+              onPress={() => setOnlyMentions(value)}
+              style={[
+                styles.filter,
+                { borderColor: mentionsOnly === value ? t.accent : t.border },
+                mentionsOnly === value && { backgroundColor: t.accent },
+              ]}
+            >
+              <Text style={{ color: mentionsOnly === value ? t.accentText : t.text }}>{label}</Text>
+            </Pressable>
+          ))}
+        </View>
+      ) : null}
       {query.data === undefined && query.isPending ? (
         <View style={styles.center}>
           <ActivityIndicator accessibilityLabel="Loading chats" />
@@ -119,7 +153,7 @@ export default function Inbox() {
         </View>
       ) : (
         <FlatList
-          data={query.data}
+          data={shown}
           keyExtractor={(c) => c.id}
           renderItem={({ item }) => <Row c={item} myId={myId} onOpen={open} />}
           refreshControl={
@@ -146,6 +180,8 @@ export default function Inbox() {
 const styles = StyleSheet.create({
   flex: { flex: 1 },
   center: { flex: 1, alignItems: 'center', justifyContent: 'center' },
+  filters: { flexDirection: 'row', gap: 8, paddingHorizontal: 12, paddingVertical: 8 },
+  filter: { borderWidth: 1, borderRadius: 14, paddingHorizontal: 12, paddingVertical: 4 },
   headerButtons: { flexDirection: 'row', gap: 20, paddingRight: 4 },
   row: {
     flexDirection: 'row',

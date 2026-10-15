@@ -41,6 +41,7 @@ const summary: ConversationSummary = {
   peer: { id: PEER, username: 'ben', displayName: 'Ben', avatarUrl: null },
   peerLastReadSeq: 0,
   muted: false,
+  unreadMentions: 0,
   lastMessage: null,
 };
 
@@ -152,6 +153,20 @@ describe('applyRealtimeEvent', () => {
     expect(
       queryClient.getQueryData<ConversationSummary[]>(keys.conversations)![0]!.peerLastReadSeq,
     ).toBe(2);
+  });
+
+  it('CHAT-073: reading everything clears my unread mentions', async () => {
+    const { queryClient, events, keys } = await load();
+    queryClient.setQueryData(keys.conversations, [
+      { ...summary, lastSeq: 5, lastReadSeq: 1, unreadMentions: 2 },
+    ]);
+    events.applyRealtimeEvent(
+      env('conversation.read', { conversationId: CONV, userId: ME, lastReadSeq: 5 }),
+      ctx(),
+    );
+    expect(
+      queryClient.getQueryData<ConversationSummary[]>(keys.conversations)![0]!.unreadMentions,
+    ).toBe(0);
   });
 
   it('typing: shows others, ignores my own signal, and clears when their message arrives', async () => {

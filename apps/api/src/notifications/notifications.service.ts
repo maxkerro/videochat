@@ -3,7 +3,11 @@ import { clientViewingSchema, type PushPayload, type WsEnvelope } from '@videoch
 import { Redis } from 'ioredis';
 import { isBlocked } from '../db/blocks.js';
 import type { Database } from '../db/client.js';
-import { findConversationForUser, listNotifiableMembers } from '../db/conversations.js';
+import {
+  findConversationForUser,
+  listMutedMentionRecipients,
+  listNotifiableMembers,
+} from '../db/conversations.js';
 import { deletePushDevice, getNotificationPrefs, listPushDevices } from '../db/devices.js';
 import type { CallRow, MessageRow } from '../db/schema.js';
 import { findUserById } from '../db/users.js';
@@ -71,25 +75,46 @@ export class NotificationsService implements OnModuleInit {
     if (!this.enabled || row.type === 'system' || row.type === 'call' || !row.senderId) return;
     try {
       const recipients = await this.recipients(row.conversationId, row.senderId);
-      if (!recipients.length) return;
+      // CHAT-073: people @mentioned get a "mentioned you" notification -- even in a chat they
+      // muted, unless they turned that off.
+      const mentions = new Set(row.meta?.mentions ?? []);
+      const mutedMentioned = await this.reachable(
+        await listMutedMentionRecipients(
+          this.db,
+          row.conversationId,
+          [...mentions].filter((id) => !recipients.includes(id)),
+        ),
+        row.conversationId,
+        row.senderId,
+      );
+      const plain = recipients.filter((id) => !mentions.has(id));
+      const mentioned = [...recipients.filter((id) => mentions.has(id)), ...mutedMentioned];
+      const anyone = plain[0] ?? mentioned[0];
+      if (!anyone) return;
       const sender = await findUserById(this.db, row.senderId);
       const senderName = sender?.displayName ?? 'Someone';
-      const conversation = await findConversationForUser(
-        this.db,
-        row.conversationId,
-        recipients[0]!,
-      );
-      const title =
-        conversation?.type === 'group' && conversation.title
-          ? `${senderName} · ${conversation.title}`
-          : senderName;
-      await this.push(recipients, {
-        title,
+      const conversation = await findConversationForUser(this.db, row.conversationId, anyone);
+      const groupTitle = conversation?.type === 'group' ? conversation.title : null;
+      const payload = {
         body: notificationText(row),
         conversationId: row.conversationId,
         url: `/c/${row.conversationId}`,
         tag: `conv-${row.conversationId}`,
-      });
+      };
+      await Promise.all([
+        plain.length
+          ? this.push(plain, {
+              ...payload,
+              title: groupTitle ? `${senderName} · ${groupTitle}` : senderName,
+            })
+          : undefined,
+        mentioned.length
+          ? this.push(mentioned, {
+              ...payload,
+              title: `${senderName} mentioned you${groupTitle ? ` · ${groupTitle}` : ''}`,
+            })
+          : undefined,
+      ]);
     } catch (err) {
       this.logger.warn(`Notifying about message ${row.id} failed: ${(err as Error).message}`);
     }
@@ -149,8 +174,17 @@ export class NotificationsService implements OnModuleInit {
   /** Members to notify: not the sender, not muted, not viewing it, and not blocking the sender. */
   private async recipients(conversationId: string, senderId: string): Promise<string[]> {
     const members = await listNotifiableMembers(this.db, conversationId, senderId);
+    return this.reachable(members, conversationId, senderId);
+  }
+
+  /** Of `userIds`: those not looking at the conversation right now and not blocking the sender. */
+  private async reachable(
+    userIds: string[],
+    conversationId: string,
+    senderId: string,
+  ): Promise<string[]> {
     const result: string[] = [];
-    for (const userId of members) {
+    for (const userId of userIds) {
       const viewing = await this.redis.hvals(viewingKey(userId)).catch(() => [] as string[]);
       if (viewing.includes(conversationId)) continue;
       if (await isBlocked(this.db, userId, senderId)) continue;

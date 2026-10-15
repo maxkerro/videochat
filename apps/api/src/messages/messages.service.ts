@@ -9,6 +9,7 @@ import {
 import {
   LIMITS,
   makeEnvelope,
+  mentionedUsernames,
   type Message,
   type MessagePage,
   type SendMessageInput,
@@ -18,7 +19,12 @@ import type { Database } from '../db/client.js';
 import { isSenderBlockedInDirectConversation } from '../db/blocks.js';
 import { findAttachmentsForMessage } from '../db/attachments.js';
 import { deleteReactionsForMessage } from '../db/reactions.js';
-import { findConversationForUser, isConversationMember } from '../db/conversations.js';
+import {
+  findConversationForUser,
+  findConversationType,
+  findMentionedMembers,
+  isConversationMember,
+} from '../db/conversations.js';
 import {
   appendMessageWithStatus,
   AttachmentUnavailableError,
@@ -100,6 +106,13 @@ export class MessagesService {
         )
       : undefined;
 
+    // CHAT-073: @username -> the ids of those group members.
+    const mentions = await this.resolveMentions(conversationId, senderId, input.body ?? null);
+    const meta = {
+      ...(attachment ? { attachment } : {}),
+      ...(mentions.length ? { mentions } : {}),
+    };
+
     let row;
     let created: boolean;
     try {
@@ -109,9 +122,8 @@ export class MessagesService {
         body: input.body ?? null,
         clientMsgId: input.clientMsgId,
         replyToId: input.replyToId ?? null,
-        ...(attachment
-          ? { type: attachment.kind, meta: { attachment }, attachmentId: attachment.id }
-          : {}),
+        ...(Object.keys(meta).length ? { meta } : {}),
+        ...(attachment ? { type: attachment.kind, attachmentId: attachment.id } : {}),
       }));
     } catch (err) {
       if (err instanceof SenderNotAMemberError) {
@@ -194,7 +206,8 @@ export class MessagesService {
       );
     }
     if (row.body === body) return toMessageWithReply(this.db, row);
-    const updated = await editMessageBody(this.db, messageId, body);
+    const mentions = await this.resolveMentions(conversationId, userId, body);
+    const updated = await editMessageBody(this.db, messageId, body, mentions);
     if (!updated) throw new NotFoundException('Message not found');
     const message = await this.publishUpdated(updated);
     // The old text's link preview was dropped; the new text may have its own.
@@ -225,6 +238,19 @@ export class MessagesService {
     await this.attachments.deleteRows(await findAttachmentsForMessage(this.db, messageId));
     await deleteReactionsForMessage(this.db, messageId);
     return this.publishUpdated(deleted);
+  }
+
+  /** CHAT-073: group members (not the sender) the text @mentions. Direct chats have none: the
+   *  other person is always the one being talked to. */
+  private async resolveMentions(
+    conversationId: string,
+    senderId: string,
+    body: string | null,
+  ): Promise<string[]> {
+    const usernames = mentionedUsernames(body);
+    if (usernames.length === 0) return [];
+    if ((await findConversationType(this.db, conversationId)) !== 'group') return [];
+    return findMentionedMembers(this.db, conversationId, usernames, senderId);
   }
 
   private async publishUpdated(row: MessageRow): Promise<Message> {

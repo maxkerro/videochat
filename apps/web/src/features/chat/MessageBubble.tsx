@@ -50,6 +50,8 @@ export interface MessageBubbleProps {
   highlighted: boolean;
   editing: boolean;
   nameFor: (userId: string | null) => string;
+  /** CHAT-073: a member's username (for highlighting @mentions); undefined if unknown. */
+  usernameFor?: (userId: string) => string | undefined;
   onReply: (message: Message) => void;
   onStartEdit: (message: Message) => void;
   onCancelEdit: () => void;
@@ -91,6 +93,21 @@ export function MessageBubble(props: MessageBubbleProps) {
           : []),
       ];
 
+  // CHAT-073: @mentions are highlighted -- strongly when they're you.
+  const mentionsMe = !isOwn && !!myUserId && !!message.mentions?.includes(myUserId);
+  const mentioned = new Map<string, boolean>();
+  for (const id of message.mentions ?? []) {
+    const username = props.usernameFor?.(id);
+    if (username) mentioned.set(username, id === myUserId);
+  }
+  const mentionStyle =
+    mentioned.size > 0
+      ? (username: string) =>
+          mentioned.has(username)
+            ? cx(styles.mention, mentioned.get(username) && styles.mentionMe) || null
+            : null
+      : undefined;
+
   return (
     <div
       className={cx(
@@ -98,6 +115,7 @@ export function MessageBubble(props: MessageBubbleProps) {
         isOwn && styles.own,
         grouped && styles.grouped,
         props.highlighted && styles.highlighted,
+        mentionsMe && styles.mentionsMe,
       )}
       data-message-id={message.id}
     >
@@ -125,7 +143,7 @@ export function MessageBubble(props: MessageBubbleProps) {
           {message.attachment && <AttachmentView attachment={message.attachment} />}
           {message.body ? (
             <span className={message.attachment ? styles.caption : undefined}>
-              {linkify(message.body)}
+              {linkify(message.body, mentionStyle)}
             </span>
           ) : null}
         </span>

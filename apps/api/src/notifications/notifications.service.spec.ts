@@ -11,6 +11,7 @@ import type { PushChannel } from './push-channel.js';
 vi.mock('../db/blocks.js', () => ({ isBlocked: vi.fn() }));
 vi.mock('../db/conversations.js', () => ({
   listNotifiableMembers: vi.fn(),
+  listMutedMentionRecipients: vi.fn(async () => []),
   findConversationForUser: vi.fn(),
 }));
 vi.mock('../db/devices.js', () => ({
