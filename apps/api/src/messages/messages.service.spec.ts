@@ -15,6 +15,7 @@ import type { AttachmentsService } from '../attachments/attachments.service.js';
 import type { LinkPreviewsService } from '../link-previews/link-previews.service.js';
 import type { NotificationsService } from '../notifications/notifications.service.js';
 import type { RealtimeService } from '../realtime/realtime.service.js';
+import type { E2eeService } from '../e2ee/e2ee.service.js';
 import { MessagesService } from './messages.service.js';
 
 vi.mock('../db/blocks.js', () => ({ isSenderBlockedInDirectConversation: vi.fn() }));
@@ -66,6 +67,7 @@ describe('MessagesService', () => {
   let realtime: { publishToConversation: ReturnType<typeof vi.fn> };
   let service: MessagesService;
   let linkPreviews: { attachToMessage: ReturnType<typeof vi.fn> };
+  let e2ee: { assertCanSendEncrypted: ReturnType<typeof vi.fn> };
   let attachments: {
     prepareForMessage: ReturnType<typeof vi.fn>;
     deleteRows: ReturnType<typeof vi.fn>;
@@ -78,6 +80,7 @@ describe('MessagesService', () => {
       deleteRows: vi.fn().mockResolvedValue(undefined),
     };
     linkPreviews = { attachToMessage: vi.fn().mockResolvedValue(undefined) };
+    e2ee = { assertCanSendEncrypted: vi.fn().mockResolvedValue(undefined) };
     vi.mocked(messagesDb.findMessagesByIds).mockResolvedValue([]);
     vi.mocked(reactionsDb.listReactions).mockResolvedValue(new Map());
     // The service uses appendMessageWithStatus; tests stub appendMessage's result and assert on it.
@@ -93,10 +96,40 @@ describe('MessagesService', () => {
       attachments as unknown as AttachmentsService,
       linkPreviews as unknown as LinkPreviewsService,
       { notifyNewMessage: vi.fn().mockResolvedValue(undefined) } as unknown as NotificationsService,
+      e2ee as unknown as E2eeService,
     );
   });
 
   describe('send', () => {
+    it('CHAT-076: stores an encrypted message with no body and never fetches a link preview', async () => {
+      vi.mocked(conversationsDb.isConversationMember).mockResolvedValue(true);
+      const payload = { v: 1 as const, ciphertext: 'AAEC' };
+      vi.mocked(messagesDb.appendMessage).mockResolvedValue(
+        makeMessageRow({ body: null, meta: { e2ee: payload } }),
+      );
+      const message = await service.send('conv-1', 'user-1', { clientMsgId: 'c-1', e2ee: payload });
+      expect(e2ee.assertCanSendEncrypted).toHaveBeenCalledWith('conv-1');
+      expect(vi.mocked(messagesDb.appendMessage).mock.calls[0]![1]).toMatchObject({
+        body: null,
+        meta: { e2ee: payload },
+      });
+      expect(message.e2ee).toEqual(payload);
+      expect(message.body).toBeNull();
+      expect(linkPreviews.attachToMessage).not.toHaveBeenCalled();
+    });
+
+    it('CHAT-076: rejects an encrypted message when the prototype refuses it', async () => {
+      vi.mocked(conversationsDb.isConversationMember).mockResolvedValue(true);
+      e2ee.assertCanSendEncrypted.mockRejectedValue(new Error('not enabled'));
+      await expect(
+        service.send('conv-1', 'user-1', {
+          clientMsgId: 'c-1',
+          e2ee: { v: 1, ciphertext: 'AA==' },
+        }),
+      ).rejects.toThrow('not enabled');
+      expect(messagesDb.appendMessage).not.toHaveBeenCalled();
+    });
+
     it('CHAT-031: asks for a link preview after a new text message, unless turned off', async () => {
       vi.mocked(conversationsDb.isConversationMember).mockResolvedValue(true);
       vi.mocked(messagesDb.appendMessage).mockResolvedValue(makeMessageRow());

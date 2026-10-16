@@ -39,9 +39,20 @@ describe('flushOutbox', () => {
 
     await flushOutbox({ listQueued: async () => [queued()], send, remove, onSent });
 
-    expect(send).toHaveBeenCalledWith('conv-1', 'c-1', 'hi');
+    expect(send).toHaveBeenCalledWith('conv-1', 'c-1', 'hi', false);
     expect(remove).toHaveBeenCalledWith('c-1');
     expect(onSent).toHaveBeenCalledWith(message);
+  });
+
+  it('CHAT-076: tells the sender a message was queued from an encrypted chat', async () => {
+    const send = vi.fn(async () => makeMessage());
+    await flushOutbox({
+      listQueued: async () => [queued({ encrypted: true })],
+      send,
+      remove: vi.fn(),
+      onSent: vi.fn(),
+    });
+    expect(send).toHaveBeenCalledWith('conv-1', 'c-1', 'hi', true);
   });
 
   it('sends multiple queued messages in order', async () => {

@@ -15,6 +15,8 @@ import { isPushSupported, syncPushSubscription } from '../notifications/push';
 import { fetchMe } from '../profile/profileApi';
 import { changePassword, deleteAccount, downloadExport, updateSettings } from './settingsApi';
 import styles from './Settings.module.css';
+import { useE2eeFlag, useE2eeServerStatus } from '../e2ee';
+import { setE2eeEnabled } from '../e2ee/flag';
 
 const VISIBILITY_LABELS: Record<LastSeenVisibility, string> = {
   everyone: 'Everyone',
@@ -124,7 +126,24 @@ export function PrivacySection() {
           It works both ways: you only see it for people you show yours to.
         </p>
       </fieldset>
+      <E2eePrototypeToggle />
     </section>
+  );
+}
+
+/** CHAT-076 (spike): opt this browser into the end-to-end encryption prototype. Shown only when
+ *  the server has it switched on. */
+function E2eePrototypeToggle() {
+  const serverOn = useE2eeServerStatus();
+  const on = useE2eeFlag();
+  if (!serverOn) return null;
+  return (
+    <Toggle
+      label="End-to-end encryption (prototype)"
+      hint="Direct chats, text only, in this browser. Both people need it on. Messages sent while it’s on can only be read in browsers that had it on."
+      checked={on}
+      onChange={setE2eeEnabled}
+    />
   );
 }
 

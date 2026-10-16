@@ -48,6 +48,10 @@ export function previewFor(
     const text = last.body ? `${what} · ${last.body}` : what;
     return last.senderId === myUserId ? `You: ${text}` : text;
   }
+  // CHAT-076 (spike): the server can't preview an encrypted message.
+  if (last.encrypted) {
+    return last.senderId === myUserId ? 'You: 🔒 Encrypted message' : '🔒 Encrypted message';
+  }
   if (last.body === null) return 'Message deleted';
   if (last.type === 'system') return last.body;
   return last.senderId === myUserId ? `You: ${last.body}` : last.body;
@@ -59,6 +63,7 @@ function toPreview(message: Message): NonNullable<ConversationSummary['lastMessa
     type: message.type,
     senderId: message.senderId,
     body: message.body,
+    ...(message.e2ee ? { encrypted: true } : {}),
     ...(message.call ? { call: message.call } : {}),
     ...(message.attachment
       ? {

@@ -90,6 +90,11 @@ services:
         sync: false
       - key: LIVEKIT_API_SECRET
         sync: false
+      # CHAT-076 (spike): end-to-end encryption prototype. Set to "true" in the dashboard to turn
+      # on the key directory and encrypted direct messages (unset = off); each browser then also
+      # opts in under Settings -> Privacy.
+      - key: E2EE_PROTOTYPE
+        sync: false
 
   - type: web
     name: videochat-web
@@ -169,6 +174,10 @@ services:
       - type: rewrite
         source: /link-preview
         destination: https://videochat-api-p6sw.onrender.com/link-preview
+      # CHAT-076 (spike): the end-to-end encryption key directory.
+      - type: rewrite
+        source: /e2ee/*
+        destination: https://videochat-api-p6sw.onrender.com/e2ee/*
       - type: rewrite
         source: /health
         destination: https://videochat-api-p6sw.onrender.com/health

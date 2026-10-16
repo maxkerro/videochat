@@ -254,3 +254,14 @@ subscriptions and the composer's link preview. They're added, and
 `apps/web/src/test/proxyRoutes.test.ts` fails if the web app calls a path that isn't proxied.
 **After pushing, sync the Blueprint in the Render dashboard** (Blueprints → videochat → Sync) if
 it doesn't apply route changes by itself, then check a photo thumbnail loads in the web app.
+
+## End-to-end encryption prototype (CHAT-076 spike)
+
+Off everywhere by default; nothing changes for anyone until both switches below are on. See
+[`docs/e2ee-spike.md`](./e2ee-spike.md) for what it does and doesn't cover.
+
+1. On `videochat-api` in Render set **`E2EE_PROTOTYPE`** to `true` and deploy (migration
+   `0018_e2ee_spike` creates the key directory tables). Unset or `false`, every `/e2ee/*` endpoint
+   answers 404 and encrypted messages are refused.
+2. In each browser that should take part: Settings -> Privacy -> **End-to-end encryption
+   (prototype)**. The toggle only appears while the API has the flag on.

@@ -448,6 +448,14 @@ describe('previewFor (CHAT-030 attachments)', () => {
     };
     expect(previewFor({ ...base, lastMessage: file }, me)).toBe('q3.pdf · numbers');
   });
+
+  it('CHAT-076: previews an encrypted message without its text', () => {
+    const last = { type: 'text' as const, senderId: 'x', body: null, encrypted: true };
+    expect(previewFor({ ...base, lastMessage: last }, me)).toBe('🔒 Encrypted message');
+    expect(previewFor({ ...base, lastMessage: { ...last, senderId: me } }, me)).toBe(
+      'You: 🔒 Encrypted message',
+    );
+  });
 });
 
 describe('previewFor drafts (CHAT-036)', () => {

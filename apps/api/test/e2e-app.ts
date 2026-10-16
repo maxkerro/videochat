@@ -13,6 +13,8 @@ import { WebSocket } from 'ws';
 import request from 'supertest';
 import { configureApp } from '../src/app.factory.js';
 import { AppModule } from '../src/app.module.js';
+import { loadEnv, type Env } from '../src/config/env.js';
+import { ENV } from '../src/infra/tokens.js';
 import { createPool } from '../src/db/client.js';
 import { resetDatabase, runMigrations } from '../src/db/migrate.js';
 import { MailService } from '../src/mail/mail.service.js';
@@ -202,7 +204,7 @@ export interface E2eUser {
  * server that listens once for the whole file (see the comment in authorization.e2e.spec.ts on why
  * per-request listen/close is avoided). `prefix` keeps generated emails/usernames unique per file.
  */
-export async function startE2eApp(prefix: string) {
+export async function startE2eApp(prefix: string, envOverrides: Partial<Env> = {}) {
   const migrationPool = createPool(process.env.TEST_DATABASE_URL!, 1);
   await resetDatabase(migrationPool);
   await runMigrations(migrationPool);
@@ -219,6 +221,8 @@ export async function startE2eApp(prefix: string) {
     .useClass(FakePushChannel)
     .overrideProvider(SFU)
     .useClass(FakeSfu)
+    .overrideProvider(ENV)
+    .useValue({ ...loadEnv(), ...envOverrides })
     .compile();
   const app: INestApplication = moduleRef.createNestApplication({ bufferLogs: true });
   configureApp(app);

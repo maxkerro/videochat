@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { e2eePayloadSchema } from './e2ee.js';
 import {
   ATTACHMENT_KINDS,
   VOICE,
@@ -322,6 +323,8 @@ export const conversationSummarySchema = z.object({
       call: callMessageMetaSchema.optional(),
       /** CHAT-030: enough to preview "Photo" / "report.pdf" without the whole attachment. */
       attachment: attachmentSchema.pick({ kind: true, filename: true, voice: true }).optional(),
+      /** CHAT-076 (spike): the last message is end-to-end encrypted (its body is null). */
+      encrypted: z.boolean().optional(),
     })
     .nullable()
     .default(null),
@@ -552,6 +555,9 @@ export const messageSchema = z.object({
   reactions: z.array(reactionSchema).optional(),
   /** CHAT-073: ids of the group members this message @mentions. Omitted when there are none. */
   mentions: z.array(z.uuid()).optional(),
+  /** CHAT-076 (spike): an end-to-end encrypted message; `body` is null and only members' devices
+   *  can decrypt this. */
+  e2ee: e2eePayloadSchema.optional(),
 });
 export type Message = z.infer<typeof messageSchema>;
 
@@ -618,10 +624,16 @@ export const sendMessageSchema = z
     linkPreview: z.boolean().optional(),
     /** CHAT-032: the message being replied to, in the same conversation. */
     replyToId: ulidSchema.optional(),
+    /** CHAT-076 (spike): the end-to-end encrypted text, sent instead of `body`. */
+    e2ee: e2eePayloadSchema.optional(),
   })
-  .refine((v) => v.body !== undefined || v.attachmentId !== undefined, {
+  .refine((v) => v.body !== undefined || v.attachmentId !== undefined || v.e2ee !== undefined, {
     message: 'Write a message or attach a file',
     path: ['body'],
+  })
+  .refine((v) => v.e2ee === undefined || (v.body === undefined && v.attachmentId === undefined), {
+    message: 'An encrypted message carries no plain-text body or attachment',
+    path: ['e2ee'],
   });
 export type SendMessageInput = z.infer<typeof sendMessageSchema>;
 

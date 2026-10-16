@@ -8,6 +8,8 @@ export interface OutboxMessage {
   clientMsgId: string;
   conversationId: string;
   body: string;
+  /** CHAT-076 (spike): send end-to-end encrypted (the composer was in an encrypted chat). */
+  encrypted?: boolean;
   /** Insertion order, used to flush in the order the person actually typed them (CHAT-017's "sent
    *  in order" requirement) -- `Date.now()` rather than an autoincrement key, since it also lets
    *  {@link listQueuedMessages} report messages oldest-first without a separate index. */

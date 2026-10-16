@@ -1,5 +1,9 @@
 import { attachmentLabel, LIMITS, type ConversationSummary, type Message } from '@videochat/shared';
 
+/** CHAT-076 (spike): what the app shows for an end-to-end encrypted message (the phone apps
+ *  can't decrypt yet; only browsers with the prototype on can). */
+export const ENCRYPTED_MESSAGE = '🔒 Encrypted message';
+
 const pad = (n: number) => String(n).padStart(2, '0');
 const WEEKDAYS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
 
@@ -20,6 +24,8 @@ export function lastMessagePreview(c: ConversationSummary, myId: string): string
   if (m.type === 'call') text = 'Call';
   // "Photo", "Voice message (0:12)" (CHAT-074) or the file's name.
   else if (m.attachment) text = attachmentLabel(m.attachment);
+  // CHAT-076 (spike): encrypted messages can only be read in a browser with the prototype on.
+  else if (m.encrypted) text = ENCRYPTED_MESSAGE;
   else if (m.body === null) text = 'Message deleted';
   else text = m.body.replace(/\s+/g, ' ');
   return m.senderId === myId ? `You: ${text}` : text;
@@ -64,7 +70,7 @@ export function isSameDay(a: string, b: string): boolean {
 
 /** Own, undeleted text message still inside the edit window (the server checks again). */
 export function canEditMessage(m: Message, myId: string, now: number = Date.now()): boolean {
-  if (m.senderId !== myId || m.type !== 'text' || m.deletedAt) return false;
+  if (m.senderId !== myId || m.type !== 'text' || m.deletedAt || m.e2ee) return false;
   return now - new Date(m.createdAt).getTime() < LIMITS.messageEditWindowMinutes * 60_000;
 }
 

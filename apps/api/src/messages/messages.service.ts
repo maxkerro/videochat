@@ -42,6 +42,7 @@ import { AttachmentsService } from '../attachments/attachments.service.js';
 import { LinkPreviewsService } from '../link-previews/link-previews.service.js';
 import { NotificationsService } from '../notifications/notifications.service.js';
 import { RealtimeService } from '../realtime/realtime.service.js';
+import { E2eeService } from '../e2ee/e2ee.service.js';
 import { toMessageWithReply, toMessages } from './message-mapper.js';
 
 /** CHAT-032: kinds of message a person can edit or delete. Call entries and system messages are
@@ -56,6 +57,7 @@ export class MessagesService {
     private readonly attachments: AttachmentsService,
     private readonly linkPreviews: LinkPreviewsService,
     private readonly notifications: NotificationsService,
+    private readonly e2ee: E2eeService,
   ) {}
 
   /**
@@ -87,6 +89,9 @@ export class MessagesService {
       throw new ForbiddenException('This message could not be delivered');
     }
 
+    // CHAT-076 (spike): an encrypted message needs the prototype flag and the chat's MLS group.
+    if (input.e2ee) await this.e2ee.assertCanSendEncrypted(conversationId);
+
     // CHAT-032: a reply must point at a live message in this same conversation.
     if (input.replyToId) {
       const target = await findMessage(this.db, input.replyToId);
@@ -111,6 +116,7 @@ export class MessagesService {
     const meta = {
       ...(attachment ? { attachment } : {}),
       ...(mentions.length ? { mentions } : {}),
+      ...(input.e2ee ? { e2ee: input.e2ee } : {}),
     };
 
     let row;
@@ -151,7 +157,7 @@ export class MessagesService {
     );
     // CHAT-031: fetched after the message is out, so a slow site never delays it; arrives as a
     // `message.updated`. Only once per message (not again for a retried send).
-    if (created && !attachment && input.linkPreview !== false) {
+    if (created && !attachment && !input.e2ee && input.linkPreview !== false) {
       void this.linkPreviews.attachToMessage(row);
     }
     // CHAT-035: push to members who aren't looking at this conversation (once per message).
@@ -199,6 +205,8 @@ export class MessagesService {
     if (!EDITABLE_TYPES.has(row.type))
       throw new BadRequestException('This message can’t be edited');
     if (row.deletedAt) throw new NotFoundException('Message not found');
+    // CHAT-076 (spike): editing would need a new encrypted message; not in the prototype.
+    if (row.meta?.e2ee) throw new BadRequestException('An encrypted message can’t be edited');
     // CHAT-074: a voice message has nothing to edit.
     if (row.meta?.attachment?.voice)
       throw new BadRequestException('A voice message can’t be edited');

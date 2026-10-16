@@ -127,6 +127,13 @@
       "when": 1792095210494,
       "tag": "0017_voice_messages",
       "breakpoints": true
+    },
+    {
+      "idx": 18,
+      "version": "7",
+      "when": 1792136731219,
+      "tag": "0018_e2ee_spike",
+      "breakpoints": true
     }
   ]
 }

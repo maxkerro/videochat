@@ -11,7 +11,8 @@ import { getLastSeenSeq, recordSeenSeq, trackedConversationIds } from '../../lib
 import { listAllQueuedMessages, removeOutboxMessage } from '../../lib/outbox';
 import { useAuth, withAuthRetry, type AuthContextValue } from '../auth/AuthContext';
 import { appendToLatestPage, type MessagesData } from './messagesCache';
-import { fetchMessagesAfter, sendMessage } from './messagesApi';
+import { sendTextMessage, useE2ee } from '../e2ee';
+import { fetchMessagesAfter } from './messagesApi';
 import { runGapSync } from './gapSync';
 import { flushOutbox } from './outboxFlush';
 
@@ -136,8 +137,9 @@ async function catchUp(
 
   await flushOutbox({
     listQueued: listAllQueuedMessages,
-    send: (conversationId, clientMsgId, body) =>
-      withAuthRetry(auth, (token) => sendMessage(token, conversationId, { clientMsgId, body })),
+    send: (conversationId, clientMsgId, body, encrypted) =>
+      // CHAT-076 (spike): a message typed in an encrypted chat is encrypted now, never sent plain.
+      sendTextMessage(auth, conversationId, { clientMsgId, body }, encrypted ?? false),
     remove: removeOutboxMessage,
     onSent: (message) => {
       queryClient.setQueryData<MessagesData>(['messages', message.conversationId], (old) =>
@@ -157,6 +159,8 @@ async function catchUp(
  */
 export function RealtimeProvider({ children }: { children: ReactNode }) {
   const auth = useAuth();
+  // CHAT-076 (spike): with the prototype on, register this browser's encryption keys at sign-in.
+  useE2ee();
   const queryClient = useQueryClient();
   const [singleton] = useState(createRealtimeSingleton);
   // Guards against overlapping catch-ups if `open` fires again (e.g. a brief flap) before the

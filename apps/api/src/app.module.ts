@@ -7,6 +7,7 @@ import { NotificationsModule } from './notifications/notifications.module.js';
 import { AuthModule } from './auth/auth.module.js';
 import { CallsModule } from './calls/calls.module.js';
 import { ConversationsModule } from './conversations/conversations.module.js';
+import { E2eeModule } from './e2ee/e2ee.module.js';
 import { GroupCallsModule } from './group-calls/group-calls.module.js';
 import { HealthModule } from './health/health.module.js';
 import { InfraModule } from './infra/infra.module.js';
@@ -39,6 +40,7 @@ import { UsersModule } from './users/users.module.js';
     CallsModule,
     GroupCallsModule,
     SearchModule,
+    E2eeModule,
   ],
   providers: [{ provide: APP_FILTER, useClass: SentryGlobalFilter }],
 })

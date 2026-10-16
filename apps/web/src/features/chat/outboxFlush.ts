@@ -4,7 +4,13 @@ import type { OutboxMessage } from '../../lib/outbox';
 
 export interface OutboxFlushDeps {
   listQueued: () => Promise<OutboxMessage[]>;
-  send: (conversationId: string, clientMsgId: string, body: string) => Promise<Message>;
+  send: (
+    conversationId: string,
+    clientMsgId: string,
+    body: string,
+    /** CHAT-076 (spike): queued from an encrypted chat. */
+    encrypted?: boolean,
+  ) => Promise<Message>;
   remove: (clientMsgId: string) => Promise<void>;
   /** Called for each message actually sent, so the caller can merge it into wherever the UI reads
    *  messages from (the query cache) exactly as it would a live `message.new` event. */
@@ -23,7 +29,12 @@ export async function flushOutbox(deps: OutboxFlushDeps): Promise<void> {
   const queued = await deps.listQueued();
   for (const item of queued) {
     try {
-      const message = await deps.send(item.conversationId, item.clientMsgId, item.body);
+      const message = await deps.send(
+        item.conversationId,
+        item.clientMsgId,
+        item.body,
+        item.encrypted ?? false,
+      );
       await deps.remove(item.clientMsgId);
       deps.onSent(message);
     } catch (error) {

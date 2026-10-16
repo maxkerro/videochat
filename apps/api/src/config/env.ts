@@ -146,6 +146,10 @@ const envSchema = z.object({
   /** "Find people" search, tracked per authenticated user. */
   RATE_LIMIT_SEARCH_MAX: z.coerce.number().int().positive().default(30),
   RATE_LIMIT_SEARCH_WINDOW_SEC: z.coerce.number().int().positive().default(10),
+  /** CHAT-076 (spike): the end-to-end encryption prototype -- the key directory endpoints and
+   *  encrypted messages. Off by default; a browser also has to opt in (see the web app's
+   *  `features/e2ee/flag.ts`). */
+  E2EE_PROTOTYPE: z.stringbool().default(false),
   /** Message sending, tracked per authenticated user. Defaults match the AC's own example
    *  ("more than 20 messages in 10 seconds"). */
   RATE_LIMIT_MESSAGES_MAX: z.coerce.number().int().positive().default(20),

@@ -44,6 +44,12 @@
   font-size: var(--text-xs);
   color: var(--color-text-muted);
 }
+/* CHAT-076 (spike): "End-to-end encrypted (prototype)" under the title. */
+.encrypted {
+  display: block;
+  font-size: var(--text-xs);
+  color: var(--color-text-muted);
+}
 .scrollWrap {
   position: relative;
   flex: 1;

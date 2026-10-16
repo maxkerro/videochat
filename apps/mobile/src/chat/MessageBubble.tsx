@@ -1,7 +1,7 @@
 import { attachmentLabel, mentionParts, type Message, type Reaction } from '@videochat/shared';
 import { memo } from 'react';
 import { Pressable, StyleSheet, Text, View } from 'react-native';
-import { callLabel, formatClock } from '../ui/format';
+import { callLabel, ENCRYPTED_MESSAGE, formatClock } from '../ui/format';
 import { useTheme } from '../ui/theme';
 import { AttachmentView } from './AttachmentView';
 import { SwipeToReply } from './SwipeToReply';
@@ -123,7 +123,7 @@ function Reactions({
 }
 
 function MessageBubbleBase({
-  message,
+  message: original,
   mine,
   myId,
   showSender,
@@ -137,6 +137,8 @@ function MessageBubbleBase({
   usernames,
 }: Props) {
   const t = useTheme();
+  // CHAT-076 (spike): the phone apps can't decrypt end-to-end encrypted messages yet.
+  const message = original.e2ee ? { ...original, body: ENCRYPTED_MESSAGE } : original;
 
   if (message.type === 'system' || message.type === 'call') {
     const text = message.type === 'call' ? callLabel(message, myId) : (message.body ?? '');

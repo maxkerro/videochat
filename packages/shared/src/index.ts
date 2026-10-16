@@ -8,3 +8,4 @@ export * from './groupCalls.js';
 export * from './search.js';
 export * from './mentions.js';
 export * from './voice.js';
+export * from './e2ee.js';

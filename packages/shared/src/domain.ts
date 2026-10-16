@@ -135,3 +135,24 @@ export const CALL_END_REASONS = [
   'unavailable',
 ] as const;
 export type CallEndReason = (typeof CALL_END_REASONS)[number];
+
+/**
+ * CHAT-076 (spike): end-to-end encryption prototype limits. MLS messages and key packages travel
+ * as base64 strings.
+ */
+export const E2EE = {
+  /** Version of the `e2ee` payload on a message. */
+  payloadVersion: 1,
+  /** MLS cipher suite every device uses. */
+  cipherSuite: 'MLS_128_DHKEMX25519_AES128GCM_SHA256_Ed25519',
+  /** A 4,000-character message is about 12 KB of UTF-8, plus MLS framing, in base64. */
+  maxCiphertextChars: 24_000,
+  /** A key package or welcome is a few hundred bytes for a DM; this leaves room for big groups. */
+  maxKeyPackageChars: 8_000,
+  maxWelcomeChars: 200_000,
+  /** Key packages uploaded per request, and kept per device at most. */
+  keyPackagesPerUpload: 50,
+  maxKeyPackagesPerDevice: 200,
+  /** Devices a group can be created with in one go (members x devices). */
+  maxWelcomesPerGroup: 200,
+} as const;

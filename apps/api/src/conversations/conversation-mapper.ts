@@ -52,5 +52,6 @@ function toLastMessagePreview(row: MessageRow | undefined): ConversationSummary[
           },
         }
       : {}),
+    ...(row.meta?.e2ee && !row.deletedAt ? { encrypted: true } : {}),
   };
 }

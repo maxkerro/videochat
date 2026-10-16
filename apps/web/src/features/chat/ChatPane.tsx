@@ -61,13 +61,7 @@ import {
   setMessageReactions,
   type MessagesData,
 } from './messagesCache';
-import {
-  deleteMessage,
-  editMessage,
-  fetchMessages,
-  sendMessage,
-  toggleReaction,
-} from './messagesApi';
+import { deleteMessage, editMessage, fetchMessages, toggleReaction } from './messagesApi';
 import { ReadReceiptThrottle } from './readReceipts';
 import { useRealtimeEvent, useSendTyping } from './RealtimeProvider';
 import { TypingThrottle } from './typingThrottle';
@@ -77,6 +71,7 @@ import {
   withTypingEvent,
   type TypingEntry,
 } from './typingIndicator';
+import { E2eeUnavailableError, sendTextMessage, useDecryptedMessages, useE2ee } from '../e2ee';
 import styles from './ChatPane.module.css';
 
 /** How often the typing-indicator map is checked for entries that have gone stale (see
@@ -90,7 +85,7 @@ const TYPING_PRUNE_INTERVAL_MS = 1000;
  *  is "a blocked user's messages to you are rejected" from the recipient's side. Both still offer
  *  retry, same as a plain failure -- this only changes the label, not the recovery path (a rate
  *  limit clears itself shortly; a block might have been lifted by the time of a retry too). */
-type SendFailureReason = 'rate-limited' | 'blocked' | 'other';
+type SendFailureReason = 'rate-limited' | 'blocked' | 'encryption' | 'other';
 
 interface PendingMessage {
   clientMsgId: string;
@@ -109,6 +104,7 @@ interface PendingMessage {
  *  `MessagesService.send`'s "recipient has blocked you" rejection. Anything else (validation,
  *  a 404 from being removed mid-conversation, a 500) falls back to the existing generic message. */
 export function classifySendFailure(error: unknown): SendFailureReason {
+  if (error instanceof E2eeUnavailableError) return 'encryption';
   if (error instanceof ApiError) {
     if (error.status === 429) return 'rate-limited';
     if (error.status === 403) return 'blocked';
@@ -125,6 +121,8 @@ export function failureLabelFor(reason: SendFailureReason | undefined): string {
       return "You're sending messages too fast -- wait a moment and tap to retry";
     case 'blocked':
       return "Couldn't be delivered -- tap to retry";
+    case 'encryption':
+      return "Couldn't encrypt yet (the other person needs encryption on) -- tap to retry";
     default:
       return 'Failed -- tap to retry';
   }
@@ -316,7 +314,11 @@ export function ChatPane() {
   // CHAT-030: files picked, dropped or pasted -- each becomes its own message once uploaded.
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [dragging, setDragging] = useState(false);
-  const composerPreview = useComposerLinkPreview(draft);
+  // CHAT-076 (spike): with the prototype on, a direct chat's text is end-to-end encrypted.
+  const e2ee = useE2ee();
+  const encrypted = !!e2ee && conversationQuery.data?.type === 'direct';
+  // No link preview for encrypted text: fetching one would show the URL to the server.
+  const composerPreview = useComposerLinkPreview(encrypted ? '' : draft);
   // CHAT-073: "@" in a group offers its members.
   const composerRef = useRef<HTMLTextAreaElement>(null);
   const mentionAutocomplete = useMentionAutocomplete({
@@ -541,9 +543,11 @@ export function ChatPane() {
   // module) so that "the latest message" always sits at `scrollTop: 0` and loading more history
   // only ever appends rows *after* whatever the person is currently looking at, never before it
   // -- the usual fix for a virtualized chat list jumping every time older messages load in.
+  // CHAT-076 (spike): encrypted messages carry their decrypted text (or a status) as `body`.
+  const shownMessages = useDecryptedMessages(e2ee, allMessages);
   const rows = useMemo(
-    () => buildRows(allMessages, pendingHere, unreadThroughRef.current),
-    [allMessages, pendingHere],
+    () => buildRows(shownMessages, pendingHere, unreadThroughRef.current),
+    [shownMessages, pendingHere],
   );
   const reversedRows = useMemo(() => [...rows].reverse(), [rows]);
   const reversedRowsRef = useRef(reversedRows);
@@ -689,13 +693,16 @@ export function ChatPane() {
     replyToId?: string;
   }) {
     try {
-      const message = await withAuthRetry(auth, (token) =>
-        sendMessage(token, target.conversationId, {
+      const message = await sendTextMessage(
+        auth,
+        target.conversationId,
+        {
           clientMsgId: target.clientMsgId,
           body: target.body,
           ...(target.linkPreview === false ? { linkPreview: false } : {}),
           ...(target.replyToId ? { replyToId: target.replyToId } : {}),
-        }),
+        },
+        encrypted,
       );
       queryClient.setQueryData<MessagesData>(['messages', target.conversationId], (old) =>
         appendToLatestPage(old, message),
@@ -713,11 +720,12 @@ export function ChatPane() {
       // `fetch` itself, offline) never reached the server at all: queue it in the outbox so
       // `RealtimeProvider` sends it automatically, in order, the moment the connection comes back,
       // rather than leaving it stranded on a "tap to retry" the person has to remember to press.
-      if (!(error instanceof ApiError)) {
+      if (!(error instanceof ApiError) && !(error instanceof E2eeUnavailableError)) {
         void enqueueOutboxMessage({
           clientMsgId: target.clientMsgId,
           conversationId: target.conversationId,
           body: target.body,
+          ...(encrypted ? { encrypted: true } : {}),
           queuedAt: Date.now(),
         });
       }
@@ -1003,6 +1011,14 @@ export function ChatPane() {
           <h1 className={styles.title}>{title}</h1>
           {conversation?.type === 'direct' && presenceLabel(peerPresence) && (
             <span className={styles.subtitle}>{presenceLabel(peerPresence)}</span>
+          )}
+          {encrypted && (
+            <span
+              className={styles.encrypted}
+              title="Prototype: text is end-to-end encrypted; files and voice messages are not yet"
+            >
+              🔒 End-to-end encrypted (prototype)
+            </span>
           )}
           {seenInfo && (
             <span

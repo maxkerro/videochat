@@ -61,6 +61,10 @@ describe('format', () => {
   it('previews: text, own prefix, photo, file, deleted, call, empty', () => {
     const base = { type: 'text', senderId: PEER, body: 'hello\nworld' } as const;
     expect(lastMessagePreview(conv({ lastMessage: base }), ME)).toBe('hello world');
+    // CHAT-076 (spike)
+    expect(
+      lastMessagePreview(conv({ lastMessage: { ...base, body: null, encrypted: true } }), ME),
+    ).toBe('🔒 Encrypted message');
     expect(lastMessagePreview(conv({ lastMessage: { ...base, senderId: ME } }), ME)).toBe(
       'You: hello world',
     );

@@ -12,6 +12,7 @@ import {
   MESSAGE_TYPES,
   type Attachment,
   type CallMessageMeta,
+  type E2eePayload,
   type LinkPreview,
   type VoiceInfo,
 } from '@videochat/shared';
@@ -267,6 +268,8 @@ export const messages = pgTable(
       linkPreviewDismissed?: boolean;
       /** CHAT-073: ids of the members the text @mentions (resolved when sent or edited). */
       mentions?: string[];
+      /** CHAT-076 (spike): the end-to-end encrypted text (the body is null). */
+      e2ee?: E2eePayload;
     }>(),
   },
   (t) => [
@@ -519,3 +522,70 @@ export type CallRow = typeof calls.$inferSelect;
 export type AttachmentRow = typeof attachments.$inferSelect;
 export type GroupCallRow = typeof groupCalls.$inferSelect;
 export type ReactionRow = typeof reactions.$inferSelect;
+
+/**
+ * CHAT-076 (spike): end-to-end encryption key directory. Only public material is stored here: a
+ * device's one-time MLS key packages, the fact that a conversation has an MLS group, and the
+ * welcomes that let a device join one. Private keys and group secrets never reach the server.
+ */
+export const e2eeDevices = pgTable(
+  'e2ee_devices',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    userId: uuid('user_id')
+      .notNull()
+      .references(() => users.id, { onDelete: 'cascade' }),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+    /** Removed devices stay as tombstones so nobody adds them to a group again. */
+    revokedAt: timestamp('revoked_at', { withTimezone: true }),
+  },
+  (t) => [index('e2ee_devices_user_idx').on(t.userId)],
+);
+
+export const e2eeKeyPackages = pgTable(
+  'e2ee_key_packages',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    deviceId: uuid('device_id')
+      .notNull()
+      .references(() => e2eeDevices.id, { onDelete: 'cascade' }),
+    /** A TLS-encoded MLS KeyPackage message, base64. Deleted when claimed (one use only). */
+    keyPackage: text('key_package').notNull(),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [index('e2ee_key_packages_device_idx').on(t.deviceId, t.createdAt)],
+);
+
+export const e2eeGroups = pgTable('e2ee_groups', {
+  /** One MLS group per conversation; the primary key makes "first creator wins" atomic. */
+  conversationId: uuid('conversation_id')
+    .primaryKey()
+    .references(() => conversations.id, { onDelete: 'cascade' }),
+  creatorDeviceId: uuid('creator_device_id').references(() => e2eeDevices.id, {
+    onDelete: 'set null',
+  }),
+  createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+});
+
+export const e2eeWelcomes = pgTable(
+  'e2ee_welcomes',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    conversationId: uuid('conversation_id')
+      .notNull()
+      .references(() => conversations.id, { onDelete: 'cascade' }),
+    recipientDeviceId: uuid('recipient_device_id')
+      .notNull()
+      .references(() => e2eeDevices.id, { onDelete: 'cascade' }),
+    senderDeviceId: uuid('sender_device_id').references(() => e2eeDevices.id, {
+      onDelete: 'set null',
+    }),
+    /** A TLS-encoded MLS Welcome message, base64 (encrypted to the recipient's key package). */
+    welcome: text('welcome').notNull(),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [index('e2ee_welcomes_recipient_idx').on(t.recipientDeviceId, t.createdAt)],
+);
+
+export type E2eeGroupRow = typeof e2eeGroups.$inferSelect;
+export type E2eeWelcomeRow = typeof e2eeWelcomes.$inferSelect;

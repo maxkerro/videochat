@@ -23,6 +23,8 @@ export function canEditMessage(message: Message, myUserId: string | undefined, n
     EDITABLE.has(message.type) &&
     // CHAT-074: nothing to edit in a voice message.
     !message.attachment?.voice &&
+    // CHAT-076 (spike): editing encrypted messages isn't in the prototype.
+    !message.e2ee &&
     now - Date.parse(message.createdAt) < LIMITS.messageEditWindowMinutes * 60_000
   );
 }
