@@ -158,6 +158,8 @@ export const E2EE = {
   /** A device that hasn't talked to the key directory for this long counts as gone: it isn't
    *  added to new chats and doesn't count towards the cap. */
   inactiveDeviceDays: 30,
+  /** How often a device replaces its last-resort key package (RFC 9420 §16.8). */
+  lastResortRotationDays: 30,
   /** Devices a group can be created with in one go (members x devices). */
   maxWelcomesPerGroup: 200,
 } as const;

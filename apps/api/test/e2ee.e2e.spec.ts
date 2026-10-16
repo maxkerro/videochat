@@ -1,5 +1,6 @@
 import type { INestApplication } from '@nestjs/common';
 import { randomUUID } from 'node:crypto';
+import pg from 'pg';
 import request from 'supertest';
 import { bearer, startE2eApp, type E2eUser, type FakePushChannel } from './e2e-app.js';
 import { hasInfra } from './helpers.js';
@@ -286,11 +287,18 @@ describe.skipIf(!hasInfra)('end-to-end encryption prototype (CHAT-076)', () => {
 
     await request(server()).delete(`/e2ee/devices/${benOld}`).set(bearer(anna.token)).expect(404);
     await request(server()).delete(`/e2ee/devices/${benOld}`).set(bearer(ben.token)).expect(204);
-    // A removed device can't be used again.
-    await request(server())
+    // A removed device can't be used again, and says so with a code the browser acts on.
+    const gone = await request(server())
       .get(`/e2ee/welcomes?deviceId=${benOld}`)
       .set(bearer(ben.token))
       .expect(403);
+    expect(gone.body.code).toBe('e2ee_unknown_device');
+    // Someone else's device is just as unknown to you.
+    const notMine = await request(server())
+      .get(`/e2ee/welcomes?deviceId=${benNew}`)
+      .set(bearer(anna.token))
+      .expect(403);
+    expect(notMine.body.code).toBe('e2ee_unknown_device');
     const claim = await request(server())
       .post(`/e2ee/conversations/${conversationId}/key-packages/claim`)
       .set(bearer(anna.token))
@@ -390,5 +398,66 @@ describe.skipIf(!hasInfra)('end-to-end encryption prototype (CHAT-076)', () => {
     const pushes = push.sent.filter((s) => s.endpoint === endpoint);
     expect(pushes.length).toBeGreaterThan(0);
     expect(JSON.stringify(pushes)).not.toContain('secret.example');
+  });
+
+  it('drops devices quiet for 30 days, and lets one back only while under the limit', async () => {
+    const db = new pg.Client({ connectionString: process.env.TEST_DATABASE_URL });
+    await db.connect();
+    try {
+      const [anna, ben] = [await signUp(), await signUp()];
+      const annaDevice = await register(anna);
+      const quiet = await register(ben, 1);
+      await db.query(
+        `UPDATE e2ee_devices SET last_seen_at = now() - interval '40 days' WHERE id = $1`,
+        [quiet],
+      );
+      const conversationId = await dm(anna, ben);
+      const claim = await request(server())
+        .post(`/e2ee/conversations/${conversationId}/key-packages/claim`)
+        .set(bearer(anna.token))
+        .send({ deviceId: annaDevice })
+        .expect(200);
+      expect(claim.body).toEqual({ keyPackages: [], missing: [] });
+
+      // It no longer counts, so ten new devices fit; then it can't come back above the limit.
+      const fresh: string[] = [];
+      for (let i = 0; i < 10; i++) {
+        const r = await request(server()).post('/e2ee/devices').set(bearer(ben.token)).send({});
+        expect(r.status).toBe(201);
+        fresh.push(r.body.deviceId);
+      }
+      const refused = await request(server())
+        .get(`/e2ee/devices/${quiet}/key-packages`)
+        .set(bearer(ben.token))
+        .expect(403);
+      expect(refused.body.code).toBe('e2ee_unknown_device');
+
+      // Below the limit again, it's welcome back (and counts again).
+      await request(server())
+        .delete(`/e2ee/devices/${fresh[0]}`)
+        .set(bearer(ben.token))
+        .expect(204);
+      await request(server())
+        .get(`/e2ee/devices/${quiet}/key-packages`)
+        .set(bearer(ben.token))
+        .expect(200);
+      await request(server()).post('/e2ee/devices').set(bearer(ben.token)).send({}).expect(409);
+    } finally {
+      await db.end();
+    }
+  });
+
+  it('replaces the last-resort package safely when two uploads race', async () => {
+    const ben = await signUp();
+    const device = await register(ben, 1);
+    const results = await Promise.all(
+      ['a', 'b', 'c'].map((x) =>
+        request(server())
+          .post(`/e2ee/devices/${device}/key-packages`)
+          .set(bearer(ben.token))
+          .send({ keyPackages: [], lastResort: b64(`last-${x}`) }),
+      ),
+    );
+    expect(results.map((r) => r.status)).toEqual([201, 201, 201]);
   });
 });

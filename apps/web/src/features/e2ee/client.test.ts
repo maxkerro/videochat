@@ -72,6 +72,10 @@ function createFakeDirectory(members: Record<string, string[]>) {
       getGroup: async (conversationId) => groups.get(conversationId) ?? null,
       createGroup: async (conversationId, deviceId, list) => {
         if (groups.has(conversationId)) return false;
+        // Same rule as the API: the group must reach at least one of the other person's devices.
+        if (!list.some((w) => devices.get(w.deviceId) !== userId)) {
+          throw new Error('400: The group must include the other person’s devices');
+        }
         groups.set(conversationId, {
           conversationId,
           creatorDeviceId: deviceId,
@@ -96,7 +100,7 @@ function createFakeDirectory(members: Record<string, string[]>) {
       },
     };
   }
-  return { apiFor, packages, revoked };
+  return { apiFor, packages, revoked, lastResorts };
 }
 
 const ANNA = '11111111-1111-4111-8111-111111111111';
@@ -291,5 +295,54 @@ describe('E2eeClient (CHAT-076 spike)', () => {
     expect(await phone.removeOtherDevices()).toBe(1);
     const reopened = device(ANNA, laptopStore); // the laptop's next page load
     expect((await reopened.device()).deviceId).not.toBe(old.deviceId);
+  }, 20_000);
+
+  it('says "unavailable" (never sends plain) when every device of the other person is missing', async () => {
+    const { directory, device } = setUp();
+    const anna = device(ANNA);
+    const ben = device(BEN);
+    const benDevice = await ben.device();
+    await anna.device();
+    // Ben's device has nothing left at all: no one-time packages and no last resort.
+    directory.packages.set(benDevice.deviceId, []);
+    directory.lastResorts.delete(benDevice.deviceId);
+    await expect(anna.encrypt(DM, 'hello')).rejects.toBeInstanceOf(E2eeUnavailableError);
+    expect(await anna.members(DM)).toBeNull();
+  }, 20_000);
+
+  it('rotates the last-resort package after 30 days, keeping the previous one for late welcomes', async () => {
+    const { device } = setUp();
+    const store = createMemoryStore();
+    const anna = device(ANNA, store);
+    const first = await anna.device();
+    const original = (await store.getDevice(ANNA))!.lastResort!;
+    expect(await store.getKeyPackage(original.ref)).toBeDefined();
+    // 31 days later the browser loads again.
+    await store.putDevice({
+      ...(await store.getDevice(ANNA))!,
+      lastResort: { ...original, createdAt: Date.now() - 31 * 24 * 60 * 60 * 1000 },
+    });
+    const reloaded = device(ANNA, store);
+    expect((await reloaded.device()).deviceId).toBe(first.deviceId);
+    const rotated = (await store.getDevice(ANNA))!.lastResort!;
+    expect(rotated.ref).not.toBe(original.ref);
+    expect(rotated.previousRef).toBe(original.ref);
+    expect(await store.getKeyPackage(original.ref)).toBeDefined();
+  }, 20_000);
+
+  it('keeps its keys and history on any other error (only "unknown device" wipes)', async () => {
+    const { directory, device } = setUp();
+    const store = createMemoryStore();
+    const anna = device(ANNA, store);
+    const first = await anna.device();
+    await store.putPlaintext('01J0000000000000000000000Z', 'kept');
+    const api = directory.apiFor(ANNA);
+    const flaky = new E2eeClient(
+      ANNA,
+      { ...api, keyPackageCount: async () => Promise.reject(new Error('403 from a proxy')) },
+      store,
+    );
+    expect((await flaky.device()).deviceId).toBe(first.deviceId);
+    expect(await store.getPlaintext('01J0000000000000000000000Z')).toBe('kept');
   }, 20_000);
 });

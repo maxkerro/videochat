@@ -55,6 +55,24 @@ describe('createApiClient', () => {
     expect(error).toMatchObject({ status: 400, requestId: 'r1', message: 'a, b' });
   });
 
+  it('CHAT-076: carries a machine-readable error code when the server sends one', async () => {
+    const fetchImpl = vi
+      .fn<ApiFetch>()
+      .mockResolvedValue(
+        response('{"message":"Unknown device","code":"e2ee_unknown_device"}', 403),
+      );
+    const error = await client(fetchImpl)
+      .apiGet('/x', schema)
+      .catch((e: unknown) => e);
+    expect(error).toMatchObject({ status: 403, code: 'e2ee_unknown_device' });
+    const plain = vi.fn<ApiFetch>().mockResolvedValue(response('{"message":"no"}', 403));
+    expect(
+      await client(plain)
+        .apiGet('/x', schema)
+        .catch((e: ApiError) => e.code),
+    ).toBeUndefined();
+  });
+
   it('treats an empty successful body as undefined and honours acceptStatuses', async () => {
     const empty = vi.fn<ApiFetch>().mockResolvedValue(response('', 201));
     await expect(client(empty).apiPost('/x', z.undefined())).resolves.toBeUndefined();

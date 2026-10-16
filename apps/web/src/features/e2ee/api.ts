@@ -1,4 +1,5 @@
 import {
+  E2EE_UNKNOWN_DEVICE,
   claimedKeyPackagesSchema,
   e2eeDeviceSchema,
   e2eeGroupSchema,
@@ -60,7 +61,10 @@ export function createHttpE2eeApi(
       withToken((t) =>
         apiPost(`/e2ee/devices/${deviceId}/revoke-others`, revokedDevicesSchema, {}, auth(t)),
       ).then((r) => r.revoked),
-    isUnknownDevice: (error) => error instanceof ApiError && error.status === 403,
+    // Only the key directory's own "unknown device" answer: any other 403 (a proxy, a future
+    // guard) must never make a browser wipe its keys and decrypted history.
+    isUnknownDevice: (error) =>
+      error instanceof ApiError && error.status === 403 && error.code === E2EE_UNKNOWN_DEVICE,
     claim: (conversationId, deviceId) =>
       withToken((t) =>
         apiPost(

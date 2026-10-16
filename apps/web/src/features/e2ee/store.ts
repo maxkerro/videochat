@@ -5,6 +5,9 @@
 export interface StoredDevice {
   userId: string;
   deviceId: string;
+  /** The current last-resort key package (its ref) and when it was made; the one before it is
+   *  kept until the next rotation, for welcomes that were already on their way. */
+  lastResort?: { ref: string; createdAt: number; previousRef?: string };
 }
 
 export interface StoredKeyPackage {

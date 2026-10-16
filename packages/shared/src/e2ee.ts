@@ -13,6 +13,11 @@ const base64 = (max: number) =>
     .max(max)
     .regex(/^[A-Za-z0-9+/]+={0,2}$/, 'Expected base64');
 
+/** The error `code` the key directory answers with (403) when it no longer knows a device:
+ *  removed from another device, or gone quiet while the account is at its device limit. Only this
+ *  tells a browser to wipe its keys and start over; any other 403 leaves them alone. */
+export const E2EE_UNKNOWN_DEVICE = 'e2ee_unknown_device';
+
 /** The encrypted form of a message: an MLS PrivateMessage, base64. Replaces `body`. */
 export const e2eePayloadSchema = z.object({
   v: z.literal(E2EE.payloadVersion),

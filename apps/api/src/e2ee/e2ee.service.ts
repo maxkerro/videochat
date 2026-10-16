@@ -13,9 +13,9 @@ import type {
   E2eeGroup,
   E2eeWelcome,
 } from '@videochat/shared';
-import { E2EE } from '@videochat/shared';
+import { E2EE, E2EE_UNKNOWN_DEVICE } from '@videochat/shared';
 import type { Env } from '../config/env.js';
-import { hasBlockInDirectConversation } from '../db/blocks.js';
+import { directConversationsWithBlock, hasBlockInDirectConversation } from '../db/blocks.js';
 import type { Database } from '../db/client.js';
 import { findConversationBasics, isConversationMember } from '../db/conversations.js';
 import {
@@ -28,7 +28,7 @@ import {
   findE2eeGroup,
   insertE2eeGroup,
   insertWelcomes,
-  isActiveDeviceOf,
+  findDeviceState,
   listMemberDevices,
   listWelcomes,
   lockUserDevices,
@@ -112,15 +112,15 @@ export class E2eeService {
   ): Promise<ClaimedKeyPackages> {
     await this.requireDevice(userId, deviceId);
     await this.requireDirectConversation(conversationId, userId);
-    // Key packages are one-time: only hand them out while a group can still be created, and
-    // never to someone in a block either way (they'd just be draining the other person's keys).
-    if (await hasBlockInDirectConversation(this.db, conversationId, userId)) {
-      throw new ForbiddenException('Encryption isn’t available in this chat');
-    }
-    if (await findE2eeGroup(this.db, conversationId)) {
-      throw new ConflictException('This conversation already has an encryption group');
-    }
     return this.db.transaction(async (tx) => {
+      // Key packages are one-time: only hand them out while a group can still be created, and
+      // never across a block either way (that would only drain the other person's keys).
+      if (await hasBlockInDirectConversation(tx, conversationId, userId)) {
+        throw new ForbiddenException('Encryption isn’t available in this chat');
+      }
+      if (await findE2eeGroup(tx, conversationId)) {
+        throw new ConflictException('This conversation already has an encryption group');
+      }
       const devices = await listMemberDevices(tx, conversationId, deviceId);
       const claimed = await claimKeyPackages(
         tx,
@@ -158,10 +158,10 @@ export class E2eeService {
   ): Promise<E2eeGroup> {
     await this.requireDevice(userId, input.deviceId);
     await this.requireDirectConversation(conversationId, userId);
-    if (await hasBlockInDirectConversation(this.db, conversationId, userId)) {
-      throw new ForbiddenException('Encryption isn’t available in this chat');
-    }
     return this.db.transaction(async (tx) => {
+      if (await hasBlockInDirectConversation(tx, conversationId, userId)) {
+        throw new ForbiddenException('Encryption isn’t available in this chat');
+      }
       const row = await insertE2eeGroup(tx, conversationId, input.deviceId);
       if (!row) throw new ConflictException('This conversation already has an encryption group');
       const owners = new Map(
@@ -188,11 +188,14 @@ export class E2eeService {
 
   async welcomes(userId: string, deviceId: string): Promise<{ welcomes: E2eeWelcome[] }> {
     await this.requireDevice(userId, deviceId);
-    const rows = [];
+    const all = await listWelcomes(this.db, deviceId);
     // Nothing new across a block: the chat stays as it was when the block started.
-    for (const r of await listWelcomes(this.db, deviceId)) {
-      if (!(await hasBlockInDirectConversation(this.db, r.conversationId, userId))) rows.push(r);
-    }
+    const blocked = await directConversationsWithBlock(
+      this.db,
+      all.map((r) => r.conversationId),
+      userId,
+    );
+    const rows = all.filter((r) => !blocked.has(r.conversationId));
     return {
       welcomes: rows.map((r) => ({
         id: r.id,
@@ -225,12 +228,29 @@ export class E2eeService {
     if (!this.enabled) throw new NotFoundException('Not found');
   }
 
+  /**
+   * The device must belong to the caller and not be removed. One that went quiet for
+   * `E2EE.inactiveDeviceDays` comes back only if the account is under its device limit (it no
+   * longer counted, so a newer device may have taken its place); otherwise it's unknown and the
+   * browser starts over as a new device.
+   */
   private async requireDevice(userId: string, deviceId: string): Promise<void> {
     this.requireEnabled();
-    if (!(await isActiveDeviceOf(this.db, deviceId, userId))) {
-      throw new ForbiddenException('Unknown device');
+    const state = await findDeviceState(this.db, deviceId, userId);
+    if (state === 'current') {
+      await touchDevice(this.db, deviceId);
+      return;
     }
-    await touchDevice(this.db, deviceId);
+    if (state === 'inactive') {
+      const revived = await this.db.transaction(async (tx) => {
+        await lockUserDevices(tx, userId);
+        if ((await countActiveDevices(tx, userId)) >= E2EE.maxDevicesPerUser) return false;
+        await touchDevice(tx, deviceId, { force: true });
+        return true;
+      });
+      if (revived) return;
+    }
+    throw new ForbiddenException({ message: 'Unknown device', code: E2EE_UNKNOWN_DEVICE });
   }
 
   private async requireMember(conversationId: string, userId: string): Promise<void> {

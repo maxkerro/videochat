@@ -40,15 +40,60 @@ export async function turnOffE2ee(auth: AuthLike & { user?: { id: string } | nul
   const client = getE2eeClient(auth.user?.id);
   setE2eeEnabled(false);
   current = undefined;
-  if (client) await client.forget();
+  const result = client ? await client.forget() : null;
+  // The keys are gone either way; if the server didn't hear about it, try again next time this
+  // person signs in here, so the device doesn't linger as one others can still add to chats.
+  if (result && !result.revoked && auth.user) {
+    addPendingRevoke({ userId: auth.user.id, deviceId: result.deviceId });
+  }
 }
 
 // Signing out does the same, so the next person on a shared computer finds nothing. The opt-in
 // is per person, so it's switched off too.
-onSignOut(async ({ userId, accessToken }) => {
+onSignOut(async ({ userId, accessToken, refresh }) => {
   if (!isE2eeEnabled()) return;
-  await turnOffE2ee({ accessToken, refresh: async () => null, user: { id: userId } });
+  await turnOffE2ee({ accessToken, refresh, user: { id: userId } });
 });
+
+const PENDING_KEY = 'videochat:e2ee-pending-revokes';
+type PendingRevoke = { userId: string; deviceId: string };
+
+function readPending(): PendingRevoke[] {
+  try {
+    const parsed: unknown = JSON.parse(localStorage.getItem(PENDING_KEY) ?? '[]');
+    return Array.isArray(parsed) ? (parsed as PendingRevoke[]) : [];
+  } catch {
+    return [];
+  }
+}
+
+function writePending(list: PendingRevoke[]): void {
+  try {
+    if (list.length) localStorage.setItem(PENDING_KEY, JSON.stringify(list));
+    else localStorage.removeItem(PENDING_KEY);
+  } catch {
+    // Storage blocked: the device just drops out after 30 days instead.
+  }
+}
+
+function addPendingRevoke(entry: PendingRevoke): void {
+  writePending([...readPending().filter((p) => p.deviceId !== entry.deviceId), entry]);
+}
+
+/** Removes, on the server, devices this browser wiped while signed out or offline. */
+export async function flushPendingRevokes(auth: AuthLike & { user?: { id: string } | null }) {
+  const userId = auth.user?.id;
+  const mine = readPending().filter((p) => p.userId === userId);
+  if (!userId || mine.length === 0) return;
+  const api = createHttpE2eeApi((fn) => withAuthRetry(auth, fn));
+  for (const p of mine) {
+    const done = await api.revokeDevice(p.deviceId).then(
+      () => true,
+      (error: unknown) => api.isUnknownDevice(error),
+    );
+    if (done) writePending(readPending().filter((x) => x.deviceId !== p.deviceId));
+  }
+}
 
 export function useE2eeFlag(): boolean {
   return useSyncExternalStore(subscribeE2eeFlag, isE2eeEnabled, () => false);
@@ -60,6 +105,14 @@ export function useE2ee(): E2eeClient | null {
   const enabled = useE2eeFlag();
   useEffect(() => {
     latestAuth = auth;
+  }, [auth]);
+  // Once per signed-in person (a token refresh doesn't need another pass).
+  const flushedFor = useRef<string | undefined>(undefined);
+  useEffect(() => {
+    const id = auth.user?.id;
+    if (!auth.accessToken || !id || flushedFor.current === id) return;
+    flushedFor.current = id;
+    void flushPendingRevokes(auth).catch(() => undefined);
   }, [auth]);
   const client = enabled ? getE2eeClient(auth.user?.id) : null;
   // Register this browser as soon as the prototype is on, so others can add it to chats before

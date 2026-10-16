@@ -118,7 +118,11 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     clearDrafts(session?.user.id);
     // CHAT-076 (spike) and anything else that must run while the token is still valid.
     if (session?.accessToken) {
-      await runSignOutHooks({ userId: session.user.id, accessToken: session.accessToken });
+      await runSignOutHooks({
+        userId: session.user.id,
+        accessToken: session.accessToken,
+        refresh,
+      });
     }
     try {
       await apiPost('/auth/logout', messageResponseSchema);
@@ -130,7 +134,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       setSession(null);
       queryClient.clear();
     }
-  }, [queryClient, session?.accessToken, session?.user.id]);
+  }, [queryClient, refresh, session?.accessToken, session?.user.id]);
 
   const setUser = useCallback((user: Me) => {
     setSession((prev) => (prev ? { ...prev, user } : prev));

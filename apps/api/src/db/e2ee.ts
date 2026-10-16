@@ -38,12 +38,21 @@ export async function countActiveDevices(db: DbExecutor, userId: string): Promis
 }
 
 /** Records that the device is still in use (at most once an hour, to keep writes rare). */
-export async function touchDevice(db: DbExecutor, deviceId: string): Promise<void> {
+export async function touchDevice(
+  db: DbExecutor,
+  deviceId: string,
+  { force = false }: { force?: boolean } = {},
+): Promise<void> {
   await db
     .update(e2eeDevices)
     .set({ lastSeenAt: sql`now()` })
     .where(
-      and(eq(e2eeDevices.id, deviceId), sql`${e2eeDevices.lastSeenAt} < now() - interval '1 hour'`),
+      force
+        ? eq(e2eeDevices.id, deviceId)
+        : and(
+            eq(e2eeDevices.id, deviceId),
+            sql`${e2eeDevices.lastSeenAt} < now() - interval '1 hour'`,
+          ),
     );
 }
 
@@ -80,14 +89,15 @@ export async function createE2eeDevice(db: DbExecutor, userId: string): Promise<
   return row!.id;
 }
 
-/** True when `deviceId` is an active (not removed) device of `userId`. */
-export async function isActiveDeviceOf(
+/** Whether `deviceId` is a device of `userId`: `current`, `inactive` (quiet for
+ *  `E2EE.inactiveDeviceDays`), or `unknown` (not theirs, or removed). */
+export async function findDeviceState(
   db: DbExecutor,
   deviceId: string,
   userId: string,
-): Promise<boolean> {
+): Promise<'current' | 'inactive' | 'unknown'> {
   const [row] = await db
-    .select({ id: e2eeDevices.id })
+    .select({ current: sql<boolean>`${deviceIsCurrent()}` })
     .from(e2eeDevices)
     .where(
       and(
@@ -97,7 +107,8 @@ export async function isActiveDeviceOf(
       ),
     )
     .limit(1);
-  return row !== undefined;
+  if (!row) return 'unknown';
+  return row.current ? 'current' : 'inactive';
 }
 
 export async function countKeyPackages(db: DbExecutor, deviceId: string): Promise<number> {
@@ -122,10 +133,15 @@ export async function addKeyPackages(
       .values(keyPackages.map((keyPackage) => ({ deviceId, keyPackage })));
   }
   if (lastResort) {
+    // One row per device (partial unique index); an upsert, so two parallel uploads can't clash.
     await db
-      .delete(e2eeKeyPackages)
-      .where(and(eq(e2eeKeyPackages.deviceId, deviceId), eq(e2eeKeyPackages.lastResort, true)));
-    await db.insert(e2eeKeyPackages).values({ deviceId, keyPackage: lastResort, lastResort: true });
+      .insert(e2eeKeyPackages)
+      .values({ deviceId, keyPackage: lastResort, lastResort: true })
+      .onConflictDoUpdate({
+        target: e2eeKeyPackages.deviceId,
+        targetWhere: sql`${e2eeKeyPackages.lastResort}`,
+        set: { keyPackage: lastResort, createdAt: sql`now()` },
+      });
   }
   await db.execute(sql`
     DELETE FROM ${e2eeKeyPackages}

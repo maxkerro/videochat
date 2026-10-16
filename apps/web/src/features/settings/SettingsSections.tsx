@@ -172,7 +172,7 @@ function E2eePrototypeToggle() {
     <>
       <Toggle
         label="End-to-end encryption (prototype)"
-        hint="Direct chats, text only, in this browser. Both people need it on. Turning it off, or signing out, removes this browser’s keys and the messages it decrypted."
+        hint="Direct chats, text only, in this browser. Both people need it on. Turning it off, or signing out, removes this browser’s keys and permanently deletes the messages it decrypted."
         checked={on}
         disabled={busy}
         onChange={(next) => void change(next)}
@@ -183,8 +183,10 @@ function E2eePrototypeToggle() {
             Remove my other encryption devices
           </Button>
           <p className={styles.hint}>
-            For lost phones and browsers you no longer use. They stop getting new encrypted
-            messages.
+            For lost phones and browsers you no longer use: they won’t be added to new encrypted
+            chats, and their keys are deleted from the server. Chats they’re already in still
+            include them (removing a device from a chat isn’t built yet), so for a lost phone also
+            change your password, which signs out your other devices.
           </p>
         </div>
       )}

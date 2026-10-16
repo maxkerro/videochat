@@ -216,21 +216,26 @@ export class E2eeClient {
     return device;
   }
 
-  private async topUp(device: StoredDevice): Promise<void> {
-    if ((await this.api.keyPackageCount(device.deviceId)) < KEY_PACKAGE_LOW_WATER) {
-      await this.uploadKeyPackages(device, { lastResort: false });
-    }
+  /** Uploads more one-time key packages when few are left, and replaces the last-resort one
+   *  every `E2EE.lastResortRotationDays` (RFC 9420 §16.8: it must not live forever). */
+  private async topUp(device: StoredDevice, now = Date.now()): Promise<void> {
+    const low = (await this.api.keyPackageCount(device.deviceId)) < KEY_PACKAGE_LOW_WATER;
+    const rotationMs = E2EE.lastResortRotationDays * 24 * 60 * 60 * 1000;
+    const rotate = !device.lastResort || now - device.lastResort.createdAt > rotationMs;
+    if (low || rotate) await this.uploadKeyPackages(device, { oneTime: low, lastResort: rotate });
   }
 
   private async uploadKeyPackages(
     device: StoredDevice,
-    { lastResort }: { lastResort: boolean },
+    { oneTime = true, lastResort }: { oneTime?: boolean; lastResort: boolean },
   ): Promise<void> {
     const mls = await loadMls();
     const identity = mls.identityFor(device.userId, device.deviceId);
-    const batch = await Promise.all(
-      Array.from({ length: KEY_PACKAGE_BATCH }, () => mls.newKeyPackage(identity)),
-    );
+    const batch = oneTime
+      ? await Promise.all(
+          Array.from({ length: KEY_PACKAGE_BATCH }, () => mls.newKeyPackage(identity)),
+        )
+      : [];
     // The reusable fallback for when the one-time packages run out (RFC 9420 §16.8).
     const fallback = lastResort ? await mls.newKeyPackage(identity) : undefined;
     // Private halves first: a key package must never be claimable before we can use it.
@@ -243,16 +248,35 @@ export class E2eeClient {
       batch.map((k) => mls.toBase64(k.publicBytes)),
       fallback ? mls.toBase64(fallback.publicBytes) : undefined,
     );
+    if (fallback) {
+      // Keep the one it replaces until the next rotation; drop the one before that.
+      const old = device.lastResort;
+      if (old?.previousRef) await this.store.deleteKeyPackage(old.previousRef);
+      device.lastResort = {
+        ref: fallback.ref,
+        createdAt: Date.now(),
+        ...(old ? { previousRef: old.ref } : {}),
+      };
+      await this.store.putDevice(device);
+    }
   }
 
   /** Removes this browser as a device (server side) and wipes its keys, group state and
    *  decrypted messages. Used when encryption is turned off here, and on sign-out. */
-  async forget(): Promise<void> {
-    await this.withLock('device', async () => {
+  async forget(): Promise<{ deviceId: string; revoked: boolean } | null> {
+    return this.withLock('device', async () => {
       const device = await this.store.getDevice(this.userId);
-      if (device) await this.api.revokeDevice(device.deviceId).catch(() => undefined);
+      let revoked = false;
+      if (device) {
+        revoked = await this.api.revokeDevice(device.deviceId).then(
+          () => true,
+          // Already gone on the server counts as removed.
+          (error: unknown) => this.api.isUnknownDevice(error),
+        );
+      }
       await this.store.clear();
       this.devicePromise = undefined;
+      return device ? { deviceId: device.deviceId, revoked } : null;
     });
   }
 

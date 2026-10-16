@@ -12,7 +12,7 @@ describe('signOutHooks', () => {
         }),
         onSignOut(() => new Promise(() => undefined)),
       ];
-      const done = runSignOutHooks({ userId: 'u1', accessToken: 't' });
+      const done = runSignOutHooks({ userId: 'u1', accessToken: 't', refresh: async () => null });
       await vi.advanceTimersByTimeAsync(3_000);
       await done;
       expect(seen).toEqual(['ok:u1']);

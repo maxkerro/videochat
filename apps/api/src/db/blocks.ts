@@ -1,4 +1,4 @@
-import { and, eq, ne, or } from 'drizzle-orm';
+import { and, eq, inArray, ne, or } from 'drizzle-orm';
 import type { DbExecutor } from './client.js';
 import { blocks, conversations, memberships, users, type BlockRow } from './schema.js';
 
@@ -161,4 +161,30 @@ export async function hasBlockInDirectConversation(
     .where(and(eq(conversations.id, conversationId), eq(conversations.type, 'direct')))
     .limit(1);
   return row !== undefined;
+}
+
+/** CHAT-076 (spike): which of these conversations are direct chats with a block either way
+ *  between `userId` and the other member -- {@link hasBlockInDirectConversation} for many at once. */
+export async function directConversationsWithBlock(
+  db: DbExecutor,
+  conversationIds: string[],
+  userId: string,
+): Promise<Set<string>> {
+  if (conversationIds.length === 0) return new Set();
+  const rows = await db
+    .selectDistinct({ id: conversations.id })
+    .from(conversations)
+    .innerJoin(
+      memberships,
+      and(eq(memberships.conversationId, conversations.id), ne(memberships.userId, userId)),
+    )
+    .innerJoin(
+      blocks,
+      or(
+        and(eq(blocks.blockerId, memberships.userId), eq(blocks.blockedId, userId)),
+        and(eq(blocks.blockerId, userId), eq(blocks.blockedId, memberships.userId)),
+      ),
+    )
+    .where(and(inArray(conversations.id, conversationIds), eq(conversations.type, 'direct')));
+  return new Set(rows.map((r) => r.id));
 }

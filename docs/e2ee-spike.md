@@ -29,11 +29,20 @@ prototype in the code.
   (409), and rate-limited (`RATE_LIMIT_E2EE_MAX` per `RATE_LIMIT_E2EE_WINDOW_SEC`, also on device
   registration and group creation). Browsers top up one-time packages when fewer than 5 are left.
 - **Devices.** At most 10 current devices per account (parallel registrations can't overshoot). A
-  device not heard from in 30 days stops counting and isn't added to new chats. Settings ->
-  Privacy -> "Remove my other encryption devices" removes the rest; a removed browser starts over
-  as a new device on its next load. Deleting an account removes its devices.
-- **Turning it off or signing out** removes this browser's device on the server and wipes its
-  keys, group states and decrypted messages from IndexedDB (and switches the opt-in off).
+  device not heard from in 30 days stops counting and isn't added to new chats; it comes back only
+  while the account is under the limit. Settings -> Privacy -> "Remove my other encryption
+  devices" removes the rest from the key directory: they aren't added to new chats and their key
+  packages are deleted, **but they stay in chats they already joined** (removing a device from a
+  chat's group is not built), so for a lost phone also change the password, which signs out other
+  devices. A removed browser starts over as a new device on its next load, and **its decrypted
+  history is gone** (only the key directory's own `e2ee_unknown_device` answer triggers this,
+  never any other 403). Deleting an account removes its devices.
+- **Last-resort packages** are replaced every 30 days; the previous one is kept until the next
+  rotation for welcomes already on their way.
+- **Turning it off or signing out** removes this browser's device on the server and permanently
+  deletes its keys, group states and decrypted messages from IndexedDB (and switches the opt-in
+  off). If the server can't be told (offline, session expired), the browser retries the next time
+  that person signs in there.
 - **Groups.** A group must include at least one device of the other person (otherwise the chat
   would be locked out of encryption). No group creation or welcome pickup across a block. A
   browser joins from a Welcome only if it is this chat's group, includes this account, and holds
@@ -57,7 +66,7 @@ prototype in the code.
 
 ## Not in the prototype
 
-Devices added after a chat's group exists (needs commits from an online member), removing devices,
+Devices added after a chat's group exists (needs commits from an online member), removing devices from chats they already joined,
 group chats, attachments and voice messages (they stay unencrypted, and the chat header says so),
 editing encrypted messages, safety-number verification, history on new devices, and the phone apps.
 The last-resort package isn't marked with MLS's `last_resort` extension yet (the server keeps

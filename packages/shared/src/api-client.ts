@@ -40,6 +40,8 @@ export class ApiError extends Error {
     readonly status: number,
     message: string,
     readonly requestId?: string,
+    /** A machine-readable `code` from the error body, when the server sends one. */
+    readonly code?: string,
   ) {
     super(message);
     this.name = 'ApiError';
@@ -63,6 +65,15 @@ async function errorMessage(res: ApiResponseLike): Promise<string> {
   return `Request failed with status ${res.status}`;
 }
 
+async function errorCode(res: ApiResponseLike): Promise<string | undefined> {
+  try {
+    const code = ((await res.clone().json()) as { code?: unknown } | null)?.code;
+    return typeof code === 'string' ? code : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
 async function handleResponse<S extends z.ZodType>(
   res: ApiResponseLike,
   schema: S,
@@ -70,7 +81,7 @@ async function handleResponse<S extends z.ZodType>(
 ): Promise<z.infer<S>> {
   const requestId = res.headers.get('x-request-id') ?? undefined;
   if (!res.ok && !acceptStatuses?.includes(res.status)) {
-    throw new ApiError(res.status, await errorMessage(res), requestId);
+    throw new ApiError(res.status, await errorMessage(res), requestId, await errorCode(res));
   }
   // A 204, or any other successful response Nest sends with an empty body (CHAT-018's
   // `Promise<void>` endpoints answer 200/201 with `Content-Length: 0`, not 204) -- `JSON.parse`

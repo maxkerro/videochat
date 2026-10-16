@@ -6,6 +6,8 @@
 export interface SignOutSession {
   userId: string;
   accessToken: string;
+  /** A fresh access token if this one has expired (null when the session is already gone). */
+  refresh: () => Promise<string | null>;
 }
 
 type Hook = (session: SignOutSession) => Promise<void>;
