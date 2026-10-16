@@ -32,6 +32,8 @@ import {
   listMemberDevices,
   listWelcomes,
   lockUserDevices,
+  revokeDevices,
+  touchDevice,
 } from '../db/e2ee.js';
 import type { E2eeGroupRow } from '../db/schema.js';
 import { DB, ENV } from '../infra/tokens.js';
@@ -71,9 +73,29 @@ export class E2eeService {
     userId: string,
     deviceId: string,
     keyPackages: string[],
+    lastResort?: string,
   ): Promise<{ count: number }> {
     await this.requireDevice(userId, deviceId);
-    return { count: await addKeyPackages(this.db, deviceId, keyPackages) };
+    return this.db.transaction(async (tx) => ({
+      count: await addKeyPackages(tx, deviceId, keyPackages, lastResort),
+    }));
+  }
+
+  /** Removes one of the caller's devices (e.g. this browser turning encryption off). */
+  async revokeDevice(userId: string, deviceId: string): Promise<void> {
+    this.requireEnabled();
+    const n = await this.db.transaction((tx) => revokeDevices(tx, userId, { deviceId }));
+    if (n === 0) throw new NotFoundException('Not found');
+  }
+
+  /** Removes every device of the caller except `deviceId` (lost phones, old browsers). */
+  async revokeOtherDevices(userId: string, deviceId: string): Promise<{ revoked: number }> {
+    await this.requireDevice(userId, deviceId);
+    return {
+      revoked: await this.db.transaction((tx) =>
+        revokeDevices(tx, userId, { allExcept: deviceId }),
+      ),
+    };
   }
 
   async keyPackageCount(userId: string, deviceId: string): Promise<{ count: number }> {
@@ -107,9 +129,14 @@ export class E2eeService {
       const keyPackages: ClaimedKeyPackages['keyPackages'] = [];
       const missing: ClaimedKeyPackages['missing'] = [];
       for (const d of devices) {
-        const keyPackage = claimed.get(d.deviceId);
-        if (keyPackage) keyPackages.push({ ...d, keyPackage });
-        else missing.push(d);
+        const got = claimed.get(d.deviceId);
+        if (got) {
+          keyPackages.push({
+            ...d,
+            keyPackage: got.keyPackage,
+            ...(got.lastResort ? { lastResort: true } : {}),
+          });
+        } else missing.push(d);
       }
       return { keyPackages, missing };
     });
@@ -131,18 +158,28 @@ export class E2eeService {
   ): Promise<E2eeGroup> {
     await this.requireDevice(userId, input.deviceId);
     await this.requireDirectConversation(conversationId, userId);
+    if (await hasBlockInDirectConversation(this.db, conversationId, userId)) {
+      throw new ForbiddenException('Encryption isn’t available in this chat');
+    }
     return this.db.transaction(async (tx) => {
       const row = await insertE2eeGroup(tx, conversationId, input.deviceId);
       if (!row) throw new ConflictException('This conversation already has an encryption group');
-      const allowed = new Set(
-        (await listMemberDevices(tx, conversationId, input.deviceId)).map((d) => d.deviceId),
+      const owners = new Map(
+        (await listMemberDevices(tx, conversationId, input.deviceId)).map((d) => [
+          d.deviceId,
+          d.userId,
+        ]),
       );
       const recipients = new Set<string>();
       for (const w of input.welcomes) {
-        if (!allowed.has(w.deviceId) || recipients.has(w.deviceId)) {
+        if (!owners.has(w.deviceId) || recipients.has(w.deviceId)) {
           throw new BadRequestException('A welcome is addressed to a device outside this chat');
         }
         recipients.add(w.deviceId);
+      }
+      // A group the other person can't join would lock the chat out of encryption for good.
+      if (![...recipients].some((id) => owners.get(id) !== userId)) {
+        throw new BadRequestException('The group must include the other person’s devices');
       }
       await insertWelcomes(tx, conversationId, input.deviceId, input.welcomes);
       return toGroup(row);
@@ -151,7 +188,11 @@ export class E2eeService {
 
   async welcomes(userId: string, deviceId: string): Promise<{ welcomes: E2eeWelcome[] }> {
     await this.requireDevice(userId, deviceId);
-    const rows = await listWelcomes(this.db, deviceId);
+    const rows = [];
+    // Nothing new across a block: the chat stays as it was when the block started.
+    for (const r of await listWelcomes(this.db, deviceId)) {
+      if (!(await hasBlockInDirectConversation(this.db, r.conversationId, userId))) rows.push(r);
+    }
     return {
       welcomes: rows.map((r) => ({
         id: r.id,
@@ -189,6 +230,7 @@ export class E2eeService {
     if (!(await isActiveDeviceOf(this.db, deviceId, userId))) {
       throw new ForbiddenException('Unknown device');
     }
+    await touchDevice(this.db, deviceId);
   }
 
   private async requireMember(conversationId: string, userId: string): Promise<void> {

@@ -260,8 +260,8 @@ it doesn't apply route changes by itself, then check a photo thumbnail loads in 
 Off everywhere by default; nothing changes for anyone until both switches below are on. See
 [`docs/e2ee-spike.md`](./e2ee-spike.md) for what it does and doesn't cover.
 
-1. On `videochat-api` in Render set **`E2EE_PROTOTYPE`** to `true` and deploy (migration
-   `0018_e2ee_spike` creates the key directory tables). Unset or `false`, every `/e2ee/*` endpoint
+1. On `videochat-api` in Render set **`E2EE_PROTOTYPE`** to `true` and deploy (migrations
+   `0018_e2ee_spike` and `0019_e2ee_last_resort` create the key directory). Unset or `false`, every `/e2ee/*` endpoint
    answers 404 and encrypted messages are refused.
 2. In each browser that should take part: Settings -> Privacy -> **End-to-end encryption
    (prototype)**. The toggle only appears while the API has the flag on.

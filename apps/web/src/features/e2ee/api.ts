@@ -4,6 +4,7 @@ import {
   e2eeGroupSchema,
   e2eeWelcomesSchema,
   keyPackageCountSchema,
+  revokedDevicesSchema,
   type ClaimedKeyPackages,
   type E2eeGroup,
   type E2eeWelcome,
@@ -15,7 +16,11 @@ import { ApiError, apiDelete, apiGet, apiPost } from '../../lib/api';
 export interface E2eeApi {
   registerDevice(): Promise<{ deviceId: string }>;
   keyPackageCount(deviceId: string): Promise<number>;
-  uploadKeyPackages(deviceId: string, keyPackages: string[]): Promise<void>;
+  uploadKeyPackages(deviceId: string, keyPackages: string[], lastResort?: string): Promise<void>;
+  revokeDevice(deviceId: string): Promise<void>;
+  revokeOtherDevices(deviceId: string): Promise<number>;
+  /** The server no longer knows this device (it was removed from another one). */
+  isUnknownDevice(error: unknown): boolean;
   claim(conversationId: string, deviceId: string): Promise<ClaimedKeyPackages>;
   getGroup(conversationId: string): Promise<E2eeGroup | null>;
   /** Resolves false when another device created the group first (409). */
@@ -38,15 +43,24 @@ export function createHttpE2eeApi(
       withToken((t) =>
         apiGet(`/e2ee/devices/${deviceId}/key-packages`, keyPackageCountSchema, auth(t)),
       ).then((r) => r.count),
-    uploadKeyPackages: (deviceId, keyPackages) =>
+    uploadKeyPackages: (deviceId, keyPackages, lastResort) =>
       withToken((t) =>
         apiPost(
           `/e2ee/devices/${deviceId}/key-packages`,
           keyPackageCountSchema,
-          { keyPackages },
+          { keyPackages, ...(lastResort ? { lastResort } : {}) },
           auth(t),
         ),
       ).then(() => undefined),
+    revokeDevice: (deviceId) =>
+      withToken((t) => apiDelete(`/e2ee/devices/${deviceId}`, z.unknown(), auth(t))).then(
+        () => undefined,
+      ),
+    revokeOtherDevices: (deviceId) =>
+      withToken((t) =>
+        apiPost(`/e2ee/devices/${deviceId}/revoke-others`, revokedDevicesSchema, {}, auth(t)),
+      ).then((r) => r.revoked),
+    isUnknownDevice: (error) => error instanceof ApiError && error.status === 403,
     claim: (conversationId, deviceId) =>
       withToken((t) =>
         apiPost(

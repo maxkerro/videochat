@@ -18,6 +18,7 @@ import {
 } from 'react';
 import { removePushSubscription } from '../notifications/push';
 import { clearDrafts } from '../../lib/drafts';
+import { runSignOutHooks } from '../../lib/signOutHooks';
 import { apiPost, ApiError } from '../../lib/api';
 import { messageResponseSchema } from './authApi';
 
@@ -115,6 +116,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     if (session?.accessToken) await removePushSubscription(session.accessToken);
     // CHAT-036: unsent drafts stay on this device only while you're signed in.
     clearDrafts(session?.user.id);
+    // CHAT-076 (spike) and anything else that must run while the token is still valid.
+    if (session?.accessToken) {
+      await runSignOutHooks({ userId: session.user.id, accessToken: session.accessToken });
+    }
     try {
       await apiPost('/auth/logout', messageResponseSchema);
     } catch {

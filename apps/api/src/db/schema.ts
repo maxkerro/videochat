@@ -538,6 +538,9 @@ export const e2eeDevices = pgTable(
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
     /** Removed devices stay as tombstones so nobody adds them to a group again. */
     revokedAt: timestamp('revoked_at', { withTimezone: true }),
+    /** Bumped (at most hourly) whenever the device talks to the key directory. A device silent
+     *  for `E2EE.inactiveDeviceDays` is left out of new groups and of the device cap. */
+    lastSeenAt: timestamp('last_seen_at', { withTimezone: true }).notNull().defaultNow(),
   },
   (t) => [index('e2ee_devices_user_idx').on(t.userId)],
 );
@@ -549,11 +552,19 @@ export const e2eeKeyPackages = pgTable(
     deviceId: uuid('device_id')
       .notNull()
       .references(() => e2eeDevices.id, { onDelete: 'cascade' }),
-    /** A TLS-encoded MLS KeyPackage message, base64. Deleted when claimed (one use only). */
+    /** A TLS-encoded MLS KeyPackage message, base64. Deleted when claimed (one use only)... */
     keyPackage: text('key_package').notNull(),
+    /** ...except the device's one "last resort" package (RFC 9420 §16.8), handed out only when
+     *  the one-time ones have run out and never deleted, so nobody can drain a device. */
+    lastResort: boolean('last_resort').notNull().default(false),
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
   },
-  (t) => [index('e2ee_key_packages_device_idx').on(t.deviceId, t.createdAt)],
+  (t) => [
+    index('e2ee_key_packages_device_idx').on(t.deviceId, t.createdAt),
+    uniqueIndex('e2ee_key_packages_last_resort_uq')
+      .on(t.deviceId)
+      .where(sql`${t.lastResort}`),
+  ],
 );
 
 export const e2eeGroups = pgTable('e2ee_groups', {

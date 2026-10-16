@@ -6,7 +6,8 @@ import { useAuth, withAuthRetry, type AuthContextValue } from '../auth/AuthConte
 import { sendMessage } from '../chat/messagesApi';
 import { createHttpE2eeApi } from './api';
 import { E2eeClient, E2eeUnavailableError, type DecryptResult } from './client';
-import { isE2eeEnabled, subscribeE2eeFlag } from './flag';
+import { onSignOut } from '../../lib/signOutHooks';
+import { isE2eeEnabled, setE2eeEnabled, subscribeE2eeFlag } from './flag';
 import { createIndexedDbStore } from './store';
 
 export { E2eeUnavailableError, isE2eeEnabled };
@@ -29,6 +30,25 @@ export function getE2eeClient(userId: string | undefined): E2eeClient | null {
   }
   return current.client;
 }
+
+/**
+ * Turns the prototype off in this browser: the device is removed on the server and its keys,
+ * group states and decrypted messages are wiped (they can't be decrypted again anyway).
+ */
+export async function turnOffE2ee(auth: AuthLike & { user?: { id: string } | null }) {
+  latestAuth = auth;
+  const client = getE2eeClient(auth.user?.id);
+  setE2eeEnabled(false);
+  current = undefined;
+  if (client) await client.forget();
+}
+
+// Signing out does the same, so the next person on a shared computer finds nothing. The opt-in
+// is per person, so it's switched off too.
+onSignOut(async ({ userId, accessToken }) => {
+  if (!isE2eeEnabled()) return;
+  await turnOffE2ee({ accessToken, refresh: async () => null, user: { id: userId } });
+});
 
 export function useE2eeFlag(): boolean {
   return useSyncExternalStore(subscribeE2eeFlag, isE2eeEnabled, () => false);

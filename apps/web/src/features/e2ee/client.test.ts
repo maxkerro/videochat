@@ -10,6 +10,8 @@ import { createMemoryStore, type E2eeStore } from './store';
 function createFakeDirectory(members: Record<string, string[]>) {
   const devices = new Map<string, string>(); // deviceId -> userId
   const packages = new Map<string, string[]>();
+  const lastResorts = new Map<string, string>();
+  const revoked = new Set<string>();
   const groups = new Map<string, E2eeGroup>();
   const welcomes: (E2eeWelcome & { to: string })[] = [];
   let n = 0;
@@ -23,15 +25,47 @@ function createFakeDirectory(members: Record<string, string[]>) {
         packages.set(deviceId, []);
         return { deviceId };
       },
-      keyPackageCount: async (deviceId) => packages.get(deviceId)!.length,
-      uploadKeyPackages: async (deviceId, kps) => void packages.get(deviceId)!.push(...kps),
+      keyPackageCount: async (deviceId) => {
+        if (revoked.has(deviceId)) throw new Error('unknown device');
+        return packages.get(deviceId)!.length;
+      },
+      revokeDevice: async (deviceId) => {
+        revoked.add(deviceId);
+        packages.set(deviceId, []);
+        lastResorts.delete(deviceId);
+      },
+      revokeOtherDevices: async (deviceId) => {
+        let count = 0;
+        for (const [id, owner] of devices) {
+          if (owner === userId && id !== deviceId && !revoked.has(id)) {
+            revoked.add(id);
+            count++;
+          }
+        }
+        return count;
+      },
+      isUnknownDevice: (error) => error instanceof Error && error.message === 'unknown device',
+      uploadKeyPackages: async (deviceId, kps, lastResort) => {
+        packages.get(deviceId)!.push(...kps);
+        if (lastResort) lastResorts.set(deviceId, lastResort);
+      },
       claim: async (conversationId, deviceId) => {
         const out: ClaimedKeyPackages = { keyPackages: [], missing: [] };
         for (const [id, owner] of devices) {
-          if (id === deviceId || !members[conversationId]!.includes(owner)) continue;
+          if (id === deviceId || revoked.has(id) || !members[conversationId]!.includes(owner)) {
+            continue;
+          }
           const kp = packages.get(id)!.shift();
+          const fallback = lastResorts.get(id);
           if (kp) out.keyPackages.push({ userId: owner, deviceId: id, keyPackage: kp });
-          else out.missing.push({ userId: owner, deviceId: id });
+          else if (fallback) {
+            out.keyPackages.push({
+              userId: owner,
+              deviceId: id,
+              keyPackage: fallback,
+              lastResort: true,
+            });
+          } else out.missing.push({ userId: owner, deviceId: id });
         }
         return out;
       },
@@ -62,7 +96,7 @@ function createFakeDirectory(members: Record<string, string[]>) {
       },
     };
   }
-  return { apiFor, packages };
+  return { apiFor, packages, revoked };
 }
 
 const ANNA = '11111111-1111-4111-8111-111111111111';
@@ -216,5 +250,46 @@ describe('E2eeClient (CHAT-076 spike)', () => {
     const sent = asMessage(DM, await anna.encrypt(DM, 'hello'));
     expect(await ben.decrypt(sent)).toEqual({ status: 'waiting' });
     expect(await ben.members(DM)).toBeNull();
+  }, 20_000);
+
+  it('joins through the last-resort key package when the one-time ones are gone', async () => {
+    const { directory, device } = setUp();
+    const anna = device(ANNA);
+    const ben = device(BEN);
+    const benDevice = await ben.device();
+    await anna.device();
+    directory.packages.set(benDevice.deviceId, []); // drained by someone else
+    const sent = asMessage(DM, await anna.encrypt(DM, 'still works'));
+    expect(await ben.decrypt(sent)).toEqual({ status: 'ok', text: 'still works' });
+  }, 20_000);
+
+  it('forgets this browser: device removed on the server, local keys and texts wiped', async () => {
+    const { directory, device } = setUp();
+    const store = createMemoryStore();
+    const anna = device(ANNA, store);
+    const ben = device(BEN);
+    await ben.device();
+    const first = await anna.device();
+    const sent = asMessage(DM, await anna.encrypt(DM, 'hi'));
+    await anna.rememberSent(sent.id, 'hi');
+    await anna.forget();
+    expect(directory.revoked.has(first.deviceId)).toBe(true);
+    expect(await store.getDevice(ANNA)).toBeUndefined();
+    expect(await store.getPlaintext(sent.id)).toBeUndefined();
+    expect(await store.getGroup(DM)).toBeUndefined();
+    // Turning it back on registers a new device.
+    expect((await anna.device()).deviceId).not.toBe(first.deviceId);
+  }, 20_000);
+
+  it('starts over as a new device after being removed from another one', async () => {
+    const { device } = setUp();
+    const laptopStore = createMemoryStore();
+    const laptop = device(ANNA, laptopStore);
+    const phone = device(ANNA);
+    const old = await laptop.device();
+    await phone.device();
+    expect(await phone.removeOtherDevices()).toBe(1);
+    const reopened = device(ANNA, laptopStore); // the laptop's next page load
+    expect((await reopened.device()).deviceId).not.toBe(old.deviceId);
   }, 20_000);
 });

@@ -167,7 +167,7 @@ describe.skipIf(!hasInfra)('end-to-end encryption prototype (CHAT-076)', () => {
   it('keeps outsiders, blocked people and group chats out, and stops claims once a group exists', async () => {
     const [anna, ben, outsider] = [await signUp(), await signUp(), await signUp()];
     const annaDevice = await register(anna);
-    await register(ben, 3);
+    const benDevice = await register(ben, 3);
     const outsiderDevice = await register(outsider);
     const conversationId = await dm(anna, ben);
 
@@ -199,11 +199,18 @@ describe.skipIf(!hasInfra)('end-to-end encryption prototype (CHAT-076)', () => {
       .send({ deviceId: annaDevice })
       .expect(400);
 
-    // Once the chat has a group, nobody can drain the other person's one-time keys through it.
+    // A group nobody else can join is refused: it would lock the chat out of encryption.
     await request(server())
       .post(`/e2ee/conversations/${conversationId}/group`)
       .set(bearer(anna.token))
       .send({ deviceId: annaDevice, welcomes: [] })
+      .expect(400);
+
+    // Once the chat has a group, nobody can drain the other person's one-time keys through it.
+    await request(server())
+      .post(`/e2ee/conversations/${conversationId}/group`)
+      .set(bearer(anna.token))
+      .send({ deviceId: annaDevice, welcomes: [{ deviceId: benDevice, welcome: b64('w') }] })
       .expect(201);
     await request(server())
       .post(`/e2ee/conversations/${conversationId}/key-packages/claim`)
@@ -211,26 +218,110 @@ describe.skipIf(!hasInfra)('end-to-end encryption prototype (CHAT-076)', () => {
       .send({ deviceId: annaDevice })
       .expect(409);
 
-    // A block either way stops claims too.
+    // A block either way stops claims, group creation and welcome pickup.
     const [clara, dan] = [await signUp(), await signUp()];
     const claraDevice = await register(clara);
-    await register(dan);
+    const danDevice = await register(dan);
     const blockedDm = await dm(clara, dan);
     await request(server()).post(`/users/${clara.id}/block`).set(bearer(dan.token)).expect(200);
+    for (const [user, device] of [
+      [clara, claraDevice],
+      [dan, danDevice],
+    ] as const) {
+      await request(server())
+        .post(`/e2ee/conversations/${blockedDm}/key-packages/claim`)
+        .set(bearer(user.token))
+        .send({ deviceId: device })
+        .expect(403);
+    }
     await request(server())
-      .post(`/e2ee/conversations/${blockedDm}/key-packages/claim`)
+      .post(`/e2ee/conversations/${blockedDm}/group`)
       .set(bearer(clara.token))
-      .send({ deviceId: claraDevice })
+      .send({ deviceId: claraDevice, welcomes: [{ deviceId: danDevice, welcome: b64('w') }] })
       .expect(403);
+  });
+
+  it('never runs dry: a device’s last-resort key package outlives its one-time ones', async () => {
+    const [anna, ben] = [await signUp(), await signUp()];
+    const annaDevice = await register(anna);
+    const benDevice = await register(ben, 1);
+    await request(server())
+      .post(`/e2ee/devices/${benDevice}/key-packages`)
+      .set(bearer(ben.token))
+      .send({ keyPackages: [], lastResort: b64('last-resort') })
+      .expect(201);
+    const conversationId = await dm(anna, ben);
+    const claim = () =>
+      request(server())
+        .post(`/e2ee/conversations/${conversationId}/key-packages/claim`)
+        .set(bearer(anna.token))
+        .send({ deviceId: annaDevice })
+        .expect(200);
+    const first = await claim();
+    expect(first.body.keyPackages).toEqual([
+      expect.objectContaining({ deviceId: benDevice, keyPackage: b64(`kp-${ben.id}-0`) }),
+    ]);
+    expect(first.body.keyPackages[0].lastResort).toBeUndefined();
+    // Repeated claims (a stranger trying to drain Ben) only ever get the reusable one.
+    for (let i = 0; i < 3; i++) {
+      const again = await claim();
+      expect(again.body.keyPackages).toEqual([
+        { userId: ben.id, deviceId: benDevice, keyPackage: b64('last-resort'), lastResort: true },
+      ]);
+      expect(again.body.missing).toEqual([]);
+    }
+    const count = await request(server())
+      .get(`/e2ee/devices/${benDevice}/key-packages`)
+      .set(bearer(ben.token))
+      .expect(200);
+    expect(count.body.count).toBe(0);
+  });
+
+  it('removes devices: one, or all but this one; removed devices leave claims and the cap', async () => {
+    const [anna, ben] = [await signUp(), await signUp()];
+    const annaDevice = await register(anna);
+    const benOld = await register(ben, 1);
+    const benNew = await register(ben, 1);
+    const conversationId = await dm(anna, ben);
+
+    await request(server()).delete(`/e2ee/devices/${benOld}`).set(bearer(anna.token)).expect(404);
+    await request(server()).delete(`/e2ee/devices/${benOld}`).set(bearer(ben.token)).expect(204);
+    // A removed device can't be used again.
+    await request(server())
+      .get(`/e2ee/welcomes?deviceId=${benOld}`)
+      .set(bearer(ben.token))
+      .expect(403);
+    const claim = await request(server())
+      .post(`/e2ee/conversations/${conversationId}/key-packages/claim`)
+      .set(bearer(anna.token))
+      .send({ deviceId: annaDevice })
+      .expect(200);
+    expect(claim.body.keyPackages.map((k: { deviceId: string }) => k.deviceId)).toEqual([benNew]);
+
+    // Fill the cap, then free it again with "remove my other devices".
+    for (let i = 0; i < 9; i++) {
+      await request(server()).post('/e2ee/devices').set(bearer(ben.token)).send({}).expect(201);
+    }
+    await request(server()).post('/e2ee/devices').set(bearer(ben.token)).send({}).expect(409);
+    const revoked = await request(server())
+      .post(`/e2ee/devices/${benNew}/revoke-others`)
+      .set(bearer(ben.token))
+      .expect(200);
+    expect(revoked.body).toEqual({ revoked: 9 });
+    await request(server()).post('/e2ee/devices').set(bearer(ben.token)).send({}).expect(201);
   });
 
   it('caps devices per account, and forgets a deleted account’s devices', async () => {
     const [anna, ben] = [await signUp(), await signUp()];
     const annaDevice = await register(anna);
-    for (let i = 0; i < 10; i++) {
-      await request(server()).post('/e2ee/devices').set(bearer(ben.token)).send({}).expect(201);
-    }
-    await request(server()).post('/e2ee/devices').set(bearer(ben.token)).send({}).expect(409);
+    // Parallel registrations can't overshoot the cap.
+    const results = await Promise.all(
+      Array.from({ length: 14 }, () =>
+        request(server()).post('/e2ee/devices').set(bearer(ben.token)).send({}),
+      ),
+    );
+    expect(results.filter((r) => r.status === 201)).toHaveLength(10);
+    expect(results.filter((r) => r.status === 409)).toHaveLength(4);
 
     const conversationId = await dm(anna, ben);
     await request(server())

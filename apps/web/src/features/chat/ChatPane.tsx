@@ -317,6 +317,8 @@ export function ChatPane() {
   // CHAT-076 (spike): with the prototype on, a direct chat's text is end-to-end encrypted.
   const e2ee = useE2ee();
   const encrypted = !!e2ee && conversationQuery.data?.type === 'direct';
+  // Until the chat's type is known we can't tell whether to encrypt: never guess "plain".
+  const encryptionUnknown = !!e2ee && !conversationQuery.data;
   // No link preview for encrypted text: fetching one would show the URL to the server.
   const composerPreview = useComposerLinkPreview(encrypted ? '' : draft);
   // CHAT-073: "@" in a group offers its members.
@@ -741,7 +743,7 @@ export function ChatPane() {
   function handleSubmit(event: FormEvent) {
     event.preventDefault();
     const body = draft.trim();
-    if (!body || !conversationId) return;
+    if (!body || !conversationId || encryptionUnknown) return;
     const clientMsgId = newClientMsgId();
     const linkPreview = composerPreview.wantsPreview ? undefined : false;
     const replyToId = replyTo?.id;
@@ -1367,7 +1369,11 @@ export function ChatPane() {
                 />
               </svg>
             </Button>
-            <Button type="submit" aria-label="Send message" disabled={!draft.trim()}>
+            <Button
+              type="submit"
+              aria-label="Send message"
+              disabled={!draft.trim() || encryptionUnknown}
+            >
               Send
             </Button>
           </>

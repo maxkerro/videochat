@@ -15,7 +15,7 @@ import { isPushSupported, syncPushSubscription } from '../notifications/push';
 import { fetchMe } from '../profile/profileApi';
 import { changePassword, deleteAccount, downloadExport, updateSettings } from './settingsApi';
 import styles from './Settings.module.css';
-import { useE2eeFlag, useE2eeServerStatus } from '../e2ee';
+import { turnOffE2ee, useE2ee, useE2eeFlag, useE2eeServerStatus } from '../e2ee';
 import { setE2eeEnabled } from '../e2ee/flag';
 
 const VISIBILITY_LABELS: Record<LastSeenVisibility, string> = {
@@ -134,16 +134,61 @@ export function PrivacySection() {
 /** CHAT-076 (spike): opt this browser into the end-to-end encryption prototype. Shown only when
  *  the server has it switched on. */
 function E2eePrototypeToggle() {
+  const auth = useAuth();
+  const { toast } = useToast();
   const serverOn = useE2eeServerStatus();
   const on = useE2eeFlag();
+  const client = useE2ee();
+  const [busy, setBusy] = useState(false);
   if (!serverOn) return null;
+
+  async function change(next: boolean) {
+    if (next) {
+      setE2eeEnabled(true);
+      return;
+    }
+    setBusy(true);
+    try {
+      await turnOffE2ee(auth);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function removeOthers() {
+    if (!client) return;
+    setBusy(true);
+    try {
+      const n = await client.removeOtherDevices();
+      toast({ title: n === 1 ? 'Removed 1 other device.' : `Removed ${n} other devices.` });
+    } catch {
+      toast({ title: 'Couldn’t remove your other devices', tone: 'danger' });
+    } finally {
+      setBusy(false);
+    }
+  }
+
   return (
-    <Toggle
-      label="End-to-end encryption (prototype)"
-      hint="Direct chats, text only, in this browser. Both people need it on. Messages sent while it’s on can only be read in browsers that had it on."
-      checked={on}
-      onChange={setE2eeEnabled}
-    />
+    <>
+      <Toggle
+        label="End-to-end encryption (prototype)"
+        hint="Direct chats, text only, in this browser. Both people need it on. Turning it off, or signing out, removes this browser’s keys and the messages it decrypted."
+        checked={on}
+        disabled={busy}
+        onChange={(next) => void change(next)}
+      />
+      {on && (
+        <div>
+          <Button variant="secondary" size="sm" disabled={busy} onClick={() => void removeOthers()}>
+            Remove my other encryption devices
+          </Button>
+          <p className={styles.hint}>
+            For lost phones and browsers you no longer use. They stop getting new encrypted
+            messages.
+          </p>
+        </div>
+      )}
+    </>
   );
 }
 

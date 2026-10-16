@@ -16,6 +16,13 @@ import {
  * key material or ciphertext addressed to one device.
  */
 
+/** Not removed, and heard from within `E2EE.inactiveDeviceDays`. */
+const deviceIsCurrent = () =>
+  and(
+    isNull(e2eeDevices.revokedAt),
+    sql`${e2eeDevices.lastSeenAt} > now() - make_interval(days => ${E2EE.inactiveDeviceDays})`,
+  );
+
 /** Serialises device registration per account inside the caller's transaction, so the device
  *  cap can't be overshot by parallel requests. */
 export async function lockUserDevices(db: DbExecutor, userId: string): Promise<void> {
@@ -26,8 +33,46 @@ export async function countActiveDevices(db: DbExecutor, userId: string): Promis
   const [row] = await db
     .select({ n: count() })
     .from(e2eeDevices)
-    .where(and(eq(e2eeDevices.userId, userId), isNull(e2eeDevices.revokedAt)));
+    .where(and(eq(e2eeDevices.userId, userId), deviceIsCurrent()));
   return Number(row?.n ?? 0);
+}
+
+/** Records that the device is still in use (at most once an hour, to keep writes rare). */
+export async function touchDevice(db: DbExecutor, deviceId: string): Promise<void> {
+  await db
+    .update(e2eeDevices)
+    .set({ lastSeenAt: sql`now()` })
+    .where(
+      and(eq(e2eeDevices.id, deviceId), sql`${e2eeDevices.lastSeenAt} < now() - interval '1 hour'`),
+    );
+}
+
+/** Removes devices of `userId` (one, or all but `keepDeviceId`): they're never added to a group
+ *  again, and their key packages and pending welcomes are deleted. Returns how many. */
+export async function revokeDevices(
+  db: DbExecutor,
+  userId: string,
+  target: { deviceId: string } | { allExcept: string },
+): Promise<number> {
+  const rows = await db
+    .update(e2eeDevices)
+    .set({ revokedAt: sql`now()` })
+    .where(
+      and(
+        eq(e2eeDevices.userId, userId),
+        isNull(e2eeDevices.revokedAt),
+        'deviceId' in target
+          ? eq(e2eeDevices.id, target.deviceId)
+          : ne(e2eeDevices.id, target.allExcept),
+      ),
+    )
+    .returning({ id: e2eeDevices.id });
+  const ids = rows.map((r) => r.id);
+  if (ids.length > 0) {
+    await db.delete(e2eeKeyPackages).where(inArray(e2eeKeyPackages.deviceId, ids));
+    await db.delete(e2eeWelcomes).where(inArray(e2eeWelcomes.recipientDeviceId, ids));
+  }
+  return ids.length;
 }
 
 export async function createE2eeDevice(db: DbExecutor, userId: string): Promise<string> {
@@ -59,25 +104,36 @@ export async function countKeyPackages(db: DbExecutor, deviceId: string): Promis
   const [row] = await db
     .select({ n: count() })
     .from(e2eeKeyPackages)
-    .where(eq(e2eeKeyPackages.deviceId, deviceId));
+    .where(and(eq(e2eeKeyPackages.deviceId, deviceId), eq(e2eeKeyPackages.lastResort, false)));
   return Number(row?.n ?? 0);
 }
 
-/** Adds key packages, keeping at most `E2EE.maxKeyPackagesPerDevice` (the oldest go first). */
+/** Adds one-time key packages, keeping at most `E2EE.maxKeyPackagesPerDevice` (the oldest go
+ *  first), and replaces the device's last-resort package when one is given. */
 export async function addKeyPackages(
   db: DbExecutor,
   deviceId: string,
   keyPackages: string[],
+  lastResort?: string,
 ): Promise<number> {
-  await db
-    .insert(e2eeKeyPackages)
-    .values(keyPackages.map((keyPackage) => ({ deviceId, keyPackage })));
+  if (keyPackages.length > 0) {
+    await db
+      .insert(e2eeKeyPackages)
+      .values(keyPackages.map((keyPackage) => ({ deviceId, keyPackage })));
+  }
+  if (lastResort) {
+    await db
+      .delete(e2eeKeyPackages)
+      .where(and(eq(e2eeKeyPackages.deviceId, deviceId), eq(e2eeKeyPackages.lastResort, true)));
+    await db.insert(e2eeKeyPackages).values({ deviceId, keyPackage: lastResort, lastResort: true });
+  }
   await db.execute(sql`
     DELETE FROM ${e2eeKeyPackages}
     WHERE ${e2eeKeyPackages.deviceId} = ${deviceId}
+      AND NOT ${e2eeKeyPackages.lastResort}
       AND ${e2eeKeyPackages.id} NOT IN (
         SELECT ${e2eeKeyPackages.id} FROM ${e2eeKeyPackages}
-        WHERE ${e2eeKeyPackages.deviceId} = ${deviceId}
+        WHERE ${e2eeKeyPackages.deviceId} = ${deviceId} AND NOT ${e2eeKeyPackages.lastResort}
         ORDER BY ${e2eeKeyPackages.createdAt} DESC
         LIMIT ${E2EE.maxKeyPackagesPerDevice}
       )
@@ -99,7 +155,7 @@ export async function listMemberDevices(
       and(
         eq(memberships.conversationId, conversationId),
         isNull(memberships.leftAt),
-        isNull(e2eeDevices.revokedAt),
+        deviceIsCurrent(),
         ne(e2eeDevices.id, exceptDeviceId),
       ),
     )
@@ -107,25 +163,27 @@ export async function listMemberDevices(
 }
 
 /**
- * Takes (deletes and returns) the oldest key package of each device. `SKIP LOCKED` means two
- * people claiming at once never get the same package: one-time keys stay one-time.
+ * Takes (deletes and returns) the oldest one-time key package of each device. `SKIP LOCKED`
+ * means two people claiming at once never get the same one: one-time keys stay one-time. A
+ * device with none left gives its last-resort package instead, which stays in place.
  */
 export async function claimKeyPackages(
   db: DbExecutor,
   deviceIds: string[],
-): Promise<Map<string, string>> {
+): Promise<Map<string, { keyPackage: string; lastResort: boolean }>> {
   if (deviceIds.length === 0) return new Map();
-  const result = await db.execute<{ device_id: string; key_package: string }>(sql`
+  const ids = sql`ARRAY[${sql.join(
+    deviceIds.map((id) => sql`${id}`),
+    sql`, `,
+  )}]::uuid[]`;
+  const oneTime = await db.execute<{ device_id: string; key_package: string }>(sql`
     DELETE FROM ${e2eeKeyPackages} k
     USING (
       SELECT p.id
-      FROM unnest(ARRAY[${sql.join(
-        deviceIds.map((id) => sql`${id}`),
-        sql`, `,
-      )}]::uuid[]) AS d(device_id)
+      FROM unnest(${ids}) AS d(device_id)
       CROSS JOIN LATERAL (
         SELECT id FROM ${e2eeKeyPackages}
-        WHERE device_id = d.device_id
+        WHERE device_id = d.device_id AND NOT last_resort
         ORDER BY created_at ASC
         LIMIT 1
         FOR UPDATE SKIP LOCKED
@@ -134,7 +192,18 @@ export async function claimKeyPackages(
     WHERE k.id = picked.id
     RETURNING k.device_id, k.key_package
   `);
-  return new Map(result.rows.map((r) => [r.device_id, r.key_package]));
+  const out = new Map<string, { keyPackage: string; lastResort: boolean }>(
+    oneTime.rows.map((r) => [r.device_id, { keyPackage: r.key_package, lastResort: false }]),
+  );
+  const rest = deviceIds.filter((id) => !out.has(id));
+  if (rest.length > 0) {
+    const fallback = await db
+      .select({ deviceId: e2eeKeyPackages.deviceId, keyPackage: e2eeKeyPackages.keyPackage })
+      .from(e2eeKeyPackages)
+      .where(and(inArray(e2eeKeyPackages.deviceId, rest), eq(e2eeKeyPackages.lastResort, true)));
+    for (const r of fallback) out.set(r.deviceId, { keyPackage: r.keyPackage, lastResort: true });
+  }
+  return out;
 }
 
 export async function findE2eeGroup(

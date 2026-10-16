@@ -17,6 +17,8 @@ export interface StoredKeyPackage {
     hpkePrivateKey: Uint8Array;
     signaturePrivateKey: Uint8Array;
   };
+  /** The device's reusable last-resort package: never deleted after a join. */
+  lastResort?: boolean;
 }
 
 export interface E2eeStore {
@@ -31,6 +33,8 @@ export interface E2eeStore {
   /** Decrypted text by message id (MLS keys are single use, so this is the only copy). */
   getPlaintext(messageId: string): Promise<string | undefined>;
   putPlaintext(messageId: string, text: string): Promise<void>;
+  /** Wipes everything: the device, its keys, group states and decrypted text. */
+  clear(): Promise<void>;
 }
 
 export function createMemoryStore(): E2eeStore {
@@ -48,6 +52,12 @@ export function createMemoryStore(): E2eeStore {
     putGroup: async (id, s) => void groups.set(id, s),
     getPlaintext: async (id) => texts.get(id),
     putPlaintext: async (id, t) => void texts.set(id, t),
+    clear: async () => {
+      devices.clear();
+      packages.clear();
+      groups.clear();
+      texts.clear();
+    },
   };
 }
 
@@ -102,5 +112,10 @@ export function createIndexedDbStore(userId: string): E2eeStore {
     putGroup: (id, state) => put('groups', id, state),
     getPlaintext: (id) => get('plaintexts', id),
     putPlaintext: (id, text) => put('plaintexts', id, text),
+    clear: async () => {
+      for (const name of STORES) {
+        await run<unknown>(name, 'readwrite', (st) => st.clear());
+      }
+    },
   };
 }

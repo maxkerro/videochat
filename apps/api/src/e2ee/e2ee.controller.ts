@@ -66,7 +66,28 @@ export class E2eeController {
     @Param('deviceId', UuidParamPipe) deviceId: string,
     @Body(new ZodValidationPipe(uploadKeyPackagesSchema)) body: UploadKeyPackagesInput,
   ): Promise<{ count: number }> {
-    return this.e2ee.uploadKeyPackages(userId, deviceId, body.keyPackages);
+    return this.e2ee.uploadKeyPackages(userId, deviceId, body.keyPackages, body.lastResort);
+  }
+
+  /** Remove one of your devices (the web app does this when a browser turns encryption off or
+   *  signs out). */
+  @Delete('devices/:deviceId')
+  @HttpCode(204)
+  revokeDevice(
+    @CurrentUserId() userId: string,
+    @Param('deviceId', UuidParamPipe) deviceId: string,
+  ): Promise<void> {
+    return this.e2ee.revokeDevice(userId, deviceId);
+  }
+
+  /** Remove every other device of your account, keeping `deviceId`. */
+  @Post('devices/:deviceId/revoke-others')
+  @HttpCode(200)
+  revokeOthers(
+    @CurrentUserId() userId: string,
+    @Param('deviceId', UuidParamPipe) deviceId: string,
+  ): Promise<{ revoked: number }> {
+    return this.e2ee.revokeOtherDevices(userId, deviceId);
   }
 
   @Post('conversations/:conversationId/key-packages/claim')

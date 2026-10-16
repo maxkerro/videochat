@@ -184,7 +184,8 @@ export class E2eeClient {
             const users = new Set(mls.groupMembers(state).map((m) => m.userId));
             if (groupId === w.conversationId && users.has(this.userId) && users.size <= 2) {
               await this.store.putGroup(w.conversationId, mls.encodeState(state));
-              await this.store.deleteKeyPackage(own.ref);
+              // One-time keys are deleted after use; the last-resort one is kept for reuse.
+              if (!own.lastResort) await this.store.deleteKeyPackage(own.ref);
             }
           }
         } catch {
@@ -192,40 +193,73 @@ export class E2eeClient {
         }
         await this.api.deleteWelcome(w.id);
       }
+      void this.topUp(device).catch(() => undefined);
     });
   }
 
   private async loadOrRegister(): Promise<StoredDevice> {
     const existing = await this.store.getDevice(this.userId);
     if (existing) {
-      void this.topUp(existing).catch(() => undefined);
-      return existing;
+      try {
+        await this.topUp(existing);
+        return existing;
+      } catch (error) {
+        // Removed from another device ("remove my other devices"): start over as a new device.
+        if (!this.api.isUnknownDevice(error)) return existing;
+        await this.store.clear();
+      }
     }
     const { deviceId } = await this.api.registerDevice();
     const device = { userId: this.userId, deviceId };
     await this.store.putDevice(device);
-    await this.uploadKeyPackages(device);
+    await this.uploadKeyPackages(device, { lastResort: true });
     return device;
   }
 
   private async topUp(device: StoredDevice): Promise<void> {
     if ((await this.api.keyPackageCount(device.deviceId)) < KEY_PACKAGE_LOW_WATER) {
-      await this.uploadKeyPackages(device);
+      await this.uploadKeyPackages(device, { lastResort: false });
     }
   }
 
-  private async uploadKeyPackages(device: StoredDevice): Promise<void> {
+  private async uploadKeyPackages(
+    device: StoredDevice,
+    { lastResort }: { lastResort: boolean },
+  ): Promise<void> {
     const mls = await loadMls();
     const identity = mls.identityFor(device.userId, device.deviceId);
     const batch = await Promise.all(
       Array.from({ length: KEY_PACKAGE_BATCH }, () => mls.newKeyPackage(identity)),
     );
+    // The reusable fallback for when the one-time packages run out (RFC 9420 §16.8).
+    const fallback = lastResort ? await mls.newKeyPackage(identity) : undefined;
     // Private halves first: a key package must never be claimable before we can use it.
-    await this.store.putKeyPackages(batch);
+    await this.store.putKeyPackages([
+      ...batch,
+      ...(fallback ? [{ ...fallback, lastResort: true }] : []),
+    ]);
     await this.api.uploadKeyPackages(
       device.deviceId,
       batch.map((k) => mls.toBase64(k.publicBytes)),
+      fallback ? mls.toBase64(fallback.publicBytes) : undefined,
     );
+  }
+
+  /** Removes this browser as a device (server side) and wipes its keys, group state and
+   *  decrypted messages. Used when encryption is turned off here, and on sign-out. */
+  async forget(): Promise<void> {
+    await this.withLock('device', async () => {
+      const device = await this.store.getDevice(this.userId);
+      if (device) await this.api.revokeDevice(device.deviceId).catch(() => undefined);
+      await this.store.clear();
+      this.devicePromise = undefined;
+    });
+  }
+
+  /** Removes every other device of this account (lost phones, old browsers). */
+  async removeOtherDevices(): Promise<number> {
+    const device = await this.device();
+    return this.api.revokeOtherDevices(device.deviceId);
   }
 
   /**

@@ -23,18 +23,26 @@ prototype in the code.
 
 ## Safeguards
 
-- Key packages are one-time, so claiming them is limited: members of the DM only, not across a
-  block, never once the chat already has a group (409), and rate-limited per user
-  (`RATE_LIMIT_E2EE_MAX` per `RATE_LIMIT_E2EE_WINDOW_SEC`, also on device registration and group
-  creation).
-- At most 10 active encryption devices per account; deleting an account deletes its devices, key
-  packages and pending welcomes.
-- Tabs of the same browser share one IndexedDB store, so every step that reads and writes MLS state
+- **Key packages can't be drained.** Each device also uploads one "last resort" key package
+  (RFC 9420 §16.8): when its one-time packages run out, claims get that one, which is never used
+  up. Claiming is limited to members of the DM, not across a block, never once the chat has a group
+  (409), and rate-limited (`RATE_LIMIT_E2EE_MAX` per `RATE_LIMIT_E2EE_WINDOW_SEC`, also on device
+  registration and group creation). Browsers top up one-time packages when fewer than 5 are left.
+- **Devices.** At most 10 current devices per account (parallel registrations can't overshoot). A
+  device not heard from in 30 days stops counting and isn't added to new chats. Settings ->
+  Privacy -> "Remove my other encryption devices" removes the rest; a removed browser starts over
+  as a new device on its next load. Deleting an account removes its devices.
+- **Turning it off or signing out** removes this browser's device on the server and wipes its
+  keys, group states and decrypted messages from IndexedDB (and switches the opt-in off).
+- **Groups.** A group must include at least one device of the other person (otherwise the chat
+  would be locked out of encryption). No group creation or welcome pickup across a block. A
+  browser joins from a Welcome only if it is this chat's group, includes this account, and holds
+  at most one other person.
+- **Tabs** of one browser share an IndexedDB store, so every step that reads and writes MLS state
   runs under a Web Lock (`navigator.locks`) as well as an in-tab queue.
-- A browser joins a group from a Welcome only if it is this chat's group, includes this account,
-  and holds at most one other person.
-- In an encrypted chat each message shows a lock or "Not encrypted": the other person may write
-  from a phone or a browser without the prototype, and the server still accepts plain text there.
+- **Never a silent downgrade.** With the prototype on, sending waits until the chat's type has
+  loaded. In an encrypted chat each message shows a lock or "Not encrypted": the other person may
+  write from a phone or a browser without the prototype, and the server still accepts plain text.
 
 ## Code
 
@@ -51,6 +59,6 @@ prototype in the code.
 
 Devices added after a chat's group exists (needs commits from an online member), removing devices,
 group chats, attachments and voice messages (they stay unencrypted, and the chat header says so),
-editing encrypted messages, safety-number verification, history on new devices, the phone apps,
-MLS "last resort" key packages (a device that runs out can't be added until it tops up), and
-clearing local keys and decrypted text from IndexedDB on sign-out (matters on shared computers).
+editing encrypted messages, safety-number verification, history on new devices, and the phone apps.
+The last-resort package isn't marked with MLS's `last_resort` extension yet (the server keeps
+track of it instead).
