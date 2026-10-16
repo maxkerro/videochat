@@ -13,12 +13,15 @@ import type {
   E2eeGroup,
   E2eeWelcome,
 } from '@videochat/shared';
+import { E2EE } from '@videochat/shared';
 import type { Env } from '../config/env.js';
+import { hasBlockInDirectConversation } from '../db/blocks.js';
 import type { Database } from '../db/client.js';
 import { findConversationBasics, isConversationMember } from '../db/conversations.js';
 import {
   addKeyPackages,
   claimKeyPackages,
+  countActiveDevices,
   countKeyPackages,
   createE2eeDevice,
   deleteWelcome,
@@ -28,6 +31,7 @@ import {
   isActiveDeviceOf,
   listMemberDevices,
   listWelcomes,
+  lockUserDevices,
 } from '../db/e2ee.js';
 import type { E2eeGroupRow } from '../db/schema.js';
 import { DB, ENV } from '../infra/tokens.js';
@@ -48,9 +52,19 @@ export class E2eeService {
     return this.env.E2EE_PROTOTYPE;
   }
 
+  /** At most `E2EE.maxDevicesPerUser` active devices per account: each one can hold key
+   *  packages, and a chat's group has to fit every device of both people. */
   async registerDevice(userId: string): Promise<E2eeDevice> {
     this.requireEnabled();
-    return { deviceId: await createE2eeDevice(this.db, userId), userId };
+    return this.db.transaction(async (tx) => {
+      await lockUserDevices(tx, userId);
+      if ((await countActiveDevices(tx, userId)) >= E2EE.maxDevicesPerUser) {
+        throw new ConflictException(
+          `You can use encryption on up to ${E2EE.maxDevicesPerUser} devices`,
+        );
+      }
+      return { deviceId: await createE2eeDevice(tx, userId), userId };
+    });
   }
 
   async uploadKeyPackages(
@@ -76,6 +90,14 @@ export class E2eeService {
   ): Promise<ClaimedKeyPackages> {
     await this.requireDevice(userId, deviceId);
     await this.requireDirectConversation(conversationId, userId);
+    // Key packages are one-time: only hand them out while a group can still be created, and
+    // never to someone in a block either way (they'd just be draining the other person's keys).
+    if (await hasBlockInDirectConversation(this.db, conversationId, userId)) {
+      throw new ForbiddenException('Encryption isn’t available in this chat');
+    }
+    if (await findE2eeGroup(this.db, conversationId)) {
+      throw new ConflictException('This conversation already has an encryption group');
+    }
     return this.db.transaction(async (tx) => {
       const devices = await listMemberDevices(tx, conversationId, deviceId);
       const claimed = await claimKeyPackages(

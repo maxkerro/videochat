@@ -29,5 +29,6 @@ export function buildRateLimiters(env: Env): ThrottlerOptions[] {
       limit: env.RATE_LIMIT_EXPORT_MAX,
       ttl: env.RATE_LIMIT_EXPORT_WINDOW_SEC * 1000,
     },
+    { name: 'e2ee', limit: env.RATE_LIMIT_E2EE_MAX, ttl: env.RATE_LIMIT_E2EE_WINDOW_SEC * 1000 },
   ];
 }

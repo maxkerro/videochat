@@ -74,7 +74,9 @@ function ReplyQuote({ message, mine }: { message: Message; mine: boolean }) {
   if (!reply) return null;
   const text = reply.deleted
     ? 'Deleted message'
-    : (reply.snippet ?? (reply.attachment ? attachmentLabel(reply.attachment) : 'Message'));
+    : reply.encrypted
+      ? ENCRYPTED_MESSAGE
+      : (reply.snippet ?? (reply.attachment ? attachmentLabel(reply.attachment) : 'Message'));
   return (
     <View style={[styles.quote, { borderLeftColor: mine ? t.accentText : t.accent }]}>
       <Text numberOfLines={2} style={{ color: mine ? t.accentText : t.muted, fontSize: 13 }}>

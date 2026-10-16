@@ -26,6 +26,8 @@ const PREVIEW_MAX = 140;
 
 /** What a notification says about a message. */
 export function notificationText(row: Pick<MessageRow, 'type' | 'body' | 'meta'>): string {
+  // CHAT-076 (spike): the server can't read an end-to-end encrypted message.
+  if (row.meta?.e2ee) return 'New message';
   const attachment = row.meta?.attachment;
   const caption = row.body ? `: ${row.body}` : '';
   const text = attachment?.voice

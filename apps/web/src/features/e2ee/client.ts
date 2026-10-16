@@ -44,10 +44,13 @@ export class E2eeClient {
 
   /** This browser's device, registering it (and uploading key packages) the first time. */
   device(): Promise<StoredDevice> {
-    this.devicePromise ??= this.loadOrRegister().catch((error: unknown) => {
-      this.devicePromise = undefined;
-      throw error;
-    });
+    // Locked across tabs too: two tabs opening at once must not register two devices.
+    this.devicePromise ??= this.withLock('device', () => this.loadOrRegister()).catch(
+      (error: unknown) => {
+        this.devicePromise = undefined;
+        throw error;
+      },
+    );
     return this.devicePromise;
   }
 
@@ -175,9 +178,11 @@ export class E2eeClient {
           }
           if (own && !(await this.store.getGroup(w.conversationId))) {
             const { state, groupId } = await mls.joinWithWelcome(bytes, own);
-            // The group must be the one for this chat. (Who is in it is the server directory's
-            // word today; safety-number verification is what would catch a planted device.)
-            if (groupId === w.conversationId) {
+            // The group must be this chat's, include us, and (a DM) hold no more than one other
+            // person. Which devices are in it is still the server directory's word: safety-number
+            // verification is what would catch a planted device of the other person.
+            const users = new Set(mls.groupMembers(state).map((m) => m.userId));
+            if (groupId === w.conversationId && users.has(this.userId) && users.size <= 2) {
               await this.store.putGroup(w.conversationId, mls.encodeState(state));
               await this.store.deleteKeyPackage(own.ref);
             }
@@ -223,9 +228,19 @@ export class E2eeClient {
     );
   }
 
+  /**
+   * Runs `fn` alone for `key`: queued behind earlier calls in this tab, and -- through the Web
+   * Locks API -- behind other tabs of this browser, which share the same IndexedDB state. Two tabs
+   * encrypting from the same stored group state would reuse a ratchet generation and roll the
+   * state back over keys that should be gone.
+   */
   private withLock<T>(key: string, fn: () => Promise<T>): Promise<T> {
+    const locks = typeof navigator !== 'undefined' ? navigator.locks : undefined;
+    const run = locks
+      ? () => locks.request(`videochat-e2ee:${this.userId}:${key}`, () => fn())
+      : fn;
     const previous = this.locks.get(key) ?? Promise.resolve();
-    const next = previous.then(fn, fn);
+    const next = previous.then(run, run);
     const settled = next.catch(() => undefined);
     this.locks.set(key, settled);
     void settled.then(() => {

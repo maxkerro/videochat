@@ -153,6 +153,8 @@ export const E2EE = {
   /** Key packages uploaded per request, and kept per device at most. */
   keyPackagesPerUpload: 50,
   maxKeyPackagesPerDevice: 200,
+  /** Active encryption devices per account (each browser profile or phone install is one). */
+  maxDevicesPerUser: 10,
   /** Devices a group can be created with in one go (members x devices). */
   maxWelcomesPerGroup: 200,
 } as const;

@@ -82,3 +82,24 @@ describe('replyQuoteText', () => {
     ).toBe('q3.pdf');
   });
 });
+
+describe('CHAT-076 (spike): encrypted messages', () => {
+  it('cannot be edited', () => {
+    const m = msg({ senderId: 'me', body: null, e2ee: { v: 1, ciphertext: 'AA==' } });
+    expect(canEditMessage(m, 'me', Date.parse(m.createdAt) + 1000)).toBe(false);
+  });
+
+  it('quote as encrypted when this browser has no text for the original', () => {
+    const reply = {
+      id: '01J0000000000000000000000A',
+      seq: 1,
+      senderId: null,
+      type: 'text' as const,
+      snippet: null,
+      deleted: false,
+      encrypted: true,
+    };
+    expect(replyQuoteText(reply)).toBe('🔒 Encrypted message');
+    expect(replyQuoteText({ ...reply, snippet: 'decrypted' })).toBe('decrypted');
+  });
+});

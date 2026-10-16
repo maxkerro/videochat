@@ -27,6 +27,7 @@ import {
 import { AccessTokenGuard, CurrentUserId } from '../auth/access-token.guard.js';
 import { UuidParamPipe } from '../common/uuid-param.pipe.js';
 import { ZodValidationPipe } from '../common/zod-validation.pipe.js';
+import { E2eeThrottlerGuard } from '../rate-limit/rate-limit.guards.js';
 import { E2eeService } from './e2ee.service.js';
 
 /** CHAT-076 (spike): the end-to-end encryption key directory. 404 everywhere unless the
@@ -43,6 +44,7 @@ export class E2eeController {
   }
 
   @Post('devices')
+  @UseGuards(E2eeThrottlerGuard)
   register(
     @CurrentUserId() userId: string,
     @Body(new ZodValidationPipe(registerE2eeDeviceSchema)) _body: RegisterE2eeDeviceInput,
@@ -69,6 +71,7 @@ export class E2eeController {
 
   @Post('conversations/:conversationId/key-packages/claim')
   @HttpCode(200)
+  @UseGuards(E2eeThrottlerGuard)
   claim(
     @CurrentUserId() userId: string,
     @Param('conversationId', UuidParamPipe) conversationId: string,
@@ -86,6 +89,7 @@ export class E2eeController {
   }
 
   @Post('conversations/:conversationId/group')
+  @UseGuards(E2eeThrottlerGuard)
   createGroup(
     @CurrentUserId() userId: string,
     @Param('conversationId', UuidParamPipe) conversationId: string,

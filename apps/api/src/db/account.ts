@@ -8,6 +8,7 @@ import {
   blocks,
   conversations,
   devices,
+  e2eeDevices,
   memberships,
   messages,
   reactions,
@@ -80,6 +81,9 @@ export async function eraseAccount(
   const files = await db.delete(attachments).where(eq(attachments.uploaderId, userId)).returning();
   await db.delete(reactions).where(eq(reactions.userId, userId));
   await db.delete(devices).where(eq(devices.userId, userId));
+  // CHAT-076 (spike): their encryption devices, key packages and pending welcomes go too, so
+  // nobody adds a deleted account to a chat's group.
+  await db.delete(e2eeDevices).where(eq(e2eeDevices.userId, userId));
   await db.delete(refreshTokens).where(eq(refreshTokens.userId, userId));
   await db.delete(authTokens).where(eq(authTokens.userId, userId));
   await db.delete(blocks).where(or(eq(blocks.blockerId, userId), eq(blocks.blockedId, userId)));

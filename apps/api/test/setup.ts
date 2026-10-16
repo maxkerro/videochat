@@ -16,6 +16,7 @@ process.env.RATE_LIMIT_LOGIN_MAX ??= '1000';
 process.env.RATE_LIMIT_SEARCH_MAX ??= '1000';
 process.env.RATE_LIMIT_MESSAGES_MAX ??= '1000';
 process.env.RATE_LIMIT_EXPORT_MAX ??= '1000';
+process.env.RATE_LIMIT_E2EE_MAX ??= '1000';
 
 // Each e2e/int spec file boots its own full Nest app (its own real Postgres pool, up to
 // DATABASE_POOL_MAX connections), and with fileParallelism: false they all run sequentially in

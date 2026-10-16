@@ -408,6 +408,8 @@ export const replyPreviewSchema = z.object({
     .nullable(),
   attachment: attachmentSchema.pick({ kind: true, filename: true, voice: true }).optional(),
   deleted: z.boolean(),
+  /** CHAT-076 (spike): the original is end-to-end encrypted, so the server has no snippet. */
+  encrypted: z.boolean().optional(),
 });
 export type ReplyPreview = z.infer<typeof replyPreviewSchema>;
 

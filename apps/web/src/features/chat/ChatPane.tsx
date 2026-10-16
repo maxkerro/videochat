@@ -1015,9 +1015,9 @@ export function ChatPane() {
           {encrypted && (
             <span
               className={styles.encrypted}
-              title="Prototype: text is end-to-end encrypted; files and voice messages are not yet"
+              title="Prototype: your text messages here are end-to-end encrypted. Each message shows a lock or “Not encrypted”; files and voice messages are not encrypted yet."
             >
-              🔒 End-to-end encrypted (prototype)
+              🔒 Encryption on in this browser (prototype)
             </span>
           )}
           {seenInfo && (
@@ -1164,6 +1164,7 @@ export function ChatPane() {
                           onRemovePreview={removePreview}
                           onToggleReaction={react}
                           onOpenPicker={setPickerTarget}
+                          encryptedChat={encrypted}
                         />
                       )}
                     {row.kind === 'pending' && (

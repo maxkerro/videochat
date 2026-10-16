@@ -164,6 +164,88 @@ describe.skipIf(!hasInfra)('end-to-end encryption prototype (CHAT-076)', () => {
     expect(after.body.welcomes).toEqual([]);
   });
 
+  it('keeps outsiders, blocked people and group chats out, and stops claims once a group exists', async () => {
+    const [anna, ben, outsider] = [await signUp(), await signUp(), await signUp()];
+    const annaDevice = await register(anna);
+    await register(ben, 3);
+    const outsiderDevice = await register(outsider);
+    const conversationId = await dm(anna, ben);
+
+    // An outsider with their own, valid device is still not a member.
+    await request(server())
+      .post(`/e2ee/conversations/${conversationId}/key-packages/claim`)
+      .set(bearer(outsider.token))
+      .send({ deviceId: outsiderDevice })
+      .expect(404);
+    await request(server())
+      .get(`/e2ee/conversations/${conversationId}/group`)
+      .set(bearer(outsider.token))
+      .expect(404);
+    await request(server())
+      .post(`/e2ee/conversations/${conversationId}/group`)
+      .set(bearer(outsider.token))
+      .send({ deviceId: outsiderDevice, welcomes: [] })
+      .expect(404);
+
+    // Group chats aren't in the prototype.
+    const group = await request(server())
+      .post('/conversations/group')
+      .set(bearer(anna.token))
+      .send({ title: 'Team', memberIds: [ben.id] })
+      .expect(201);
+    await request(server())
+      .post(`/e2ee/conversations/${group.body.id}/key-packages/claim`)
+      .set(bearer(anna.token))
+      .send({ deviceId: annaDevice })
+      .expect(400);
+
+    // Once the chat has a group, nobody can drain the other person's one-time keys through it.
+    await request(server())
+      .post(`/e2ee/conversations/${conversationId}/group`)
+      .set(bearer(anna.token))
+      .send({ deviceId: annaDevice, welcomes: [] })
+      .expect(201);
+    await request(server())
+      .post(`/e2ee/conversations/${conversationId}/key-packages/claim`)
+      .set(bearer(anna.token))
+      .send({ deviceId: annaDevice })
+      .expect(409);
+
+    // A block either way stops claims too.
+    const [clara, dan] = [await signUp(), await signUp()];
+    const claraDevice = await register(clara);
+    await register(dan);
+    const blockedDm = await dm(clara, dan);
+    await request(server()).post(`/users/${clara.id}/block`).set(bearer(dan.token)).expect(200);
+    await request(server())
+      .post(`/e2ee/conversations/${blockedDm}/key-packages/claim`)
+      .set(bearer(clara.token))
+      .send({ deviceId: claraDevice })
+      .expect(403);
+  });
+
+  it('caps devices per account, and forgets a deleted account’s devices', async () => {
+    const [anna, ben] = [await signUp(), await signUp()];
+    const annaDevice = await register(anna);
+    for (let i = 0; i < 10; i++) {
+      await request(server()).post('/e2ee/devices').set(bearer(ben.token)).send({}).expect(201);
+    }
+    await request(server()).post('/e2ee/devices').set(bearer(ben.token)).send({}).expect(409);
+
+    const conversationId = await dm(anna, ben);
+    await request(server())
+      .post('/auth/delete-account')
+      .set(bearer(ben.token))
+      .send({ password: 'correct-horse-battery-staple' })
+      .expect(204);
+    const claim = await request(server())
+      .post(`/e2ee/conversations/${conversationId}/key-packages/claim`)
+      .set(bearer(anna.token))
+      .send({ deviceId: annaDevice })
+      .expect(200);
+    expect(claim.body).toEqual({ keyPackages: [], missing: [] });
+  });
+
   it('stores and relays ciphertext only: no body, no link preview, no text in the push', async () => {
     const [anna, ben] = [await signUp(), await signUp()];
     const annaDevice = await register(anna, 1);

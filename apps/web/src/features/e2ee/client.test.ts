@@ -170,4 +170,51 @@ describe('E2eeClient (CHAT-076 spike)', () => {
       status: 'failed',
     });
   }, 20_000);
+
+  it('serialises two tabs of the same browser sharing one store (Web Locks)', async () => {
+    const queues = new Map<string, Promise<unknown>>();
+    const locks = {
+      request: <T>(name: string, cb: () => Promise<T>) => {
+        const run = (queues.get(name) ?? Promise.resolve()).then(cb);
+        queues.set(
+          name,
+          run.catch(() => undefined),
+        );
+        return run;
+      },
+    };
+    Object.defineProperty(navigator, 'locks', { value: locks, configurable: true });
+    try {
+      const { device } = setUp();
+      const annaStore = createMemoryStore();
+      const tabA = device(ANNA, annaStore);
+      const tabB = device(ANNA, annaStore);
+      const ben = device(BEN);
+      await ben.device();
+      const [a, b] = await Promise.all([tabA.device(), tabB.device()]);
+      expect(a.deviceId).toBe(b.deviceId);
+      const first = asMessage(DM, await tabA.encrypt(DM, 'first'));
+      expect(await ben.decrypt(first)).toMatchObject({ text: 'first' });
+      const [x, y] = await Promise.all([
+        tabA.encrypt(DM, 'from tab A'),
+        tabB.encrypt(DM, 'from tab B'),
+      ]);
+      expect(await ben.decrypt(asMessage(DM, x))).toEqual({ status: 'ok', text: 'from tab A' });
+      expect(await ben.decrypt(asMessage(DM, y))).toEqual({ status: 'ok', text: 'from tab B' });
+    } finally {
+      Reflect.deleteProperty(navigator, 'locks');
+    }
+  }, 20_000);
+
+  it('refuses a Welcome to a "DM" group that holds a third person', async () => {
+    const CLARA = '44444444-4444-4444-8444-444444444444';
+    const directory = createFakeDirectory({ [DM]: [ANNA, BEN, CLARA] });
+    const make = (userId: string) =>
+      new E2eeClient(userId, directory.apiFor(userId), createMemoryStore());
+    const [anna, ben, clara] = [make(ANNA), make(BEN), make(CLARA)];
+    await Promise.all([anna.device(), ben.device(), clara.device()]);
+    const sent = asMessage(DM, await anna.encrypt(DM, 'hello'));
+    expect(await ben.decrypt(sent)).toEqual({ status: 'waiting' });
+    expect(await ben.members(DM)).toBeNull();
+  }, 20_000);
 });

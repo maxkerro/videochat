@@ -63,4 +63,28 @@ describe('useDecryptedMessages (CHAT-076 spike)', () => {
       vi.useRealTimers();
     }
   });
+
+  it('quotes the decrypted text in a reply to an encrypted message', async () => {
+    const decrypt = vi.fn(async (): Promise<DecryptResult> => ({
+      status: 'ok',
+      text: 'the secret',
+    }));
+    const client = { decrypt } as unknown as E2eeClient;
+    const reply: Message = {
+      ...plain,
+      replyToId: encrypted.id,
+      replyTo: {
+        id: encrypted.id,
+        seq: 1,
+        senderId: null,
+        type: 'text',
+        snippet: null,
+        deleted: false,
+        encrypted: true,
+      },
+    };
+    const list = [encrypted, reply];
+    const { result } = renderHook(() => useDecryptedMessages(client, list));
+    await waitFor(() => expect(result.current[1]!.replyTo?.snippet).toBe('the secret'));
+  });
 });

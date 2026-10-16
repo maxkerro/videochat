@@ -77,6 +77,16 @@ export class MessageThrottlerGuard extends UserThrottlerGuard {
   }
 }
 
+/** CHAT-076 (spike): key-directory writes, per signed-in user. */
+@Injectable()
+export class E2eeThrottlerGuard extends UserThrottlerGuard {
+  protected readonly limiterName = 'e2ee';
+
+  protected override async getErrorMessage(): Promise<string> {
+    return 'Too many encryption requests. Please try again in a minute.';
+  }
+}
+
 /** CHAT-037: data export, per signed-in user -- it reads everything the person ever sent. */
 @Injectable()
 export class ExportThrottlerGuard extends UserThrottlerGuard {

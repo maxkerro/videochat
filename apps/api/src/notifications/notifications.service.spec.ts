@@ -33,6 +33,10 @@ const row = {
 describe('notificationText', () => {
   it('describes text, photos and files', () => {
     expect(notificationText({ type: 'text', body: 'hi', meta: null })).toBe('hi');
+    // CHAT-076 (spike): an encrypted message says only that there is one.
+    expect(
+      notificationText({ type: 'text', body: null, meta: { e2ee: { v: 1, ciphertext: 'AA==' } } }),
+    ).toBe('New message');
     expect(
       notificationText({
         type: 'image',

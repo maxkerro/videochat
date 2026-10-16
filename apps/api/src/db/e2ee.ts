@@ -16,6 +16,20 @@ import {
  * key material or ciphertext addressed to one device.
  */
 
+/** Serialises device registration per account inside the caller's transaction, so the device
+ *  cap can't be overshot by parallel requests. */
+export async function lockUserDevices(db: DbExecutor, userId: string): Promise<void> {
+  await db.execute(sql`SELECT pg_advisory_xact_lock(hashtext(${'e2ee-devices:' + userId}))`);
+}
+
+export async function countActiveDevices(db: DbExecutor, userId: string): Promise<number> {
+  const [row] = await db
+    .select({ n: count() })
+    .from(e2eeDevices)
+    .where(and(eq(e2eeDevices.userId, userId), isNull(e2eeDevices.revokedAt)));
+  return Number(row?.n ?? 0);
+}
+
 export async function createE2eeDevice(db: DbExecutor, userId: string): Promise<string> {
   const [row] = await db.insert(e2eeDevices).values({ userId }).returning({ id: e2eeDevices.id });
   return row!.id;

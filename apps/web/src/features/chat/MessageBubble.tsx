@@ -46,6 +46,8 @@ export function canDeleteMessage(
 export function replyQuoteText(reply: ReplyPreview): string {
   if (reply.deleted) return 'Original message deleted';
   if (reply.snippet) return reply.snippet;
+  // CHAT-076 (spike): an encrypted original this browser hasn't decrypted (or can't).
+  if (reply.encrypted) return '🔒 Encrypted message';
   if (reply.attachment) return attachmentLabel(reply.attachment);
   return 'Message';
 }
@@ -70,6 +72,9 @@ export interface MessageBubbleProps {
   onRemovePreview: (message: Message) => void;
   onToggleReaction: (message: Message, emoji: string) => void;
   onOpenPicker: (message: Message) => void;
+  /** CHAT-076 (spike): this browser shows the chat as encrypted, so each message says whether it
+   *  actually was (the other person may write from a phone or a browser without encryption). */
+  encryptedChat?: boolean;
 }
 
 /** One message in the list: reply quote, attachment, text, link preview, and its actions menu
@@ -192,6 +197,19 @@ export function MessageBubble(props: MessageBubbleProps) {
         <div className={styles.meta}>
           {!grouped && <time className={styles.time}>{time}</time>}
           {message.editedAt && !deleted && <span className={styles.time}>(edited)</span>}
+          {props.encryptedChat &&
+            !deleted &&
+            (message.e2ee ? (
+              <span
+                className={styles.time}
+                title="End-to-end encrypted"
+                aria-label="End-to-end encrypted"
+              >
+                🔒
+              </span>
+            ) : (
+              <span className={cx(styles.time, styles.notEncrypted)}>Not encrypted</span>
+            ))}
           {actions.length > 0 && !editing && message.type !== 'system' && (
             <Menu
               align={isOwn ? 'end' : 'start'}

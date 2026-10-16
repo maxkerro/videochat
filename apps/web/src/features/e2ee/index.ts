@@ -1,4 +1,4 @@
-import { e2eeStatusSchema, type Message, type SendMessageInput } from '@videochat/shared';
+import { LIMITS, e2eeStatusSchema, type Message, type SendMessageInput } from '@videochat/shared';
 import { useQuery } from '@tanstack/react-query';
 import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
 import { apiGet } from '../../lib/api';
@@ -41,7 +41,6 @@ export function useE2ee(): E2eeClient | null {
   useEffect(() => {
     latestAuth = auth;
   }, [auth]);
-  latestAuth ??= auth;
   const client = enabled ? getE2eeClient(auth.user?.id) : null;
   // Register this browser as soon as the prototype is on, so others can add it to chats before
   // it ever sends anything itself.
@@ -148,9 +147,20 @@ export function useDecryptedMessages(client: E2eeClient | null, messages: Messag
 
   return useMemo(
     () =>
-      messages.map((m) =>
-        m.e2ee && !m.deletedAt ? { ...m, body: labelFor(results.get(m.id), !!client) } : m,
-      ),
+      messages.map((m) => {
+        let out = m;
+        if (m.e2ee && !m.deletedAt) out = { ...out, body: labelFor(results.get(m.id), !!client) };
+        // A reply to an encrypted message quotes this device's own decrypted copy, if it has one.
+        const quoted = m.replyTo?.encrypted ? results.get(m.replyTo.id) : undefined;
+        if (m.replyTo && quoted?.status === 'ok') {
+          const snippet =
+            quoted.text.length > LIMITS.replySnippetLength
+              ? `${quoted.text.slice(0, LIMITS.replySnippetLength)}…`
+              : quoted.text;
+          out = { ...out, replyTo: { ...m.replyTo, snippet } };
+        }
+        return out;
+      }),
     [messages, results, client],
   );
 }

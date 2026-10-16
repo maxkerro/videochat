@@ -21,6 +21,21 @@ prototype in the code.
   next to its private keys and group state. A browser without the prototype shows "🔒 Encrypted
   message".
 
+## Safeguards
+
+- Key packages are one-time, so claiming them is limited: members of the DM only, not across a
+  block, never once the chat already has a group (409), and rate-limited per user
+  (`RATE_LIMIT_E2EE_MAX` per `RATE_LIMIT_E2EE_WINDOW_SEC`, also on device registration and group
+  creation).
+- At most 10 active encryption devices per account; deleting an account deletes its devices, key
+  packages and pending welcomes.
+- Tabs of the same browser share one IndexedDB store, so every step that reads and writes MLS state
+  runs under a Web Lock (`navigator.locks`) as well as an in-tab queue.
+- A browser joins a group from a Welcome only if it is this chat's group, includes this account,
+  and holds at most one other person.
+- In an encrypted chat each message shows a lock or "Not encrypted": the other person may write
+  from a phone or a browser without the prototype, and the server still accepts plain text there.
+
 ## Code
 
 | Where                                  | What                                                                                    |
@@ -36,4 +51,6 @@ prototype in the code.
 
 Devices added after a chat's group exists (needs commits from an online member), removing devices,
 group chats, attachments and voice messages (they stay unencrypted, and the chat header says so),
-editing encrypted messages, safety-number verification, history on new devices, and the phone apps.
+editing encrypted messages, safety-number verification, history on new devices, the phone apps,
+MLS "last resort" key packages (a device that runs out can't be added until it tops up), and
+clearing local keys and decrypted text from IndexedDB on sign-out (matters on shared computers).

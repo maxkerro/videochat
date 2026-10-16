@@ -29,6 +29,7 @@ export function toReplyPreview(target: MessageRow): ReplyPreview {
         }
       : {}),
     deleted,
+    ...(!deleted && target.meta?.e2ee ? { encrypted: true } : {}),
   };
 }
 

@@ -157,6 +157,10 @@ const envSchema = z.object({
   /** CHAT-037 data export (a full read of everything someone sent), per authenticated user. */
   RATE_LIMIT_EXPORT_MAX: z.coerce.number().int().positive().default(5),
   RATE_LIMIT_EXPORT_WINDOW_SEC: z.coerce.number().int().positive().default(3600),
+  /** CHAT-076 (spike): key-directory writes (register a device, claim key packages, create a
+   *  group), per signed-in user. Claiming uses up other people's one-time keys. */
+  RATE_LIMIT_E2EE_MAX: z.coerce.number().int().positive().default(20),
+  RATE_LIMIT_E2EE_WINDOW_SEC: z.coerce.number().int().positive().default(60),
 });
 
 const envSchemaWithProductionChecks = envSchema.superRefine((data, ctx) => {

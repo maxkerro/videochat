@@ -50,6 +50,9 @@
   font-size: var(--text-xs);
   color: var(--color-text-muted);
 }
+.notEncrypted {
+  font-weight: 600;
+}
 .scrollWrap {
   position: relative;
   flex: 1;
