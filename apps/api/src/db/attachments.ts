@@ -23,7 +23,7 @@ export async function markAttachmentProcessed(
   db: DbExecutor,
   id: string,
   fields: Pick<AttachmentRow, 'sizeBytes' | 'width' | 'height' | 'thumbKey' | 'contentType'> &
-    Partial<Pick<AttachmentRow, 'kind'>>,
+    Partial<Pick<AttachmentRow, 'kind' | 'voice'>>,
 ): Promise<AttachmentRow> {
   const [row] = await db
     .update(attachments)

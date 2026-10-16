@@ -6,6 +6,7 @@ import {
   type CreateAttachmentUploadInput,
   type Message,
   type SendMessageInput,
+  type VoiceInfo,
 } from '@videochat/shared';
 import { UploadError, isNetworkError } from '../lib/errors';
 
@@ -17,6 +18,8 @@ export interface PickedFile {
   sizeBytes: number | null;
   width?: number | null;
   height?: number | null;
+  /** CHAT-074: a recorded voice message (length and waveform). */
+  voice?: VoiceInfo;
 }
 
 /** A file read and (for photos) shrunk, ready to PUT. */
@@ -122,6 +125,7 @@ export async function attemptUpload<B>(
         filename: name,
         contentType,
         sizeBytes,
+        ...(job.file.voice ? { voice: job.file.voice } : {}),
       });
       if (!parsed.success) {
         throw new UploadError(parsed.error.issues[0]?.message ?? 'That file can’t be sent.');

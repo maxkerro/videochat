@@ -1,4 +1,4 @@
-import { mentionParts, type Message, type Reaction } from '@videochat/shared';
+import { attachmentLabel, mentionParts, type Message, type Reaction } from '@videochat/shared';
 import { memo } from 'react';
 import { Pressable, StyleSheet, Text, View } from 'react-native';
 import { callLabel, formatClock } from '../ui/format';
@@ -74,7 +74,7 @@ function ReplyQuote({ message, mine }: { message: Message; mine: boolean }) {
   if (!reply) return null;
   const text = reply.deleted
     ? 'Deleted message'
-    : (reply.snippet ?? (reply.attachment ? reply.attachment.filename : 'Message'));
+    : (reply.snippet ?? (reply.attachment ? attachmentLabel(reply.attachment) : 'Message'));
   return (
     <View style={[styles.quote, { borderLeftColor: mine ? t.accentText : t.accent }]}>
       <Text numberOfLines={2} style={{ color: mine ? t.accentText : t.muted, fontSize: 13 }}>
@@ -196,7 +196,13 @@ function MessageBubbleBase({
           ) : (
             <>
               <ReplyQuote message={message} mine={mine} />
-              {message.attachment ? <AttachmentView attachment={message.attachment} /> : null}
+              {message.attachment ? (
+                <AttachmentView
+                  attachment={message.attachment}
+                  mine={mine}
+                  senderName={senderName}
+                />
+              ) : null}
               {message.body ? (
                 <BodyText message={message} myId={myId} color={textColor} usernames={usernames} />
               ) : null}

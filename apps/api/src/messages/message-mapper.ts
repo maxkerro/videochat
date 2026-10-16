@@ -24,6 +24,7 @@ export function toReplyPreview(target: MessageRow): ReplyPreview {
           attachment: {
             kind: target.meta.attachment.kind,
             filename: target.meta.attachment.filename,
+            ...(target.meta.attachment.voice ? { voice: target.meta.attachment.voice } : {}),
           },
         }
       : {}),

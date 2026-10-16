@@ -27,6 +27,18 @@ describe('message permissions (CHAT-032)', () => {
     expect(canEditMessage(old, me)).toBe(false);
     expect(canEditMessage(msg({ senderId: 'other' }), me)).toBe(false);
     expect(canEditMessage(msg({ type: 'call' }), me)).toBe(false);
+    // CHAT-074: nothing to edit in a voice message.
+    const voice = {
+      id: '66666666-6666-4666-8666-666666666666',
+      kind: 'file' as const,
+      filename: 'v.webm',
+      contentType: 'audio/webm',
+      sizeBytes: 10,
+      width: null,
+      height: null,
+      voice: { durationMs: 5000, waveform: [1] },
+    };
+    expect(canEditMessage(msg({ type: 'file', attachment: voice }), me)).toBe(false);
   });
 
   it('lets the sender or a group admin delete, never call entries or tombstones', () => {
@@ -48,6 +60,17 @@ describe('replyQuoteText', () => {
   };
   it('describes the original', () => {
     expect(replyQuoteText({ ...base, snippet: 'Lunch?' })).toBe('Lunch?');
+    expect(
+      replyQuoteText({
+        ...base,
+        snippet: null,
+        attachment: {
+          kind: 'file',
+          filename: 'v.webm',
+          voice: { durationMs: 9000, waveform: [1] },
+        },
+      }),
+    ).toBe('Voice message (0:09)');
     expect(replyQuoteText({ ...base, snippet: null, deleted: true })).toBe(
       'Original message deleted',
     );

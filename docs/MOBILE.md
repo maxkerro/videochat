@@ -295,3 +295,21 @@ insert `@username`. Messages that mention you are marked with an accent edge and
 highlighted. Chats with unread mentions show an "@" badge, and a "Mentions" filter appears on the
 Chats screen while there are any. Being mentioned notifies you even in a muted group; Settings →
 "Mentions in muted chats" turns that off. Needs no native changes.
+
+## Voice messages (CHAT-074)
+
+With the message box empty the Send button becomes a microphone: hold it to record, let go to
+send, slide left to cancel ("Release to cancel" shows when you've slid far enough). Recording stops
+and sends by itself at 5 minutes; a tap shorter than 0.7 s sends nothing. With TalkBack/VoiceOver,
+double-tap starts recording and a second double-tap sends. Recording is off during a call.
+
+- Recorded as AAC in MP4 (`.m4a`, mono, 64 kbps), which every phone and browser plays.
+- Playback: play/pause, tap the waveform to jump, 1x / 1.5x / 2x (the speed is remembered). One
+  message plays at a time, through one app-wide player, so it keeps playing while you scroll,
+  leave the chat or lock the phone; Android shows media controls in the notification shade while
+  it plays. A call stops it.
+- **Native change:** adds `expo-audio` with background playback (iOS `UIBackgroundModes: audio`;
+  Android `FOREGROUND_SERVICE_MEDIA_PLAYBACK` and its media service). Needs a new APK.
+- Known limit: voice messages recorded in a browser other than Safari are Opus in WebM, which the
+  native iOS player can't play (Android and all browsers can). Only matters once there is an iOS
+  build; the fix would be transcoding to AAC on the server.

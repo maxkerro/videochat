@@ -43,7 +43,14 @@ function toLastMessagePreview(row: MessageRow | undefined): ConversationSummary[
     // A deleted call entry previews as "Message deleted", not as the call it used to describe.
     ...(row.type === 'call' && row.meta?.call && !row.deletedAt ? { call: row.meta.call } : {}),
     ...(row.meta?.attachment && !row.deletedAt
-      ? { attachment: { kind: row.meta.attachment.kind, filename: row.meta.attachment.filename } }
+      ? {
+          attachment: {
+            kind: row.meta.attachment.kind,
+            filename: row.meta.attachment.filename,
+            // CHAT-074: "Voice message 0:12" in the inbox.
+            ...(row.meta.attachment.voice ? { voice: row.meta.attachment.voice } : {}),
+          },
+        }
       : {}),
   };
 }

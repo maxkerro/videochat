@@ -13,6 +13,7 @@ import {
 import { fetchAttachmentUrl } from '../data/api';
 import { formatBytes } from '../ui/format';
 import { useTheme } from '../ui/theme';
+import { VoiceMessageView } from '../voice/VoiceMessageView';
 
 /** Signed URLs live a few minutes; refetch before they run out rather than showing a dead image. */
 const URL_STALE_MS = 4 * 60_000;
@@ -26,7 +27,15 @@ async function openOriginal(attachmentId: string) {
   }
 }
 
-export function AttachmentView({ attachment }: { attachment: Attachment }) {
+export function AttachmentView({
+  attachment,
+  mine = false,
+  senderName = null,
+}: {
+  attachment: Attachment;
+  mine?: boolean;
+  senderName?: string | null;
+}) {
   const t = useTheme();
   const isImage = attachment.kind === 'image';
   const thumb = useQuery({
@@ -35,6 +44,17 @@ export function AttachmentView({ attachment }: { attachment: Attachment }) {
     enabled: isImage,
     staleTime: URL_STALE_MS,
   });
+
+  // CHAT-074: a voice message plays in place.
+  if (attachment.voice) {
+    return (
+      <VoiceMessageView
+        attachment={{ ...attachment, voice: attachment.voice }}
+        mine={mine}
+        title={senderName ? `Voice message from ${senderName}` : 'Voice message'}
+      />
+    );
+  }
 
   if (isImage) {
     const ratio = attachment.width && attachment.height ? attachment.width / attachment.height : 1;

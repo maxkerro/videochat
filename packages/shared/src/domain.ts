@@ -84,6 +84,29 @@ export const ATTACHMENT_IMAGE_TYPES = [
   'image/gif',
 ] as const;
 
+/**
+ * CHAT-074: voice messages are audio files with `voice` details (length, waveform), so an app
+ * that predates them still shows a playable file. These are the recording formats the apps make
+ * (Opus in WebM/Ogg from browsers, AAC in MP4 from Safari and the phones); the server checks the
+ * bytes match before anyone can play them.
+ */
+export const VOICE_CONTENT_TYPES = [
+  'audio/webm',
+  'audio/ogg',
+  'audio/mp4',
+  'audio/x-m4a',
+  'audio/aac',
+] as const;
+export const VOICE = {
+  maxSeconds: 300,
+  /** 5 minutes at the apps' bit rates is well under 3 MB; this leaves room for any encoder. */
+  maxBytes: 8 * 1024 * 1024,
+  /** Bars in a voice message's waveform; each 0-100. */
+  waveformBars: 48,
+  /** Playback speeds offered, in order. */
+  speeds: [1, 1.5, 2] as const,
+} as const;
+
 /** CHAT-041: what a call carries. An audio call can be upgraded by turning the camera on later. */
 export const CALL_MEDIA = ['audio', 'video'] as const;
 export type CallMedia = (typeof CALL_MEDIA)[number];

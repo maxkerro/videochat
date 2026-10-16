@@ -1,4 +1,10 @@
-import { LIMITS, QUICK_REACTIONS, type Message, type ReplyPreview } from '@videochat/shared';
+import {
+  attachmentLabel,
+  LIMITS,
+  QUICK_REACTIONS,
+  type Message,
+  type ReplyPreview,
+} from '@videochat/shared';
 import { useEffect, useRef, useState, type KeyboardEvent } from 'react';
 import { Button, Menu } from '../../components/ui';
 import { cx } from '../../lib/cx';
@@ -15,6 +21,8 @@ export function canEditMessage(message: Message, myUserId: string | undefined, n
     message.senderId === myUserId &&
     !message.deletedAt &&
     EDITABLE.has(message.type) &&
+    // CHAT-074: nothing to edit in a voice message.
+    !message.attachment?.voice &&
     now - Date.parse(message.createdAt) < LIMITS.messageEditWindowMinutes * 60_000
   );
 }
@@ -36,8 +44,7 @@ export function canDeleteMessage(
 export function replyQuoteText(reply: ReplyPreview): string {
   if (reply.deleted) return 'Original message deleted';
   if (reply.snippet) return reply.snippet;
-  if (reply.attachment)
-    return reply.attachment.kind === 'image' ? 'Photo' : reply.attachment.filename;
+  if (reply.attachment) return attachmentLabel(reply.attachment);
   return 'Message';
 }
 

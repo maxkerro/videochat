@@ -1,4 +1,4 @@
-import { REPORT_REASONS, type Message, type ReportReason } from '@videochat/shared';
+import { REPORT_REASONS, voiceFilename, type Message, type ReportReason } from '@videochat/shared';
 import * as Clipboard from 'expo-clipboard';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
@@ -46,6 +46,7 @@ import { useTypingSender, useViewingReporter } from '../../../../src/realtime/ho
 import { presenceLabel, usePresence } from '../../../../src/realtime/presence';
 import { useTypingLabel } from '../../../../src/realtime/typing';
 import { uploads, useConversationUploads } from '../../../../src/uploads';
+import { VOICE_RECORDING_TYPE } from '../../../../src/voice/expoAudio';
 import { success } from '../../../../src/ui/haptics';
 import { Banner } from '../../../../src/ui/Banner';
 import { describeError } from '../../../../src/ui/describeError';
@@ -489,6 +490,18 @@ export default function ConversationScreen() {
             onSend={onSend}
             onTyping={sendTyping}
             onAttach={() => setAttachOpen(true)}
+            onVoice={(recorded) =>
+              startUpload({
+                uri: recorded.uri,
+                name: voiceFilename(VOICE_RECORDING_TYPE),
+                contentType: VOICE_RECORDING_TYPE,
+                sizeBytes: null,
+                voice: recorded.voice,
+              })
+            }
+            voiceDisabledReason={
+              calls.call || groupCall.session ? 'Finish the call to record a voice message.' : null
+            }
             onCancelContext={() => {
               setReplyTo(null);
               setEditing(null);

@@ -1,6 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { MessageSearch } from '../search/MessageSearch';
 import {
+  attachmentLabel,
   conversationReadEventSchema,
   messageSchema,
   type BlockedUsersList,
@@ -41,8 +42,9 @@ export function previewFor(
   if (!last) return '';
   if (last.call) return callHistoryText(last.call, myUserId);
   if (last.attachment) {
-    // CHAT-030: "Photo" / the file's name, with the caption if there is one.
-    const what = last.attachment.kind === 'image' ? 'Photo' : last.attachment.filename;
+    // CHAT-030: "Photo" / the file's name, with the caption if there is one (CHAT-074: or
+    // "Voice message (0:12)").
+    const what = attachmentLabel(last.attachment);
     const text = last.body ? `${what} · ${last.body}` : what;
     return last.senderId === myUserId ? `You: ${text}` : text;
   }
@@ -59,7 +61,13 @@ function toPreview(message: Message): NonNullable<ConversationSummary['lastMessa
     body: message.body,
     ...(message.call ? { call: message.call } : {}),
     ...(message.attachment
-      ? { attachment: { kind: message.attachment.kind, filename: message.attachment.filename } }
+      ? {
+          attachment: {
+            kind: message.attachment.kind,
+            filename: message.attachment.filename,
+            ...(message.attachment.voice ? { voice: message.attachment.voice } : {}),
+          },
+        }
       : {}),
   };
 }

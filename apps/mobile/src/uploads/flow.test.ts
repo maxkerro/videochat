@@ -72,6 +72,35 @@ describe('runUpload', () => {
     });
   });
 
+  it('CHAT-074: sends a voice recording with its length and waveform', async () => {
+    const voice = { durationMs: 4200, waveform: [5, 80, 100] };
+    const deps = makeDeps({
+      prepare: vi.fn(async () => ({
+        blob: 'm4a',
+        name: 'Voice message.m4a',
+        contentType: 'audio/mp4',
+        sizeBytes: 900,
+      })),
+    });
+    const voiceJob: UploadJob = {
+      ...job,
+      file: {
+        uri: 'file:///v.m4a',
+        name: 'Voice message.m4a',
+        contentType: 'audio/mp4',
+        sizeBytes: null,
+        voice,
+      },
+    };
+    await runUpload(voiceJob, deps, newUploadProgress(), hooks());
+    expect(deps.requestUpload).toHaveBeenCalledWith('c1', {
+      filename: 'Voice message.m4a',
+      contentType: 'audio/mp4',
+      sizeBytes: 900,
+      voice,
+    });
+  });
+
   it('includes the reply target', async () => {
     const deps = makeDeps();
     await runUpload({ ...job, replyToId: 'm0' }, deps, newUploadProgress(), hooks());

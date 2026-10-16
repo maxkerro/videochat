@@ -6,6 +6,7 @@ import * as messagesDb from '../db/messages.js';
 import type { AttachmentRow } from '../db/schema.js';
 import { ObjectTooLargeError, type S3Service } from '../storage/s3.service.js';
 import {
+  looksLikeVoice,
   AttachmentsService,
   normalizeContentType,
   sanitizeFilename,
@@ -43,6 +44,7 @@ const baseRow: AttachmentRow = {
   height: null,
   objectKey: 'attachments/conv/1/original',
   thumbKey: null,
+  voice: null,
   processedAt: null,
   createdAt: new Date(),
 };
@@ -238,5 +240,25 @@ describe('AttachmentsService', () => {
     await service.getUrl('ben', file.id, 'original');
     expect(s3.getSignedDownloadUrl).toHaveBeenCalled();
     expect(s3.getSignedGetUrl).not.toHaveBeenCalled();
+  });
+});
+
+describe('looksLikeVoice (CHAT-074)', () => {
+  const bytes = (...b: number[]) => Buffer.from(b);
+  it('accepts each recording format only with its own signature', () => {
+    expect(looksLikeVoice(bytes(0x1a, 0x45, 0xdf, 0xa3, 1), 'audio/webm;codecs=opus')).toBe(true);
+    expect(looksLikeVoice(Buffer.from('OggS....'), 'audio/ogg')).toBe(true);
+    const mp4 = Buffer.concat([bytes(0, 0, 0, 0x20), Buffer.from('ftypM4A ')]);
+    expect(looksLikeVoice(mp4, 'audio/mp4')).toBe(true);
+    expect(looksLikeVoice(mp4, 'audio/x-m4a')).toBe(true);
+    expect(looksLikeVoice(mp4, 'audio/aac')).toBe(true);
+    expect(looksLikeVoice(bytes(0xff, 0xf1, 0x50), 'audio/aac')).toBe(true);
+  });
+
+  it('refuses mismatches, other types and empty files', () => {
+    expect(looksLikeVoice(Buffer.from('OggS'), 'audio/webm')).toBe(false);
+    expect(looksLikeVoice(Buffer.from('<html>'), 'audio/mp4')).toBe(false);
+    expect(looksLikeVoice(bytes(0x1a, 0x45, 0xdf, 0xa3), 'video/webm')).toBe(false);
+    expect(looksLikeVoice(Buffer.alloc(0), 'audio/ogg')).toBe(false);
   });
 });

@@ -1,5 +1,10 @@
 import { Inject, Injectable, Logger, type OnModuleInit } from '@nestjs/common';
-import { clientViewingSchema, type PushPayload, type WsEnvelope } from '@videochat/shared';
+import {
+  clientViewingSchema,
+  formatVoiceTime,
+  type PushPayload,
+  type WsEnvelope,
+} from '@videochat/shared';
 import { Redis } from 'ioredis';
 import { isBlocked } from '../db/blocks.js';
 import type { Database } from '../db/client.js';
@@ -23,8 +28,9 @@ const PREVIEW_MAX = 140;
 export function notificationText(row: Pick<MessageRow, 'type' | 'body' | 'meta'>): string {
   const attachment = row.meta?.attachment;
   const caption = row.body ? `: ${row.body}` : '';
-  const text =
-    attachment?.kind === 'image'
+  const text = attachment?.voice
+    ? `Voice message (${formatVoiceTime(attachment.voice.durationMs)})`
+    : attachment?.kind === 'image'
       ? `Photo${caption}`
       : attachment
         ? `${attachment.filename}${caption}`

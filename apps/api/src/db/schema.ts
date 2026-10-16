@@ -13,6 +13,7 @@ import {
   type Attachment,
   type CallMessageMeta,
   type LinkPreview,
+  type VoiceInfo,
 } from '@videochat/shared';
 import { sql } from 'drizzle-orm';
 import {
@@ -459,6 +460,8 @@ export const attachments = pgTable(
     height: integer('height'),
     objectKey: text('object_key').notNull(),
     thumbKey: text('thumb_key'),
+    /** CHAT-074: length and waveform when this audio file is a voice message. */
+    voice: jsonb('voice').$type<VoiceInfo>(),
     /** Set once the upload was verified (and, for images, stripped and thumbnailed). */
     processedAt: timestamp('processed_at', { withTimezone: true }),
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),

@@ -223,3 +223,12 @@ database). Mentions are resolved on send and edit to the ids of current group me
 in `messages.meta.mentions`. The inbox's unread-mention count (which leaves out people you blocked)
 only visits unread messages that mention someone: 300,000 unread messages in one chat count in
 ~5 ms (~28 ms without the index). Nothing to configure.
+
+## Voice messages (CHAT-074)
+
+Migration `0017` adds `attachments.voice` (jsonb, nullable): a plain `ADD COLUMN`. A voice message
+is an ordinary file attachment (so older app versions show a playable file) whose `voice` field
+holds its length and waveform. The API accepts only recording formats (WebM/Ogg Opus, AAC/MP4) up
+to 8 MB and 5 minutes, checks the file's first bytes really are that format before the message is
+sent, and serves it to members for inline playback (other files are still download-only). Nothing
+to configure; the bucket CORS rule from CHAT-030 already covers the upload.

@@ -52,6 +52,8 @@ import { useViewingReporter } from '../notifications/useViewingReporter';
 import { CallHistoryEntry } from '../calls/CallHistoryEntry';
 import { useAuth, withAuthRetry } from '../auth/AuthContext';
 import { MentionSuggestions, useMentionAutocomplete } from './MentionSuggestions';
+import { useVoiceRecording } from '../voice/useVoiceRecording';
+import { VoiceRecorderBar } from '../voice/VoiceRecorderBar';
 import { linkify } from './linkify';
 import {
   appendToLatestPage,
@@ -333,6 +335,11 @@ export function ChatPane() {
       );
     },
     onRejected: (reason) => toast({ title: reason, tone: 'danger' }),
+  });
+  // CHAT-074: click the microphone to record a voice message.
+  const voiceRecording = useVoiceRecording({
+    onRecorded: (recorded) => attachmentUploads.addVoice(recorded),
+    onError: (message) => toast({ title: message, tone: 'danger' }),
   });
   const peer = conversationQuery.data?.peer;
   // CHAT-035: no pushes for the conversation on screen.
@@ -1254,63 +1261,100 @@ export function ChatPane() {
             event.target.value = '';
           }}
         />
-        <Button
-          type="button"
-          variant="ghost"
-          size="icon"
-          aria-label="Attach files"
-          onClick={() => fileInputRef.current?.click()}
-        >
-          <svg width="20" height="20" viewBox="0 0 24 24" aria-hidden="true">
-            <path
-              d="M21 11.5l-8.6 8.6a5 5 0 0 1-7.1-7.1l8.6-8.6a3.5 3.5 0 0 1 5 5l-8.6 8.6a2 2 0 0 1-2.8-2.8l7.9-7.9"
-              fill="none"
-              stroke="currentColor"
-              strokeWidth="1.8"
-              strokeLinecap="round"
-              strokeLinejoin="round"
+        {voiceRecording.recording ? (
+          <VoiceRecorderBar
+            snapshot={voiceRecording.snapshot}
+            onCancel={voiceRecording.cancel}
+            onSend={voiceRecording.send}
+          />
+        ) : (
+          <>
+            <Button
+              type="button"
+              variant="ghost"
+              size="icon"
+              aria-label="Attach files"
+              onClick={() => fileInputRef.current?.click()}
+            >
+              <svg width="20" height="20" viewBox="0 0 24 24" aria-hidden="true">
+                <path
+                  d="M21 11.5l-8.6 8.6a5 5 0 0 1-7.1-7.1l8.6-8.6a3.5 3.5 0 0 1 5 5l-8.6 8.6a2 2 0 0 1-2.8-2.8l7.9-7.9"
+                  fill="none"
+                  stroke="currentColor"
+                  strokeWidth="1.8"
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                />
+              </svg>
+            </Button>
+            <label htmlFor="composer" className="visually-hidden">
+              Message
+            </label>
+            <textarea
+              id="composer"
+              ref={composerRef}
+              className={styles.input}
+              rows={1}
+              placeholder="Write a message…"
+              value={draft}
+              maxLength={LIMITS.messageMaxLength}
+              {...mentionAutocomplete.inputProps}
+              onSelect={mentionAutocomplete.track}
+              onChange={(event) => {
+                const value = event.target.value;
+                setDraft(value);
+                mentionAutocomplete.track(event);
+                // AC: "throttled to one per 3s per user" -- only while there's actually something
+                // being typed; clearing the composer (or never having typed anything) sends nothing.
+                if (value.trim() && conversationId) typingThrottle.notifyTyping(conversationId);
+              }}
+              onKeyDown={handleKeyDown}
+              onPaste={(event) => {
+                // CHAT-030: pasting an image (a screenshot) attaches it; pasted text behaves as usual.
+                const files = Array.from(event.clipboardData.files);
+                if (files.length) {
+                  event.preventDefault();
+                  attachmentUploads.addFiles(files);
+                }
+              }}
             />
-          </svg>
-        </Button>
-        <label htmlFor="composer" className="visually-hidden">
-          Message
-        </label>
-        <textarea
-          id="composer"
-          ref={composerRef}
-          className={styles.input}
-          rows={1}
-          placeholder="Write a message…"
-          value={draft}
-          maxLength={LIMITS.messageMaxLength}
-          {...mentionAutocomplete.inputProps}
-          onSelect={mentionAutocomplete.track}
-          onChange={(event) => {
-            const value = event.target.value;
-            setDraft(value);
-            mentionAutocomplete.track(event);
-            // AC: "throttled to one per 3s per user" -- only while there's actually something
-            // being typed; clearing the composer (or never having typed anything) sends nothing.
-            if (value.trim() && conversationId) typingThrottle.notifyTyping(conversationId);
-          }}
-          onKeyDown={handleKeyDown}
-          onPaste={(event) => {
-            // CHAT-030: pasting an image (a screenshot) attaches it; pasted text behaves as usual.
-            const files = Array.from(event.clipboardData.files);
-            if (files.length) {
-              event.preventDefault();
-              attachmentUploads.addFiles(files);
-            }
-          }}
-        />
-        {remaining <= COUNTER_THRESHOLD && (
-          <span className={styles.counter} aria-live="polite">
-            {remaining}
-          </span>
+            {remaining <= COUNTER_THRESHOLD && (
+              <span className={styles.counter} aria-live="polite">
+                {remaining}
+              </span>
+            )}
+            <Button
+              type="button"
+              variant="ghost"
+              size="icon"
+              aria-label="Record voice message"
+              onClick={voiceRecording.start}
+            >
+              <svg width="20" height="20" viewBox="0 0 24 24" aria-hidden="true">
+                <rect
+                  x="9"
+                  y="3"
+                  width="6"
+                  height="11"
+                  rx="3"
+                  fill="none"
+                  stroke="currentColor"
+                  strokeWidth="1.8"
+                />
+                <path
+                  d="M5 11a7 7 0 0 0 14 0M12 18v3"
+                  fill="none"
+                  stroke="currentColor"
+                  strokeWidth="1.8"
+                  strokeLinecap="round"
+                />
+              </svg>
+            </Button>
+            <Button type="submit" aria-label="Send message" disabled={!draft.trim()}>
+              Send
+            </Button>
+          </>
         )}
-        <Button type="submit" aria-label="Send message" disabled={!draft.trim()}>
-          Send
-        </Button>
       </form>
 
       <EmojiPicker

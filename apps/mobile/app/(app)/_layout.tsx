@@ -3,8 +3,9 @@ import { useEffect } from 'react';
 import { Appearance, View } from 'react-native';
 import { useAuth } from '../../src/auth/AuthContext';
 import { CallOverlay } from '../../src/calls/CallOverlay';
-import { CallProvider } from '../../src/calls/CallProvider';
-import { GroupCallProvider } from '../../src/groupCalls/GroupCallProvider';
+import { CallProvider, useCalls } from '../../src/calls/CallProvider';
+import { GroupCallProvider, useGroupCall } from '../../src/groupCalls/GroupCallProvider';
+import { voicePlayback } from '../../src/voice';
 import { DataProvider } from '../../src/data/DataProvider';
 import { PushProvider } from '../../src/push/PushProvider';
 import { RealtimeProvider } from '../../src/realtime/RealtimeProvider';
@@ -40,6 +41,17 @@ function ThemedStack() {
   );
 }
 
+/** CHAT-074: a call takes over the audio, so a voice message playing stops when one starts. */
+function VoiceCallGuard() {
+  const call = useCalls().call;
+  const groupSession = useGroupCall().session;
+  const inCall = !!call || !!groupSession;
+  useEffect(() => {
+    if (inCall) voicePlayback.stop();
+  }, [inCall]);
+  return null;
+}
+
 export default function AppLayout() {
   return (
     <DataProvider>
@@ -48,6 +60,7 @@ export default function AppLayout() {
           <CallProvider>
             <GroupCallProvider>
               <View style={{ flex: 1 }}>
+                <VoiceCallGuard />
                 <ThemedStack />
                 <CallOverlay />
               </View>

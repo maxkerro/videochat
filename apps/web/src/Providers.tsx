@@ -6,6 +6,7 @@ import { RealtimeProvider } from './features/chat/RealtimeProvider';
 import { CallProvider } from './features/calls/CallProvider';
 import { GroupCallProvider } from './features/groupCalls/GroupCallProvider';
 import { ThemeProvider } from './theme/ThemeProvider';
+import { VoicePlaybackProvider } from './features/voice/VoicePlaybackProvider';
 
 export function Providers({ children }: { children: ReactNode }) {
   const [queryClient] = useState(
@@ -21,7 +22,9 @@ export function Providers({ children }: { children: ReactNode }) {
           <AuthProvider>
             <RealtimeProvider>
               <CallProvider>
-                <GroupCallProvider>{children}</GroupCallProvider>
+                <GroupCallProvider>
+                  <VoicePlaybackProvider>{children}</VoicePlaybackProvider>
+                </GroupCallProvider>
               </CallProvider>
             </RealtimeProvider>
           </AuthProvider>

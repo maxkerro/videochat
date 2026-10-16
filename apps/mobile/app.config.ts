@@ -136,11 +136,20 @@ export default ({ config }: ConfigContext): ExpoConfig => {
           cameraPermission: 'Chat needs the camera so you can take a photo to send.',
           // Photos only here. The microphone is declared for calls (the WebRTC plugin below); this
           // must not be `false`, which would strip RECORD_AUDIO from the Android manifest.
-          microphonePermission:
-            'Chat needs the microphone so the other person can hear you on calls.',
+          microphonePermission: 'Chat needs the microphone for calls and to record voice messages.',
         },
       ],
       'expo-document-picker',
+      // CHAT-074: voice messages -- recording, and playing on with the screen off (iOS background
+      // audio; on Android a media-playback service with lock-screen controls).
+      [
+        'expo-audio',
+        {
+          microphonePermission: 'Chat needs the microphone for calls and to record voice messages.',
+          enableBackgroundPlayback: true,
+          enableBackgroundRecording: false,
+        },
+      ],
       'expo-notifications',
       // CHAT-062: lets a video call continue in a small window (Android picture-in-picture).
       // (The plugin reads its options unconditionally, so it needs the empty object.)
@@ -153,8 +162,7 @@ export default ({ config }: ConfigContext): ExpoConfig => {
           incomingCallTimeout: 30,
           outgoingCallTimeout: 60,
           fulfillAnswerCallTimeout: 30,
-          microphonePermission:
-            'Chat needs the microphone so the other person can hear you on calls.',
+          microphonePermission: 'Chat needs the microphone for calls and to record voice messages.',
           cameraPermission: 'Chat needs the camera so the other person can see you on video calls.',
         },
       ],
@@ -168,8 +176,7 @@ export default ({ config }: ConfigContext): ExpoConfig => {
         '@config-plugins/react-native-webrtc',
         {
           cameraPermission: 'Chat needs the camera so the other person can see you on video calls.',
-          microphonePermission:
-            'Chat needs the microphone so the other person can hear you on calls.',
+          microphonePermission: 'Chat needs the microphone for calls and to record voice messages.',
         },
       ],
     ],

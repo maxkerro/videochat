@@ -1,6 +1,8 @@
 import { z } from 'zod';
 import {
   ATTACHMENT_KINDS,
+  VOICE,
+  VOICE_CONTENT_TYPES,
   CALL_END_REASONS,
   CALL_MEDIA,
   CONVERSATION_TYPES,
@@ -216,6 +218,24 @@ export type MobileAuthSession = z.infer<typeof mobileAuthSessionSchema>;
  * reachable through a short-lived signed URL from `GET /attachments/:id/url`, which re-checks
  * conversation membership on every call.
  */
+/** CHAT-074: a voice recording's type (parameters like `;codecs=opus` ignored). */
+export function isVoiceContentType(type: string): boolean {
+  const base = type.split(';')[0]!.trim().toLowerCase();
+  return (VOICE_CONTENT_TYPES as readonly string[]).includes(base);
+}
+
+/** CHAT-074: what makes an audio file a voice message. */
+export const voiceInfoSchema = z.object({
+  durationMs: z
+    .number()
+    .int()
+    .positive()
+    .max(VOICE.maxSeconds * 1000 + 999),
+  /** Loudness over time, `VOICE.waveformBars` values from 0 to 100. */
+  waveform: z.array(z.number().int().min(0).max(100)).min(1).max(VOICE.waveformBars),
+});
+export type VoiceInfo = z.infer<typeof voiceInfoSchema>;
+
 export const attachmentSchema = z.object({
   id: z.uuid(),
   kind: z.enum(ATTACHMENT_KINDS),
@@ -225,22 +245,31 @@ export const attachmentSchema = z.object({
   /** Images only (after EXIF orientation is applied); null for files. */
   width: z.number().int().positive().nullable(),
   height: z.number().int().positive().nullable(),
+  /** CHAT-074: set on a voice message's audio file (which is otherwise a plain `file`). */
+  voice: voiceInfoSchema.optional(),
 });
 export type Attachment = z.infer<typeof attachmentSchema>;
 
 /** CHAT-030 step 1: ask for somewhere to upload a file before sending it. */
-export const createAttachmentUploadSchema = z.object({
-  filename: z.string().trim().min(1).max(255),
-  contentType: z.string().trim().min(1).max(255),
-  sizeBytes: z
-    .number()
-    .int()
-    .positive()
-    .max(
-      LIMITS.attachmentMaxBytes,
-      `Files can be up to ${LIMITS.attachmentMaxBytes / (1024 * 1024)} MB`,
-    ),
-});
+export const createAttachmentUploadSchema = z
+  .object({
+    filename: z.string().trim().min(1).max(255),
+    contentType: z.string().trim().min(1).max(255),
+    sizeBytes: z
+      .number()
+      .int()
+      .positive()
+      .max(
+        LIMITS.attachmentMaxBytes,
+        `Files can be up to ${LIMITS.attachmentMaxBytes / (1024 * 1024)} MB`,
+      ),
+    /** CHAT-074: a recorded voice message. */
+    voice: voiceInfoSchema.optional(),
+  })
+  .refine((v) => !v.voice || (isVoiceContentType(v.contentType) && v.sizeBytes <= VOICE.maxBytes), {
+    message: 'That isn’t a voice recording we can play',
+    path: ['voice'],
+  });
 export type CreateAttachmentUploadInput = z.infer<typeof createAttachmentUploadSchema>;
 
 /** CHAT-030: where to PUT the bytes (straight to object storage, never through the API), and
@@ -292,7 +321,7 @@ export const conversationSummarySchema = z.object({
       body: z.string().max(LIMITS.messageMaxLength).nullable(),
       call: callMessageMetaSchema.optional(),
       /** CHAT-030: enough to preview "Photo" / "report.pdf" without the whole attachment. */
-      attachment: attachmentSchema.pick({ kind: true, filename: true }).optional(),
+      attachment: attachmentSchema.pick({ kind: true, filename: true, voice: true }).optional(),
     })
     .nullable()
     .default(null),
@@ -374,7 +403,7 @@ export const replyPreviewSchema = z.object({
     .string()
     .max(LIMITS.replySnippetLength + 1)
     .nullable(),
-  attachment: attachmentSchema.pick({ kind: true, filename: true }).optional(),
+  attachment: attachmentSchema.pick({ kind: true, filename: true, voice: true }).optional(),
   deleted: z.boolean(),
 });
 export type ReplyPreview = z.infer<typeof replyPreviewSchema>;

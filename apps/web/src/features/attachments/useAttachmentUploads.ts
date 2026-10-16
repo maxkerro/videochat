@@ -1,4 +1,4 @@
-import { LIMITS, type Message } from '@videochat/shared';
+import { LIMITS, voiceFilename, type Message, type VoiceInfo } from '@videochat/shared';
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { ApiError } from '../../lib/api';
 import { useAuth, withAuthRetry } from '../auth/AuthContext';
@@ -17,6 +17,8 @@ export interface PendingUpload {
   attachmentId?: string;
   uploaded?: boolean;
   clientMsgId: string;
+  /** CHAT-074: a recorded voice message. */
+  voice?: VoiceInfo;
 }
 
 const MAX_MB = LIMITS.attachmentMaxBytes / (1024 * 1024);
@@ -72,6 +74,7 @@ export function useAttachmentUploads(options: {
               filename: upload.file.name || 'file',
               contentType: upload.file.type || 'application/octet-stream',
               sizeBytes: upload.file.size,
+              ...(upload.voice ? { voice: upload.voice } : {}),
             }),
           );
           attachmentId = slot.attachmentId;
@@ -140,6 +143,29 @@ export function useAttachmentUploads(options: {
     [run],
   );
 
+  /** CHAT-074: sends a recording as a voice message. */
+  const addVoice = useCallback(
+    (recorded: { blob: Blob; contentType: string; voice: VoiceInfo }) => {
+      const conversationId = optionsRef.current.conversationId;
+      if (!conversationId) return;
+      const file = new File([recorded.blob], voiceFilename(recorded.contentType), {
+        type: recorded.contentType,
+      });
+      const upload: PendingUpload = {
+        localId: newId(),
+        clientMsgId: newId(),
+        conversationId,
+        file,
+        status: 'uploading',
+        progress: 0,
+        voice: recorded.voice,
+      };
+      setUploads((prev) => [...prev, upload]);
+      void run(upload);
+    },
+    [run],
+  );
+
   const cancel = useCallback((localId: string) => {
     const controller = controllers.current.get(localId);
     if (controller) controller.abort();
@@ -165,6 +191,7 @@ export function useAttachmentUploads(options: {
   return {
     uploads: uploads.filter((u) => u.conversationId === options.conversationId),
     addFiles,
+    addVoice,
     cancel,
     retry,
   };

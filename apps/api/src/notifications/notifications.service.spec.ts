@@ -47,6 +47,20 @@ describe('notificationText', () => {
         meta: { attachment: { kind: 'file', filename: 'q3.pdf' } as never },
       }),
     ).toBe('q3.pdf: numbers');
+    // CHAT-074
+    expect(
+      notificationText({
+        type: 'file',
+        body: null,
+        meta: {
+          attachment: {
+            kind: 'file',
+            filename: 'Voice message.webm',
+            voice: { durationMs: 72_000, waveform: [1] },
+          } as never,
+        },
+      }),
+    ).toBe('Voice message (1:12)');
     expect(notificationText({ type: 'text', body: 'x'.repeat(300), meta: null })).toHaveLength(140);
   });
 });

@@ -725,6 +725,220 @@ describe('ChatPane', () => {
     });
   });
 
+  describe('CHAT-074 voice messages', () => {
+    const voiceAttachment = {
+      id: '66666666-6666-4666-8666-666666666666',
+      kind: 'file',
+      filename: 'Voice message.webm',
+      contentType: 'audio/webm',
+      sizeBytes: 4_000,
+      width: null,
+      height: null,
+      voice: { durationMs: 12_000, waveform: [10, 60, 100, 40] },
+    };
+
+    it('shows a voice message with its length, plays it and changes speed', async () => {
+      const play = vi.spyOn(HTMLMediaElement.prototype, 'play').mockResolvedValue(undefined);
+      vi.spyOn(HTMLMediaElement.prototype, 'pause').mockImplementation(() => undefined);
+      let urlRequests = 0;
+      vi.stubGlobal(
+        'fetch',
+        routedFetch({
+          'POST /auth/refresh': () => jsonResponse(session()),
+          [`GET /conversations/${conversationId}`]: () => jsonResponse(conversation()),
+          [`GET /conversations/${conversationId}/messages`]: () =>
+            jsonResponse({
+              messages: [
+                message({ type: 'file', body: null, attachment: voiceAttachment } as never),
+              ],
+              hasMore: false,
+            }),
+          [`GET /attachments/${voiceAttachment.id}/url`]: () => {
+            urlRequests += 1;
+            return jsonResponse({
+              url: 'https://s3.test/voice.webm',
+              expiresAt: '2030-01-01T00:00:00.000Z',
+            });
+          },
+        }),
+      );
+      renderApp(`/c/${conversationId}`);
+      const slider = await screen.findByRole('slider', { name: 'Voice message position' });
+      expect(slider).toHaveAttribute('aria-valuetext', '0:00 of 0:12');
+      expect(screen.getByText('0:12')).toBeInTheDocument();
+
+      await userEvent.click(screen.getByRole('button', { name: 'Playback speed 1x' }));
+      expect(screen.getByRole('button', { name: 'Playback speed 1.5x' })).toBeInTheDocument();
+
+      await userEvent.click(screen.getByRole('button', { name: 'Play voice message' }));
+      await waitFor(() => expect(play).toHaveBeenCalled());
+      expect(urlRequests).toBe(1);
+      const audio = play.mock.contexts[0] as HTMLAudioElement;
+      expect(audio.src).toBe('https://s3.test/voice.webm');
+      expect(audio.playbackRate).toBe(1.5);
+    });
+
+    it('records with the microphone and sends it as a voice message', async () => {
+      const track = { stop: vi.fn() };
+      vi.stubGlobal('navigator', {
+        ...navigator,
+        mediaDevices: { getUserMedia: vi.fn(async () => ({ getTracks: () => [track] })) },
+      });
+      class FakeMediaRecorder {
+        static isTypeSupported = (t: string) => t === 'audio/webm;codecs=opus';
+        state = 'inactive';
+        mimeType = 'audio/webm;codecs=opus';
+        ondataavailable: ((e: { data: Blob }) => void) | null = null;
+        onstop: (() => void) | null = null;
+        start() {
+          this.state = 'recording';
+        }
+        stop() {
+          this.state = 'inactive';
+          this.ondataavailable?.({ data: new Blob(['opus'], { type: this.mimeType }) });
+          this.onstop?.();
+        }
+      }
+      vi.stubGlobal('MediaRecorder', FakeMediaRecorder);
+      vi.stubGlobal(
+        'AudioContext',
+        class {
+          createAnalyser() {
+            return { fftSize: 0, getFloatTimeDomainData: (a: Float32Array) => a.fill(0.1) };
+          }
+          createMediaStreamSource() {
+            return { connect: () => undefined };
+          }
+          close() {
+            return Promise.resolve();
+          }
+        },
+      );
+      class Xhr {
+        upload = {};
+        onload?: () => void;
+        status = 200;
+        open() {}
+        setRequestHeader() {}
+        send() {
+          queueMicrotask(() => this.onload?.());
+        }
+        abort() {}
+      }
+      vi.stubGlobal('XMLHttpRequest', Xhr);
+      let uploadRequest: Record<string, unknown> | undefined;
+      let sent: Record<string, unknown> | undefined;
+      vi.stubGlobal(
+        'fetch',
+        routedFetch({
+          'POST /auth/refresh': () => jsonResponse(session()),
+          [`GET /conversations/${conversationId}`]: () => jsonResponse(conversation()),
+          [`GET /conversations/${conversationId}/messages`]: () =>
+            jsonResponse({ messages: [], hasMore: false }),
+          [`POST /conversations/${conversationId}/attachments`]: (_u, init) => {
+            uploadRequest = JSON.parse(String(init?.body));
+            return jsonResponse({
+              attachmentId: voiceAttachment.id,
+              uploadUrl: 'https://s3.test/upload',
+              uploadHeaders: { 'Content-Type': 'audio/webm' },
+              expiresAt: '2030-01-01T00:00:00.000Z',
+            });
+          },
+          [`POST /conversations/${conversationId}/messages`]: (_u, init) => {
+            sent = JSON.parse(String(init?.body));
+            return jsonResponse(
+              message({
+                id: 'V'.repeat(26),
+                type: 'file',
+                body: null,
+                attachment: voiceAttachment,
+              } as never),
+            );
+          },
+        }),
+      );
+      renderApp(`/c/${conversationId}`);
+      await screen.findByRole('heading', { name: 'Ben Okafor' });
+      await userEvent.click(screen.getByRole('button', { name: 'Record voice message' }));
+      expect(
+        await screen.findByRole('group', { name: 'Recording a voice message' }),
+      ).toBeInTheDocument();
+      await new Promise((r) => setTimeout(r, 900));
+      await userEvent.click(screen.getByRole('button', { name: 'Send' }));
+      await waitFor(() => expect(sent?.attachmentId).toBe(voiceAttachment.id));
+      expect(uploadRequest).toMatchObject({ contentType: 'audio/webm;codecs=opus' });
+      expect((uploadRequest!.voice as { durationMs: number }).durationMs).toBeGreaterThanOrEqual(
+        700,
+      );
+      expect((uploadRequest!.voice as { waveform: number[] }).waveform).toHaveLength(48);
+      expect(uploadRequest!.filename).toMatch(/^Voice message .*\.webm$/);
+      expect(track.stop).toHaveBeenCalled();
+      expect(
+        screen.queryByRole('group', { name: 'Recording a voice message' }),
+      ).not.toBeInTheDocument();
+    });
+
+    it('cancels a recording with Escape, and explains a blocked microphone', async () => {
+      const track = { stop: vi.fn() };
+      const getUserMedia = vi.fn(async () => ({ getTracks: () => [track] }));
+      vi.stubGlobal('navigator', { ...navigator, mediaDevices: { getUserMedia } });
+      vi.stubGlobal(
+        'MediaRecorder',
+        class {
+          static isTypeSupported = () => true;
+          state = 'inactive';
+          mimeType = 'audio/webm';
+          start() {
+            this.state = 'recording';
+          }
+          stop() {
+            this.state = 'inactive';
+          }
+        },
+      );
+      vi.stubGlobal(
+        'AudioContext',
+        class {
+          createAnalyser() {
+            return { getFloatTimeDomainData: () => undefined };
+          }
+          createMediaStreamSource() {
+            return { connect: () => undefined };
+          }
+          close() {
+            return Promise.resolve();
+          }
+        },
+      );
+      vi.stubGlobal(
+        'fetch',
+        routedFetch({
+          'POST /auth/refresh': () => jsonResponse(session()),
+          [`GET /conversations/${conversationId}`]: () => jsonResponse(conversation()),
+          [`GET /conversations/${conversationId}/messages`]: () =>
+            jsonResponse({ messages: [], hasMore: false }),
+        }),
+      );
+      renderApp(`/c/${conversationId}`);
+      await screen.findByRole('heading', { name: 'Ben Okafor' });
+      await userEvent.click(screen.getByRole('button', { name: 'Record voice message' }));
+      await screen.findByRole('group', { name: 'Recording a voice message' });
+      await waitFor(() => expect(screen.getByRole('button', { name: 'Send' })).toHaveFocus());
+      await userEvent.keyboard('{Escape}');
+      expect(
+        screen.queryByRole('group', { name: 'Recording a voice message' }),
+      ).not.toBeInTheDocument();
+      expect(track.stop).toHaveBeenCalled();
+      expect(screen.getByLabelText('Message')).toBeInTheDocument();
+
+      getUserMedia.mockRejectedValueOnce(
+        Object.assign(new Error('no'), { name: 'NotAllowedError' }),
+      );
+      await userEvent.click(screen.getByRole('button', { name: 'Record voice message' }));
+      expect(await screen.findByText(/Microphone access is blocked/)).toBeInTheDocument();
+    });
+  });
+
   describe('CHAT-031 link previews', () => {
     const preview = {
       url: 'https://example.com/post',

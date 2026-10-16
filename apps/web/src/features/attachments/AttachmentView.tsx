@@ -6,6 +6,7 @@ import { useAuth, withAuthRetry } from '../auth/AuthContext';
 import { fetchAttachmentUrl, formatBytes } from './attachmentsApi';
 import { useAttachmentUrl } from './useAttachmentUrl';
 import styles from './Attachments.module.css';
+import { VoiceMessage } from '../voice/VoiceMessage';
 
 /** Largest a thumbnail is drawn in the message list, in CSS px. */
 const THUMB_MAX_W = 280;
@@ -19,6 +20,9 @@ export function thumbBox(width: number | null, height: number | null) {
 
 /** CHAT-030: an image (thumbnail, opens a lightbox) or a file card (name, size, download). */
 export function AttachmentView({ attachment }: { attachment: Attachment }) {
+  // CHAT-074: a voice message plays in place.
+  if (attachment.voice)
+    return <VoiceMessage attachment={{ ...attachment, voice: attachment.voice }} />;
   return attachment.kind === 'image' ? (
     <ImageAttachment attachment={attachment} />
   ) : (

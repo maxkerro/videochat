@@ -199,6 +199,9 @@ export class MessagesService {
     if (!EDITABLE_TYPES.has(row.type))
       throw new BadRequestException('This message can’t be edited');
     if (row.deletedAt) throw new NotFoundException('Message not found');
+    // CHAT-074: a voice message has nothing to edit.
+    if (row.meta?.attachment?.voice)
+      throw new BadRequestException('A voice message can’t be edited');
     const windowMs = LIMITS.messageEditWindowMinutes * 60_000;
     if (Date.now() - row.createdAt.getTime() > windowMs) {
       throw new ForbiddenException(

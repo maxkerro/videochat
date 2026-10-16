@@ -1,4 +1,4 @@
-import { LIMITS, type ConversationSummary, type Message } from '@videochat/shared';
+import { attachmentLabel, LIMITS, type ConversationSummary, type Message } from '@videochat/shared';
 
 const pad = (n: number) => String(n).padStart(2, '0');
 const WEEKDAYS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
@@ -18,7 +18,8 @@ export function lastMessagePreview(c: ConversationSummary, myId: string): string
   if (!m) return 'No messages yet';
   let text: string;
   if (m.type === 'call') text = 'Call';
-  else if (m.attachment) text = m.attachment.kind === 'image' ? 'Photo' : m.attachment.filename;
+  // "Photo", "Voice message (0:12)" (CHAT-074) or the file's name.
+  else if (m.attachment) text = attachmentLabel(m.attachment);
   else if (m.body === null) text = 'Message deleted';
   else text = m.body.replace(/\s+/g, ' ');
   return m.senderId === myId ? `You: ${text}` : text;

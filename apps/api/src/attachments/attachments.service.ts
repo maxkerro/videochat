@@ -9,7 +9,9 @@ import {
 } from '@nestjs/common';
 import {
   ATTACHMENT_IMAGE_TYPES,
+  isVoiceContentType,
   LIMITS,
+  VOICE,
   type Attachment,
   type AttachmentUpload,
   type AttachmentUrl,
@@ -86,7 +88,36 @@ export function toAttachment(row: AttachmentRow): Attachment {
     sizeBytes: row.sizeBytes,
     width: row.width,
     height: row.height,
+    ...(row.voice ? { voice: row.voice } : {}),
   };
+}
+
+/**
+ * CHAT-074: whether the first bytes are the recording format the upload claimed. Voice messages
+ * play inline, so they must really be audio of that kind -- not, say, a page or a script with an
+ * audio type on it.
+ */
+export function looksLikeVoice(bytes: Buffer, contentType: string): boolean {
+  const type = contentType.split(';')[0]!.trim().toLowerCase();
+  const at = (offset: number, ...expected: number[]) =>
+    expected.every((b, i) => bytes[offset + i] === b);
+  const ascii = (offset: number, text: string) =>
+    bytes.subarray(offset, offset + text.length).toString('latin1') === text;
+  const isMp4 = ascii(4, 'ftyp');
+  switch (type) {
+    case 'audio/webm':
+      return at(0, 0x1a, 0x45, 0xdf, 0xa3); // EBML (Matroska/WebM)
+    case 'audio/ogg':
+      return ascii(0, 'OggS');
+    case 'audio/mp4':
+    case 'audio/x-m4a':
+      return isMp4;
+    case 'audio/aac':
+      // ADTS frames (sync word 0xFFF, layer 0), or AAC in an MP4 box.
+      return (bytes[0] === 0xff && ((bytes[1] ?? 0) & 0xf6) === 0xf0) || isMp4;
+    default:
+      return false;
+  }
 }
 
 /**
@@ -131,11 +162,16 @@ export class AttachmentsService implements OnModuleInit, OnModuleDestroy {
     await this.requireMember(conversationId, userId);
     const id = randomUUID();
     const contentType = normalizeContentType(input.contentType);
+    // CHAT-074: the schema already checked the type and size of a voice upload; belt and braces.
+    if (input.voice && (!isVoiceContentType(contentType) || input.sizeBytes > VOICE.maxBytes)) {
+      throw new BadRequestException('That isn’t a voice recording we can play');
+    }
     const objectKey = `attachments/${conversationId}/${id}/original`;
     await insertAttachment(this.db, {
       id,
       conversationId,
       uploaderId: userId,
+      voice: input.voice ?? null,
       kind: IMAGE_TYPES.has(contentType) ? 'image' : 'file',
       filename: sanitizeFilename(input.filename),
       contentType,
@@ -189,8 +225,11 @@ export class AttachmentsService implements OnModuleInit, OnModuleDestroy {
       throw tooLarge();
     }
 
-    const processed =
-      row.kind === 'image' ? await this.processImage(row, uploadKey) : await this.storeFile(row);
+    const processed = row.voice
+      ? await this.processVoice(row, uploadKey)
+      : row.kind === 'image'
+        ? await this.processImage(row, uploadKey)
+        : await this.storeFile(row);
     // The staging copy has served its purpose. (The PUT URL may still be live and re-create it;
     // nothing reads it after this, and `deleteRows` removes it with the rest.)
     await this.s3.deleteObjects([uploadKey]).catch(() => undefined);
@@ -217,6 +256,9 @@ export class AttachmentsService implements OnModuleInit, OnModuleDestroy {
       // through this inline-rendering path.
       if (!row.thumbKey) throw new NotFoundException('Attachment not found');
       url = await this.s3.getSignedGetUrl(row.thumbKey, DOWNLOAD_URL_TTL_SEC, 'image/webp');
+    } else if (row.voice) {
+      // CHAT-074: plays inline; `processVoice` checked the bytes are that audio format.
+      url = await this.s3.getSignedGetUrl(row.objectKey, DOWNLOAD_URL_TTL_SEC, row.contentType);
     } else if (row.kind === 'file') {
       // Files are only ever downloaded (attachment, octet-stream), never rendered inline.
       url = await this.s3.getSignedDownloadUrl(row.objectKey, row.filename, DOWNLOAD_URL_TTL_SEC);
@@ -272,6 +314,31 @@ export class AttachmentsService implements OnModuleInit, OnModuleDestroy {
     }
     return markAttachmentProcessed(this.db, row.id, {
       sizeBytes: stored.size,
+      width: null,
+      height: null,
+      thumbKey: null,
+      contentType: row.contentType,
+    });
+  }
+
+  /** CHAT-074: a voice recording -- capped read, check the bytes are the claimed audio format,
+   *  then store exactly those bytes (the upload key may be rewritten after this). */
+  private async processVoice(row: AttachmentRow, uploadKey: string): Promise<AttachmentRow> {
+    let audio: Buffer;
+    try {
+      audio = await this.s3.getObject(uploadKey, VOICE.maxBytes);
+    } catch (err) {
+      if (!(err instanceof ObjectTooLargeError)) throw err;
+      await this.discard(row);
+      throw new BadRequestException('Voice messages can be up to 5 minutes');
+    }
+    if (audio.length === 0 || !looksLikeVoice(audio, row.contentType)) {
+      await this.discard(row);
+      throw new BadRequestException('That isn’t a voice recording we can play');
+    }
+    await this.s3.putObject(row.objectKey, audio, row.contentType);
+    return markAttachmentProcessed(this.db, row.id, {
+      sizeBytes: audio.length,
       width: null,
       height: null,
       thumbKey: null,
