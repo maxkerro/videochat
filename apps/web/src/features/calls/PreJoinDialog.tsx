@@ -1,7 +1,8 @@
 import type { CallMedia } from '@videochat/shared';
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { Button, Modal } from '../../components/ui';
-import type { CallPeer } from './CallEngine';
+import type { BlurredVideo, CallPeer } from './CallEngine';
+import { blurWithWatchdog } from './effects/backgroundBlur';
 import { useCalls } from './CallProvider';
 import {
   acquireMedia,
@@ -43,6 +44,48 @@ export function PreJoinDialog({
   const [attempt, setAttempt] = useState(0);
   /** Set once the stream is handed to the call, so closing the dialog doesn't stop it. */
   const handedOver = useRef(false);
+  // CHAT-075: blur is chosen here (and remembered), and runs on the preview already, so the call
+  // starts blurred with no gap. Not part of `prefs`: changing it mustn't reopen the camera.
+  const [blurOn, setBlurOn] = useState(
+    () => media === 'video' && calls.canBlurBackground && !!loadDevicePreferences().backgroundBlur,
+  );
+  const [blur, setBlur] = useState<BlurredVideo | null>(null);
+  const [blurNote, setBlurNote] = useState<string | null>(null);
+  const camera = stream?.getVideoTracks()[0] ?? null;
+
+  useEffect(() => {
+    if (!blurOn || !camera) return;
+    let cancelled = false;
+    let made: BlurredVideo | null = null;
+    blurWithWatchdog(camera, () => {
+      setBlurOn(false);
+      setBlurNote('Background blur is too slow on this device.');
+    })
+      .then((b) => {
+        if (cancelled) {
+          b.stop();
+          return;
+        }
+        made = b;
+        setBlur(b);
+      })
+      .catch(() => {
+        if (cancelled) return;
+        setBlurOn(false);
+        setBlurNote('Background blur isn’t available on this device.');
+      });
+    return () => {
+      cancelled = true;
+      if (made && !handedOver.current) made.stop();
+    };
+  }, [blurOn, camera]);
+
+  // Only a blur of the current camera, while blur is on, is shown (and handed to the call).
+  const activeBlur = blurOn && blur && blur.source === camera ? blur : null;
+  const previewStream = useMemo(
+    () => (activeBlur ? new MediaStream([activeBlur.track]) : stream),
+    [activeBlur, stream],
+  );
 
   useEffect(() => {
     if (!open) return;
@@ -73,9 +116,16 @@ export function PreJoinDialog({
 
   const start = () => {
     if (!stream) return;
-    saveDevicePreferences(prefs);
+    saveDevicePreferences({ ...prefs, backgroundBlur: blurOn });
     handedOver.current = true;
-    calls.startCall({ conversationId, peer, media, stream });
+    calls.startCall({
+      conversationId,
+      peer,
+      media,
+      stream,
+      backgroundBlur: blurOn,
+      blur: activeBlur,
+    });
     onOpenChange(false);
   };
 
@@ -100,9 +150,9 @@ export function PreJoinDialog({
     >
       {media === 'video' && (
         <div className={styles.preview}>
-          {stream ? (
+          {previewStream ? (
             <StreamVideo
-              stream={stream}
+              stream={previewStream}
               className={styles.previewVideo}
               label="Your camera preview"
             />
@@ -176,6 +226,29 @@ export function PreJoinDialog({
           </select>
         </label>
       )}
+      {media === 'video' && calls.canBlurBackground && (
+        <label className={styles.check}>
+          <input
+            type="checkbox"
+            checked={blurOn}
+            onChange={(e) => {
+              setBlurNote(null);
+              setBlurOn(e.target.checked);
+            }}
+          />
+          Blur background
+          {blurOn && !activeBlur && stream && <span className={styles.checkNote}>Starting…</span>}
+        </label>
+      )}
+      {blurNote && <p className={styles.checkNote}>{blurNote}</p>}
+      <label className={styles.check}>
+        <input
+          type="checkbox"
+          checked={prefs.noiseSuppression ?? true}
+          onChange={(e) => setPrefs((p) => ({ ...p, noiseSuppression: e.target.checked }))}
+        />
+        Noise suppression
+      </label>
       {busy && <p className={styles.error}>Hang up your current call first.</p>}
     </Modal>
   );

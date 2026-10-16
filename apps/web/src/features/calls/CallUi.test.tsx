@@ -12,6 +12,17 @@ import { CallContext, endMessage, formatDuration, type CallController } from './
 
 const PEER = { id: 'peer-1', displayName: 'Ben Peer', avatarUrl: null };
 
+// CHAT-075: the real blur needs WebGL; here a stand-in "blurred" track.
+const blurredTrack = { kind: 'video', stop: vi.fn() } as unknown as MediaStreamTrack;
+vi.mock('./effects/backgroundBlur', async (original) => ({
+  ...(await original<typeof import('./effects/backgroundBlur')>()),
+  blurWithWatchdog: vi.fn(async (camera: MediaStreamTrack) => ({
+    source: camera,
+    track: blurredTrack,
+    stop: vi.fn(),
+  })),
+}));
+
 function snapshot(overrides: Partial<CallSnapshot> = {}): CallSnapshot {
   return {
     callId: 'call-1',
@@ -34,6 +45,10 @@ function snapshot(overrides: Partial<CallSnapshot> = {}): CallSnapshot {
     endCause: null,
     quality: 'good',
     lowBandwidth: false,
+    backgroundBlur: false,
+    blurredStream: null,
+    blurError: null,
+    noiseSuppression: true,
     ...overrides,
   };
 }
@@ -52,6 +67,9 @@ function controller(call: CallSnapshot | null, overrides: Partial<CallController
     switchDevice: vi.fn().mockResolvedValue(undefined),
     canShareScreen: true,
     toggleScreenShare: vi.fn().mockResolvedValue(undefined),
+    canBlurBackground: true,
+    setBackgroundBlur: vi.fn().mockResolvedValue(undefined),
+    setNoiseSuppression: vi.fn().mockResolvedValue(undefined),
     ...overrides,
   } satisfies CallController;
 }
@@ -118,7 +136,9 @@ describe('call UI (CHAT-042)', () => {
 
       await userEvent.click(await screen.findByRole('button', { name: 'Answer' }));
 
-      await waitFor(() => expect(ctrl.accept).toHaveBeenCalledWith(stream));
+      await waitFor(() =>
+        expect(ctrl.accept).toHaveBeenCalledWith(stream, { backgroundBlur: false }),
+      );
       expect(navigator.mediaDevices.getUserMedia).toHaveBeenCalledWith(
         expect.objectContaining({ video: expect.anything(), audio: expect.anything() }),
       );
@@ -282,6 +302,88 @@ describe('call UI (CHAT-042)', () => {
     });
   });
 
+  describe('background blur and noise suppression (CHAT-075)', () => {
+    it('switches blur and the noise filter during a call', async () => {
+      const ctrl = controller(snapshot());
+      renderWith(ctrl);
+      await userEvent.click(screen.getByRole('button', { name: 'Blur background' }));
+      expect(ctrl.setBackgroundBlur).toHaveBeenCalledWith(true);
+      await userEvent.click(screen.getByRole('button', { name: 'Turn noise suppression off' }));
+      expect(ctrl.setNoiseSuppression).toHaveBeenCalledWith(false);
+    });
+
+    it('shows the state, and offers no blur where it cannot run or while sharing', () => {
+      renderWith(controller(snapshot({ backgroundBlur: true, noiseSuppression: false })));
+      expect(screen.getByRole('button', { name: 'Stop blurring background' })).toHaveAttribute(
+        'aria-pressed',
+        'true',
+      );
+      expect(screen.getByRole('button', { name: 'Turn noise suppression on' })).toBeInTheDocument();
+    });
+
+    it.each([
+      ['unsupported', controller(snapshot(), { canBlurBackground: false })],
+      ['sharing', controller(snapshot({ sharingScreen: true }))],
+      ['camera off', controller(snapshot({ videoEnabled: false }))],
+    ])('no blur button when %s', (_label, ctrl) => {
+      renderWith(ctrl);
+      expect(screen.queryByRole('button', { name: /blur/i })).not.toBeInTheDocument();
+    });
+
+    it('pre-join: blur runs on the preview and is handed to the call; noise filter off re-opens the mic', async () => {
+      const camera = { kind: 'video', stop: vi.fn() } as unknown as MediaStreamTrack;
+      const stream = {
+        getTracks: () => [camera],
+        getVideoTracks: () => [camera],
+        getAudioTracks: () => [],
+      } as unknown as MediaStream;
+      stubMedia(() => Promise.resolve(stream));
+      vi.stubGlobal(
+        'MediaStream',
+        class {
+          constructor(private readonly tracks: MediaStreamTrack[]) {}
+          getTracks() {
+            return this.tracks;
+          }
+          getVideoTracks() {
+            return this.tracks;
+          }
+          getAudioTracks() {
+            return [];
+          }
+        },
+      );
+      localStorage.removeItem('videochat.callDevices');
+      const ctrl = controller(null);
+      renderWith(ctrl, <CallButtons peer={PEER} conversationId="conv-1" />);
+      await userEvent.click(screen.getByRole('button', { name: /video call/i }));
+      await screen.findByRole('dialog', { name: 'Start video call with Ben Peer' });
+
+      await userEvent.click(screen.getByRole('checkbox', { name: 'Noise suppression' }));
+      await waitFor(() =>
+        expect(navigator.mediaDevices.getUserMedia).toHaveBeenLastCalledWith(
+          expect.objectContaining({ audio: expect.objectContaining({ noiseSuppression: false }) }),
+        ),
+      );
+      await userEvent.click(screen.getByRole('checkbox', { name: /Blur background/ }));
+      const call = screen.getByRole('button', { name: 'Call' });
+      await waitFor(() => expect(call).toBeEnabled());
+      await waitFor(() => expect(screen.queryByText('Starting…')).not.toBeInTheDocument());
+      await userEvent.click(call);
+      expect(ctrl.startCall).toHaveBeenCalledWith(
+        expect.objectContaining({
+          backgroundBlur: true,
+          blur: expect.objectContaining({ source: camera, track: blurredTrack }),
+        }),
+      );
+      expect(JSON.parse(localStorage.getItem('videochat.callDevices')!)).toMatchObject({
+        backgroundBlur: true,
+        noiseSuppression: false,
+      });
+      vi.unstubAllGlobals();
+    });
+  });
+
   describe('starting a call from a direct chat', () => {
     it('runs a pre-join device check, then places the call with that stream', async () => {
       const stream = fakeStream();
@@ -301,6 +403,8 @@ describe('call UI (CHAT-042)', () => {
         peer: PEER,
         media: 'video',
         stream,
+        backgroundBlur: false,
+        blur: null,
       });
     });
 

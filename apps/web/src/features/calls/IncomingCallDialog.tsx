@@ -3,7 +3,7 @@ import { useState } from 'react';
 import { Avatar, Button, Modal } from '../../components/ui';
 import type { CallSnapshot } from './CallEngine';
 import { useCalls } from './CallProvider';
-import { acquireMedia, describeMediaError } from './mediaDevices';
+import { acquireMedia, describeMediaError, loadDevicePreferences } from './mediaDevices';
 import styles from './Calls.module.css';
 
 /** CHAT-042 AC: "Incoming call modal with accept/decline." A video call can also be answered
@@ -18,8 +18,10 @@ export function IncomingCallDialog({ call }: { call: CallSnapshot }) {
     setAnswering(true);
     setError(null);
     try {
-      const stream = await acquireMedia(media);
-      await calls.accept(stream);
+      const prefs = loadDevicePreferences();
+      const stream = await acquireMedia(media, prefs);
+      // CHAT-075: the background blur last chosen (noise suppression is in the constraints).
+      await calls.accept(stream, { backgroundBlur: media === 'video' && !!prefs.backgroundBlur });
     } catch (err) {
       setError(describeMediaError(err, media));
       setAnswering(false);

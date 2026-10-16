@@ -232,3 +232,25 @@ holds its length and waveform. The API accepts only recording formats (WebM/Ogg 
 to 8 MB and 5 minutes, checks the file's first bytes really are that format before the message is
 sent, and serves it to members for inline playback (other files are still download-only). Nothing
 to configure; the bucket CORS rule from CHAT-030 already covers the upload.
+
+## Background blur and noise suppression (CHAT-075)
+
+- **Blur** runs in the browser (MediaPipe selfie segmentation on WebGL, through
+  `@livekit/track-processors`). Its WebAssembly (~9 MB, two variants) and model (250 KB) are served
+  by the web static site under `/mediapipe/` -- the build copies the WebAssembly from
+  `node_modules`, the model lives in `apps/web/public/mediapipe` -- and are only downloaded the first
+  time someone turns blur on. Cached for a week (`render.yaml` headers). No CDN or API involved.
+- **Noise suppression** is the WebRTC suppression built into every browser and phone, switched on
+  or off per device. LiveKit's Krisp filter was considered and left out: it needs LiveKit Cloud's
+  paid noise-cancellation and wouldn't cover 1:1 calls, which don't go through LiveKit.
+- Blur turns itself off (with a notice) if frames take over 45 ms for 5 seconds -- the guard for
+  slow machines. There is no blur in the phone apps yet (see the backlog).
+
+**Routing fix (found while doing this):** the web static site proxies API paths to the API
+(`routes` in `render.yaml`), and `/attachments/*`, `/search`, `/presence`, `/push/*` and
+`/link-preview` were missing, so the web app got `index.html` back for signed attachment URLs
+(the grey thumbnails of CHAT-082, and voice messages), message search, presence, Web Push
+subscriptions and the composer's link preview. They're added, and
+`apps/web/src/test/proxyRoutes.test.ts` fails if the web app calls a path that isn't proxied.
+**After pushing, sync the Blueprint in the Render dashboard** (Blueprints → videochat → Sync) if
+it doesn't apply route changes by itself, then check a photo thumbnail loads in the web app.

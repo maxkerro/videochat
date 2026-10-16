@@ -66,6 +66,21 @@ export interface CallSnapshot {
   quality: 'unknown' | 'good' | 'poor';
   /** CHAT-043: too little outgoing bandwidth for video; the UI suggests audio only. */
   lowBandwidth: boolean;
+  /** CHAT-075: the camera's background is blurred (or about to be). */
+  backgroundBlur: boolean;
+  /** The blurred camera, for the self view (null when not blurring). */
+  blurredStream: MediaStream | null;
+  /** Why blur was turned off by itself: not available here, or too slow for this device. */
+  blurError: 'unavailable' | 'slow' | null;
+  /** CHAT-075: the microphone's noise suppression. */
+  noiseSuppression: boolean;
+}
+
+/** CHAT-075: a camera track with its background blurred. */
+export interface BlurredVideo {
+  readonly source: MediaStreamTrack;
+  readonly track: MediaStreamTrack;
+  stop(): void;
 }
 
 export interface CallEngineDeps {
@@ -81,6 +96,9 @@ export interface CallEngineDeps {
   reportStats?: (callId: string, stats: CallStats) => void;
   /** CHAT-071: the browser's screen picker (undefined where screen sharing isn't supported). */
   getDisplayMedia?: (constraints: DisplayMediaStreamOptions) => Promise<MediaStream>;
+  /** CHAT-075: blurs a camera's background (undefined where the browser can't). `onSlow` is
+   *  called if the device can't keep up, and the engine then turns blur off. */
+  createBackgroundBlur?: (camera: MediaStreamTrack, onSlow: () => void) => Promise<BlurredVideo>;
 }
 
 export class CallBusyError extends Error {
@@ -106,6 +124,11 @@ export class CallEngine {
   /** CHAT-071: the video sender carrying the shared screen, when the call had no camera to swap
    *  out (its track is null once sharing stops; turning the camera on reuses it). */
   private spareVideoSender: RTCRtpSender | null = null;
+  /** The sender that carries the camera (raw or blurred), even while it sends nothing. */
+  private cameraSender: RTCRtpSender | null = null;
+  /** CHAT-075: the running background blur, if any. Changes go one at a time (`blurChain`). */
+  private blur: BlurredVideo | null = null;
+  private blurChain: Promise<void> = Promise.resolve();
   private polite = false;
   private makingOffer = false;
   private ignoreOffer = false;
@@ -142,8 +165,15 @@ export class CallEngine {
     peer: CallPeer;
     media: CallMedia;
     stream: MediaStream;
+    /** CHAT-075: blur the background (from the pre-join choice)... */
+    backgroundBlur?: boolean;
+    /** ...already running on the preview, handed over so there is no gap. */
+    blur?: BlurredVideo | null;
   }): string {
-    if (this.isBusy()) throw new CallBusyError();
+    if (this.isBusy()) {
+      args.blur?.stop();
+      throw new CallBusyError();
+    }
     const callId = this.deps.newCallId();
     this.reset();
     this.polite = false;
@@ -169,8 +199,16 @@ export class CallEngine {
       endCause: null,
       quality: 'unknown',
       lowBandwidth: false,
+      backgroundBlur: !!args.backgroundBlur && args.stream.getVideoTracks().length > 0,
+      blurredStream: null,
+      blurError: null,
+      noiseSuppression: noiseSuppressionOf(args.stream),
     };
+    const camera = args.stream.getVideoTracks()[0];
+    if (args.blur && this.snap.backgroundBlur && args.blur.source === camera) this.blur = args.blur;
+    else args.blur?.stop();
     this.emit();
+    void this.applyBlur();
     this.deps.send(CALL_EVENTS.invite, {
       callId,
       conversationId: args.conversationId,
@@ -180,7 +218,7 @@ export class CallEngine {
   }
 
   /** Answers the ringing incoming call with `stream` (from getUserMedia). */
-  async accept(stream: MediaStream): Promise<void> {
+  async accept(stream: MediaStream, options: { backgroundBlur?: boolean } = {}): Promise<void> {
     if (!this.snap || this.snap.phase !== 'incoming') {
       stopStream(stream);
       return;
@@ -192,7 +230,10 @@ export class CallEngine {
       localStream: stream,
       audioEnabled: true,
       videoEnabled: stream.getVideoTracks().length > 0,
+      backgroundBlur: !!options.backgroundBlur && stream.getVideoTracks().length > 0,
+      noiseSuppression: noiseSuppressionOf(stream),
     });
+    void this.applyBlur();
     this.deps.send(CALL_EVENTS.accept, { callId: this.snap.callId });
     await this.startPeer();
   }
@@ -253,6 +294,7 @@ export class CallEngine {
     const existing = snap.localStream.getVideoTracks()[0];
     if (existing) {
       existing.enabled = !snap.videoEnabled;
+      if (this.blur) this.blur.track.enabled = existing.enabled;
       this.update({ videoEnabled: existing.enabled });
     } else {
       const camera = await this.deps.getUserMedia({ video: constraints, audio: false });
@@ -265,14 +307,54 @@ export class CallEngine {
       if (this.snap.sharingScreen) {
         // The screen keeps the video slot; the camera takes over when sharing stops.
       } else if (this.spareVideoSender) {
-        await this.spareVideoSender.replaceTrack(track);
-      } else {
+        this.cameraSender = this.spareVideoSender;
+        // With blur on, nothing is sent until the blurred picture is ready.
+        await this.spareVideoSender.replaceTrack(snap.backgroundBlur ? null : track);
+      } else if (this.pc) {
         // Triggers `negotiationneeded`, which sends a fresh offer to the other side.
-        this.pc?.addTrack(track, snap.localStream);
+        this.cameraSender = this.pc.addTrack(track, snap.localStream);
+        if (snap.backgroundBlur) await this.cameraSender.replaceTrack(null);
       }
       this.update({ videoEnabled: true });
+      await this.applyBlur();
     }
     this.sendMediaState();
+  }
+
+  /** CHAT-075: whether this browser can blur the background. */
+  canBlurBackground(): boolean {
+    return this.deps.createBackgroundBlur !== undefined;
+  }
+
+  /** CHAT-075: background blur on or off, mid-call. */
+  async setBackgroundBlur(on: boolean): Promise<void> {
+    if (!this.snap || this.snap.phase === 'ended') return;
+    this.update({ backgroundBlur: on, blurError: null });
+    await this.applyBlur();
+  }
+
+  /** CHAT-075: the microphone's noise suppression on or off (re-opens the microphone with it). */
+  async setNoiseSuppression(on: boolean): Promise<void> {
+    const snap = this.snap;
+    if (!snap?.localStream || snap.phase === 'ended') return;
+    const current = snap.localStream.getAudioTracks()[0];
+    const deviceId = current?.getSettings?.().deviceId;
+    const fresh = await this.deps.getUserMedia({
+      audio: {
+        ...(deviceId ? { deviceId: { exact: deviceId } } : {}),
+        echoCancellation: true,
+        autoGainControl: true,
+        noiseSuppression: on,
+      },
+      video: false,
+    });
+    const next = fresh.getAudioTracks()[0];
+    if (!next || !this.snap || this.snap.callId !== snap.callId || this.snap.phase === 'ended') {
+      stopStream(fresh);
+      return;
+    }
+    await this.swapTrack('audio', next);
+    this.update({ noiseSuppression: on });
   }
 
   /** Switches the microphone or camera mid-call without renegotiating (replaceTrack). */
@@ -282,23 +364,43 @@ export class CallEngine {
     const isAudio = kind === 'audioinput';
     const fresh = await this.deps.getUserMedia(
       isAudio
-        ? { audio: { deviceId: { exact: deviceId } }, video: false }
+        ? {
+            audio: {
+              deviceId: { exact: deviceId },
+              echoCancellation: true,
+              autoGainControl: true,
+              noiseSuppression: snap.noiseSuppression,
+            },
+            video: false,
+          }
         : { video: { deviceId: { exact: deviceId } }, audio: false },
     );
     const next = (isAudio ? fresh.getAudioTracks() : fresh.getVideoTracks())[0];
     if (!next) return;
+    await this.swapTrack(isAudio ? 'audio' : 'video', next);
+  }
+
+  /** Puts a new microphone or camera track in place of the current one. */
+  private async swapTrack(kind: 'audio' | 'video', next: MediaStreamTrack): Promise<void> {
+    const snap = this.snap;
+    if (!snap?.localStream) return;
+    const isAudio = kind === 'audio';
     const current = (
       isAudio ? snap.localStream.getAudioTracks() : snap.localStream.getVideoTracks()
     )[0];
     next.enabled = isAudio ? snap.audioEnabled : snap.videoEnabled;
-    // While a screen is shared the video sender carries the screen: just swap the camera kept
-    // for afterwards.
-    if (!(snap.sharingScreen && !isAudio)) {
+    if (isAudio) {
       const sender =
         this.pc?.getSenders().find((s) => s.track === current && current) ??
-        this.pc?.getSenders().find((s) => s.track?.kind === next.kind);
+        this.pc?.getSenders().find((s) => s.track?.kind === 'audio');
       if (sender) await sender.replaceTrack(next);
       else this.pc?.addTrack(next, snap.localStream);
+    } else if (!snap.sharingScreen && !snap.backgroundBlur) {
+      // (While a screen is shared the sender carries the screen: the new camera is kept for
+      // afterwards. With blur on, `applyBlur` below puts the new camera's blurred picture on.)
+      const sender = this.videoSender();
+      if (sender) await sender.replaceTrack(next);
+      else this.cameraSender = this.pc?.addTrack(next, snap.localStream) ?? null;
     }
     if (current) {
       snap.localStream.removeTrack(current);
@@ -306,6 +408,99 @@ export class CallEngine {
     }
     snap.localStream.addTrack(next);
     this.update({});
+    if (!isAudio) await this.applyBlur();
+  }
+
+  /** The sender carrying the camera (raw or blurred), if there is one. */
+  private videoSender(): RTCRtpSender | null {
+    const camera = this.snap?.localStream?.getVideoTracks()[0];
+    const blurred = this.blur?.track;
+    return (
+      this.pc?.getSenders().find((s) => !!s.track && (s.track === camera || s.track === blurred)) ??
+      this.cameraSender ??
+      null
+    );
+  }
+
+  /** CHAT-075: makes the blur match what's wanted, one change at a time. */
+  private applyBlur(): Promise<void> {
+    this.blurChain = this.blurChain.then(() => this.syncBlur()).catch(() => undefined);
+    return this.blurChain;
+  }
+
+  private async syncBlur(): Promise<void> {
+    const snap = this.snap;
+    if (!snap || snap.phase === 'ended') return;
+    const camera = snap.localStream?.getVideoTracks()[0] ?? null;
+    const want =
+      snap.backgroundBlur &&
+      !!camera &&
+      camera.readyState === 'live' &&
+      this.deps.createBackgroundBlur !== undefined;
+    if (want && this.blur?.source !== camera) {
+      let next: BlurredVideo;
+      try {
+        next = await this.deps.createBackgroundBlur!(camera!, () =>
+          this.onBlurTooSlow(snap.callId),
+        );
+      } catch {
+        // Can't blur here after all: show the camera as it is, and say why.
+        this.update({ backgroundBlur: false, blurError: 'unavailable' });
+        await this.putCamera(camera);
+        return;
+      }
+      const now = this.snap;
+      if (
+        !now ||
+        now.callId !== snap.callId ||
+        now.phase === 'ended' ||
+        !now.backgroundBlur ||
+        now.localStream?.getVideoTracks()[0] !== camera
+      ) {
+        next.stop();
+        return;
+      }
+      next.track.enabled = now.videoEnabled;
+      const old = this.blur;
+      this.blur = next;
+      await this.putCamera(next.track);
+      old?.stop();
+      const preview = this.deps.createMediaStream();
+      preview.addTrack(next.track);
+      this.update({ blurredStream: preview });
+      return;
+    }
+    if (!want && this.blur) {
+      const old = this.blur;
+      const sender = this.videoSender();
+      this.blur = null;
+      await this.putCamera(camera, sender);
+      old.stop();
+      this.update({ blurredStream: null });
+      return;
+    }
+    // Nothing to start or stop: just make sure the right picture is being sent.
+    await this.putCamera(want ? this.blur!.track : camera);
+    if (want && this.blur && !snap.blurredStream) {
+      const preview = this.deps.createMediaStream();
+      preview.addTrack(this.blur.track);
+      this.update({ blurredStream: preview });
+    }
+  }
+
+  /** Sends `track` as the camera (not while a screen is shared: that keeps the slot). */
+  private async putCamera(
+    track: MediaStreamTrack | null,
+    sender: RTCRtpSender | null = this.videoSender(),
+  ): Promise<void> {
+    if (this.snap?.sharingScreen) return;
+    if (sender && sender.track !== track) await sender.replaceTrack(track);
+  }
+
+  private onBlurTooSlow(callId: string): void {
+    if (this.snap?.callId !== callId || !this.snap.backgroundBlur) return;
+    this.update({ backgroundBlur: false, blurError: 'slow' });
+    void this.applyBlur();
   }
 
   /** CHAT-071: whether this browser can share a screen at all. */
@@ -332,9 +527,7 @@ export class CallEngine {
     if ('contentHint' in screen) screen.contentHint = 'detail';
     screen.addEventListener('ended', () => void this.stopScreenShare());
 
-    const camera = snap.localStream.getVideoTracks()[0];
-    const sender =
-      (camera && this.pc.getSenders().find((s) => s.track === camera)) ?? this.spareVideoSender;
+    const sender = this.videoSender() ?? this.spareVideoSender;
     if (sender) {
       await sender.replaceTrack(screen);
     } else {
@@ -354,8 +547,10 @@ export class CallEngine {
     const sender =
       (screen && this.pc?.getSenders().find((s) => s.track === screen)) ?? this.spareVideoSender;
     if (sender) {
-      await sender.replaceTrack(camera);
+      // CHAT-075: back to the blurred camera if blur is on.
+      await sender.replaceTrack(this.blur?.track ?? camera);
       if (!camera) this.spareVideoSender = sender;
+      else this.cameraSender = sender;
     }
     stopStream(snap.screenStream);
     if (!this.snap || this.snap.callId !== snap.callId) return;
@@ -437,6 +632,10 @@ export class CallEngine {
       sharingScreen: false,
       screenStream: null,
       remoteScreenSharing: false,
+      backgroundBlur: false,
+      blurredStream: null,
+      blurError: null,
+      noiseSuppression: true,
       endCause: null,
       quality: 'unknown',
       lowBandwidth: false,
@@ -534,7 +733,14 @@ export class CallEngine {
     pc.onconnectionstatechange = () => this.onConnectionState(pc.connectionState);
 
     for (const track of snap.localStream?.getTracks() ?? []) {
-      pc.addTrack(track, snap.localStream!);
+      if (track.kind !== 'video') {
+        pc.addTrack(track, snap.localStream!);
+        continue;
+      }
+      // CHAT-075: the blurred camera if it's ready; with blur on but not ready yet, the camera's
+      // slot sends nothing until it is (never the unblurred background).
+      this.cameraSender = pc.addTrack(this.blur?.track ?? track, snap.localStream!);
+      if (snap.backgroundBlur && !this.blur) void this.cameraSender.replaceTrack(null);
     }
 
     const queued = this.pendingSignals;
@@ -641,6 +847,9 @@ export class CallEngine {
     this.pc?.close();
     this.pc = null;
     this.spareVideoSender = null;
+    this.cameraSender = null;
+    this.blur?.stop();
+    this.blur = null;
     stopStream(this.snap.localStream);
     stopStream(this.snap.screenStream);
     this.update({ phase: 'ended', endCause: cause });
@@ -684,6 +893,9 @@ export class CallEngine {
     this.makingOffer = false;
     this.ignoreOffer = false;
     this.signalChain = Promise.resolve();
+    this.cameraSender = null;
+    this.blur?.stop();
+    this.blur = null;
   }
 
   private fetchIceServers(): Promise<IceServer[]> {
@@ -705,6 +917,12 @@ export class CallEngine {
   private emit(): void {
     for (const listener of this.listeners) listener();
   }
+}
+
+/** CHAT-075: whether the stream's microphone has noise suppression on (assume so if unknown). */
+function noiseSuppressionOf(stream: MediaStream): boolean {
+  const settings = stream.getAudioTracks()[0]?.getSettings?.();
+  return settings?.noiseSuppression ?? true;
 }
 
 function stopStream(stream: MediaStream | null | undefined): void {

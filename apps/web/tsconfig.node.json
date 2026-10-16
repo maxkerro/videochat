@@ -4,8 +4,9 @@
     "module": "ESNext",
     "moduleResolution": "bundler",
     "noEmit": true,
+    "allowImportingTsExtensions": true,
     "declaration": false,
     "types": ["node"]
   },
-  "include": ["vite.config.ts"]
+  "include": ["vite.config.ts", "mediapipeAssets.ts"]
 }

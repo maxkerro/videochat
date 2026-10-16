@@ -6,6 +6,7 @@ import { CallOverlay } from '../../src/calls/CallOverlay';
 import { CallProvider, useCalls } from '../../src/calls/CallProvider';
 import { GroupCallProvider, useGroupCall } from '../../src/groupCalls/GroupCallProvider';
 import { voicePlayback } from '../../src/voice';
+import { loadCallPrefs } from '../../src/calls/callPrefs';
 import { DataProvider } from '../../src/data/DataProvider';
 import { PushProvider } from '../../src/push/PushProvider';
 import { RealtimeProvider } from '../../src/realtime/RealtimeProvider';
@@ -43,6 +44,10 @@ function ThemedStack() {
 
 /** CHAT-074: a call takes over the audio, so a voice message playing stops when one starts. */
 function VoiceCallGuard() {
+  // CHAT-075: this phone's call settings, read when a call starts.
+  useEffect(() => {
+    void loadCallPrefs();
+  }, []);
   const call = useCalls().call;
   const groupSession = useGroupCall().session;
   const inCall = !!call || !!groupSession;

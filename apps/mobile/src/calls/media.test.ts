@@ -44,6 +44,16 @@ describe('acquireMedia', () => {
     expect(asked).toEqual({ audio: true, video: false });
   });
 
+  it('CHAT-075: turns noise suppression off when asked (on is the phone default)', async () => {
+    let asked: UserMediaConstraints | null = null;
+    await acquireMedia(
+      { getUserMedia: async (c) => ((asked = c), stream(['audio']) as unknown as RtcStream) },
+      'audio',
+      { noiseSuppression: false },
+    );
+    expect(asked).toEqual({ audio: { noiseSuppression: false }, video: false });
+  });
+
   it('carries on with sound only when the camera permission was refused', async () => {
     const result = await acquireMedia(
       { getUserMedia: async () => stream(['audio']) as unknown as RtcStream },

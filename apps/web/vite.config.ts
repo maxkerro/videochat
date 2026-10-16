@@ -1,8 +1,9 @@
 import react from '@vitejs/plugin-react';
 import { defineConfig } from 'vitest/config';
+import { mediapipeAssets } from './mediapipeAssets.ts';
 
 export default defineConfig({
-  plugins: [react()],
+  plugins: [react(), mediapipeAssets()],
   server: { port: 5173, strictPort: true },
   build: {
     sourcemap: true,

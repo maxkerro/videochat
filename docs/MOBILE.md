@@ -313,3 +313,10 @@ double-tap starts recording and a second double-tap sends. Recording is off duri
 - Known limit: voice messages recorded in a browser other than Safari are Opus in WebM, which the
   native iOS player can't play (Android and all browsers can). Only matters once there is an iOS
   build; the fix would be transcoding to AAC on the server.
+
+## Noise suppression (CHAT-075)
+
+Settings → Calls → "Noise suppression" (on by default) switches the phone's WebRTC noise
+suppression for 1:1 and group calls; it's kept on this phone and applies from the next call.
+Background blur is in the web app only for now: on phones it needs a native video-frame processor
+(segmentation with ML Kit on Android, Vision on iOS), which is a separate backlog item.

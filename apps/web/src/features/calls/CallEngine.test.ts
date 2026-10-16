@@ -4,9 +4,16 @@ import { CallBusyError, CallEngine, type CallEngineDeps } from './CallEngine';
 class FakeTrack {
   enabled = true;
   stopped = false;
+  settings: Record<string, unknown> = {};
   constructor(readonly kind: 'audio' | 'video') {}
   stop() {
     this.stopped = true;
+  }
+  get readyState() {
+    return this.stopped ? 'ended' : 'live';
+  }
+  getSettings() {
+    return this.settings;
   }
 }
 
@@ -81,6 +88,7 @@ class FakePeerConnection {
         this.onnegotiationneeded?.();
       });
     }
+    return sender;
   }
   getSenders() {
     return this.senders;
@@ -722,5 +730,208 @@ describe('CallEngine (CHAT-042)', () => {
       engine.hangUp();
       expect(engine['deps'].reportStats).not.toHaveBeenCalled();
     });
+  });
+});
+
+describe('background blur and noise suppression (CHAT-075)', () => {
+  /** A blur whose readiness the test controls. */
+  function blurFactory() {
+    const made: { source: FakeTrack; track: FakeTrack; stopped: boolean; onSlow: () => void }[] =
+      [];
+    let gate: Promise<void> = Promise.resolve();
+    let fail = false;
+    const create = vi.fn(async (camera: MediaStreamTrack, onSlow: () => void) => {
+      await gate;
+      if (fail) throw new Error('no webgl');
+      const entry = {
+        source: camera as unknown as FakeTrack,
+        track: new FakeTrack('video'),
+        stopped: false,
+        onSlow,
+      };
+      made.push(entry);
+      return {
+        source: camera,
+        track: entry.track as unknown as MediaStreamTrack,
+        stop: () => {
+          entry.stopped = true;
+          entry.track.stop();
+        },
+      };
+    });
+    return {
+      create,
+      made,
+      hold: () => {
+        let release!: () => void;
+        gate = new Promise((r) => (release = r));
+        return () => release();
+      },
+      failNext: () => {
+        fail = true;
+      },
+    };
+  }
+
+  async function call(options: { blur?: boolean; handOver?: boolean } = {}) {
+    const blur = blurFactory();
+    const ctx = setUp({ createBackgroundBlur: blur.create });
+    const stream = avStream();
+    const camera = stream.getVideoTracks()[0]!;
+    const handed = options.handOver ? await blur.create(camera, () => undefined) : undefined;
+    ctx.engine.startOutgoing({
+      conversationId: CONV_ID,
+      peer: PEER,
+      media: 'video',
+      stream,
+      backgroundBlur: options.blur,
+      blur: handed,
+    });
+    ctx.event(CALL_EVENTS.accepted, { callId: CALL_ID, connectionId: 'their-conn' });
+    await flush();
+    const pc = ctx.pcs[0]!;
+    pc.setConnectionState('connected');
+    const videoSender = () => pc.senders[1]!;
+    return { ...ctx, blur, stream, camera: camera as unknown as FakeTrack, pc, videoSender };
+  }
+
+  it('starts blurred with the preview’s blur handed over: the raw camera is never sent', async () => {
+    const ctx = await call({ blur: true, handOver: true });
+    expect(ctx.blur.create).toHaveBeenCalledTimes(1);
+    expect(ctx.videoSender().track).toBe(ctx.blur.made[0]!.track);
+    const snap = ctx.engine.getSnapshot()!;
+    expect(snap.backgroundBlur).toBe(true);
+    expect(snap.blurredStream?.getVideoTracks()[0]).toBe(ctx.blur.made[0]!.track);
+  });
+
+  it('sends nothing until the blur is ready, then the blurred camera', async () => {
+    const blur = blurFactory();
+    const release = blur.hold();
+    const ctx = setUp({ createBackgroundBlur: blur.create });
+    ctx.event(CALL_EVENTS.incoming, {
+      callId: CALL_ID,
+      conversationId: CONV_ID,
+      media: 'video',
+      caller: PEER,
+    });
+    await ctx.engine.accept(avStream(), { backgroundBlur: true });
+    const pc = ctx.pcs[0]!;
+    const video = pc.senders.find((s) => s !== pc.senders[0])!;
+    expect(video.track).toBeNull();
+    release();
+    await flush();
+    await flush();
+    expect(video.track).toBe(blur.made[0]!.track);
+  });
+
+  it('turns on and off mid-call, swapping what is sent and stopping the blur', async () => {
+    const ctx = await call();
+    expect(ctx.videoSender().track).toBe(ctx.camera);
+    await ctx.engine.setBackgroundBlur(true);
+    expect(ctx.videoSender().track).toBe(ctx.blur.made[0]!.track);
+    await ctx.engine.setBackgroundBlur(false);
+    expect(ctx.videoSender().track).toBe(ctx.camera);
+    expect(ctx.blur.made[0]!.stopped).toBe(true);
+    expect(ctx.engine.getSnapshot()?.blurredStream).toBeNull();
+  });
+
+  it('falls back to the plain camera, saying why, when blur fails or is too slow', async () => {
+    const ctx = await call();
+    ctx.blur.failNext();
+    await ctx.engine.setBackgroundBlur(true);
+    expect(ctx.engine.getSnapshot()).toMatchObject({
+      backgroundBlur: false,
+      blurError: 'unavailable',
+    });
+    expect(ctx.videoSender().track).toBe(ctx.camera);
+
+    const slow = await call();
+    await slow.engine.setBackgroundBlur(true);
+    slow.blur.made[0]!.onSlow();
+    await flush();
+    expect(slow.engine.getSnapshot()).toMatchObject({ backgroundBlur: false, blurError: 'slow' });
+    expect(slow.videoSender().track).toBe(slow.camera);
+    expect(slow.blur.made[0]!.stopped).toBe(true);
+  });
+
+  it('camera off also blanks the blurred picture; a shared screen comes back to it after', async () => {
+    const screen = new FakeScreenTrack();
+    const blur = blurFactory();
+    const ctx = setUp({
+      createBackgroundBlur: blur.create,
+      getDisplayMedia: async () => new FakeStream([screen]) as unknown as MediaStream,
+    });
+    ctx.engine.startOutgoing({
+      conversationId: CONV_ID,
+      peer: PEER,
+      media: 'video',
+      stream: avStream(),
+      backgroundBlur: true,
+    });
+    ctx.event(CALL_EVENTS.accepted, { callId: CALL_ID, connectionId: 'their-conn' });
+    await flush();
+    const pc = ctx.pcs[0]!;
+    pc.setConnectionState('connected');
+    await flush();
+    const blurred = blur.made[0]!.track;
+    await ctx.engine.toggleVideo();
+    expect(blurred.enabled).toBe(false);
+    await ctx.engine.toggleVideo();
+    expect(blurred.enabled).toBe(true);
+
+    await ctx.engine.startScreenShare();
+    expect(pc.senders[1]!.track).toBe(screen);
+    await ctx.engine.stopScreenShare();
+    expect(pc.senders[1]!.track).toBe(blurred);
+  });
+
+  it('switching camera blurs the new one before sending it', async () => {
+    const ctx = await call({ blur: true, handOver: true });
+    const newCamera = new FakeTrack('video');
+    const sentTracks: (FakeTrack | null)[] = [];
+    const sender = ctx.videoSender();
+    const original = sender.replaceTrack;
+    sender.replaceTrack = async (t) => {
+      sentTracks.push(t);
+      await original(t);
+    };
+    (ctx.engine as unknown as { deps: CallEngineDeps }).deps.getUserMedia = async () =>
+      new FakeStream([newCamera]) as unknown as MediaStream;
+    await ctx.engine.switchDevice('videoinput', 'cam-2');
+    expect(sentTracks).not.toContain(newCamera);
+    expect(ctx.blur.made.at(-1)!.source).toBe(newCamera);
+    expect(sender.track).toBe(ctx.blur.made.at(-1)!.track);
+    expect(ctx.blur.made[0]!.stopped).toBe(true);
+  });
+
+  it('noise suppression re-opens the same microphone with it on or off', async () => {
+    const ctx = await call();
+    const oldMic = ctx.stream.getAudioTracks()[0] as unknown as FakeTrack;
+    oldMic.settings = { deviceId: 'mic-1', noiseSuppression: true };
+    const newMic = new FakeTrack('audio');
+    const getUserMedia = vi.fn(async () => new FakeStream([newMic]) as unknown as MediaStream);
+    (ctx.engine as unknown as { deps: CallEngineDeps }).deps.getUserMedia = getUserMedia;
+    ctx.engine.toggleAudio(); // muted: stays muted on the new microphone
+
+    await ctx.engine.setNoiseSuppression(false);
+    expect(getUserMedia).toHaveBeenCalledWith({
+      audio: {
+        deviceId: { exact: 'mic-1' },
+        echoCancellation: true,
+        autoGainControl: true,
+        noiseSuppression: false,
+      },
+      video: false,
+    });
+    expect(ctx.pc.senders[0]!.track).toBe(newMic);
+    expect(newMic.enabled).toBe(false);
+    expect(oldMic.stopped).toBe(true);
+    expect(ctx.engine.getSnapshot()?.noiseSuppression).toBe(false);
+  });
+
+  it('stops the blur with the call', async () => {
+    const ctx = await call({ blur: true, handOver: true });
+    ctx.engine.hangUp();
+    expect(ctx.blur.made[0]!.stopped).toBe(true);
   });
 });

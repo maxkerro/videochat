@@ -5,6 +5,10 @@ import type { CallMedia } from '@videochat/shared';
 export interface DevicePreferences {
   audioInputId?: string;
   videoInputId?: string;
+  /** CHAT-075: blur the camera's background (off unless chosen). */
+  backgroundBlur?: boolean;
+  /** CHAT-075: the microphone's noise suppression (on unless switched off). */
+  noiseSuppression?: boolean;
 }
 
 const PREFS_KEY = 'videochat.callDevices';
@@ -32,10 +36,11 @@ export function mediaConstraints(
   media: CallMedia,
   prefs: DevicePreferences,
 ): MediaStreamConstraints {
+  const noiseSuppression = prefs.noiseSuppression ?? true;
   return {
     audio: prefs.audioInputId
-      ? { deviceId: { ideal: prefs.audioInputId }, echoCancellation: true, noiseSuppression: true }
-      : { echoCancellation: true, noiseSuppression: true },
+      ? { deviceId: { ideal: prefs.audioInputId }, echoCancellation: true, noiseSuppression }
+      : { echoCancellation: true, noiseSuppression },
     video:
       media === 'video'
         ? prefs.videoInputId

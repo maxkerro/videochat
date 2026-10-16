@@ -14,7 +14,15 @@ import { useToast } from '../../components/ui';
 import { useAuth, withAuthRetry, type AuthContextValue } from '../auth/AuthContext';
 import { useRealtime } from '../chat/RealtimeProvider';
 import { fetchIceServers, postCallStats } from './callsApi';
-import { CallEngine, type CallEndCause, type CallPeer, type CallSnapshot } from './CallEngine';
+import {
+  CallEngine,
+  type BlurredVideo,
+  type CallEndCause,
+  type CallPeer,
+  type CallSnapshot,
+} from './CallEngine';
+import { blurWithWatchdog, canBlurBackground } from './effects/backgroundBlur';
+import { loadDevicePreferences, saveDevicePreferences } from './mediaDevices';
 
 export interface CallController {
   call: CallSnapshot | null;
@@ -26,8 +34,10 @@ export interface CallController {
     peer: CallPeer;
     media: CallMedia;
     stream: MediaStream;
+    backgroundBlur?: boolean;
+    blur?: BlurredVideo | null;
   }) => void;
-  accept: (stream: MediaStream) => Promise<void>;
+  accept: (stream: MediaStream, options?: { backgroundBlur?: boolean }) => Promise<void>;
   decline: () => void;
   hangUp: () => void;
   toggleAudio: () => void;
@@ -37,6 +47,10 @@ export interface CallController {
   canShareScreen: boolean;
   /** Starts sharing (the browser asks what to share) or stops it. */
   toggleScreenShare: () => Promise<void>;
+  /** CHAT-075: this browser can blur the background. */
+  canBlurBackground: boolean;
+  setBackgroundBlur: (on: boolean) => Promise<void>;
+  setNoiseSuppression: (on: boolean) => Promise<void>;
 }
 
 export const CallContext = createContext<CallController | null>(null);
@@ -106,6 +120,7 @@ function createBrowserCallEngine(realtime: ReturnType<typeof useRealtime>) {
       typeof navigator !== 'undefined' && navigator.mediaDevices?.getDisplayMedia
         ? (constraints) => navigator.mediaDevices.getDisplayMedia(constraints)
         : undefined,
+    createBackgroundBlur: canBlurBackground() ? blurWithWatchdog : undefined,
     reportStats: (callId, stats) => {
       if (!auth) return;
       void withAuthRetry(auth, (token) => postCallStats(token, callId, stats)).catch(
@@ -189,12 +204,22 @@ export function CallProvider({ children }: { children: ReactNode }) {
   );
 
   const accept = useCallback(
-    async (stream: MediaStream) => {
+    async (stream: MediaStream, options?: { backgroundBlur?: boolean }) => {
       setExpanded(true);
-      await engine.accept(stream);
+      await engine.accept(stream, options);
     },
     [engine],
   );
+
+  // CHAT-075: say why blur turned itself off.
+  const blurError = call?.blurError ?? null;
+  useEffect(() => {
+    if (blurError === 'slow') {
+      toast({ title: 'Background blur was turned off: it was slowing this device down.' });
+    } else if (blurError === 'unavailable') {
+      toast({ title: 'Background blur isn’t available right now.', tone: 'danger' });
+    }
+  }, [blurError, toast]);
 
   const value = useMemo<CallController>(
     () => ({
@@ -211,6 +236,15 @@ export function CallProvider({ children }: { children: ReactNode }) {
       canShareScreen: engine.canShareScreen(),
       toggleScreenShare: () =>
         call?.sharingScreen ? engine.stopScreenShare() : engine.startScreenShare(),
+      canBlurBackground: engine.canBlurBackground(),
+      setBackgroundBlur: async (on) => {
+        saveDevicePreferences({ ...loadDevicePreferences(), backgroundBlur: on });
+        await engine.setBackgroundBlur(on);
+      },
+      setNoiseSuppression: async (on) => {
+        saveDevicePreferences({ ...loadDevicePreferences(), noiseSuppression: on });
+        await engine.setNoiseSuppression(on);
+      },
     }),
     [call, expanded, startCall, accept, engine],
   );

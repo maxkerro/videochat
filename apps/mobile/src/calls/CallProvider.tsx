@@ -26,6 +26,7 @@ import {
 import { CallBridge } from './callBridge';
 import { CallBusyError, CallEngine, type CallPeer, type CallSnapshot } from './CallEngine';
 import { endMessage } from './endMessage';
+import { noiseSuppressionOn } from './callPrefs';
 import {
   acquireMedia,
   CAMERA_OFF_NOTICE,
@@ -254,7 +255,9 @@ export function CallProvider({
         return;
       }
       try {
-        const { stream, cameraMissing } = await acquireMedia(media, kind);
+        const { stream, cameraMissing } = await acquireMedia(media, kind, {
+          noiseSuppression: noiseSuppressionOn(),
+        });
         try {
           engine.startOutgoing({ conversationId, peer, media: kind, stream });
         } catch (error) {
@@ -274,7 +277,9 @@ export function CallProvider({
   const answerNow = useCallback(
     async (kind: CallMedia): Promise<boolean> => {
       try {
-        const { stream, cameraMissing } = await acquireMedia(media, kind);
+        const { stream, cameraMissing } = await acquireMedia(media, kind, {
+          noiseSuppression: noiseSuppressionOn(),
+        });
         await engine.accept(stream as RtcStream);
         if (cameraMissing) explainCameraOff();
         return true;

@@ -66,7 +66,12 @@ function DraggableSelfView({ call }: { call: CallSnapshot }) {
       data-testid="call-self-view"
     >
       {call.videoEnabled && call.localStream ? (
-        <StreamVideo stream={call.localStream} className={styles.selfVideo} label="Your camera" />
+        <StreamVideo
+          // CHAT-075: you see what the other person sees -- the blurred picture when blur is on.
+          stream={call.blurredStream ?? call.localStream}
+          className={styles.selfVideo}
+          label="Your camera"
+        />
       ) : (
         <div className={styles.selfOff}>Camera off</div>
       )}
@@ -257,6 +262,32 @@ export function CallView({ call }: { call: CallSnapshot }) {
             {sharing ? 'Stop sharing' : 'Share screen'}
           </button>
         )}
+        {calls.canBlurBackground && call.videoEnabled && !sharing && (
+          <button
+            type="button"
+            className={`${styles.control} ${call.backgroundBlur ? styles.controlActive : ''}`}
+            aria-pressed={call.backgroundBlur}
+            aria-label={call.backgroundBlur ? 'Stop blurring background' : 'Blur background'}
+            onClick={() => void calls.setBackgroundBlur(!call.backgroundBlur)}
+          >
+            {call.backgroundBlur ? 'Unblur' : 'Blur'}
+          </button>
+        )}
+        <button
+          type="button"
+          className={`${styles.control} ${call.noiseSuppression ? styles.controlActive : ''}`}
+          aria-pressed={call.noiseSuppression}
+          aria-label={
+            call.noiseSuppression ? 'Turn noise suppression off' : 'Turn noise suppression on'
+          }
+          onClick={() =>
+            void calls.setNoiseSuppression(!call.noiseSuppression).catch((err: unknown) => {
+              toast({ title: describeMediaError(err, 'audio').title, tone: 'danger' });
+            })
+          }
+        >
+          {call.noiseSuppression ? 'Noise filter on' : 'Noise filter off'}
+        </button>
         {devices.length > 0 && (
           <Menu
             trigger={

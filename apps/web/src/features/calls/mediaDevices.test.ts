@@ -40,4 +40,12 @@ describe('device preferences', () => {
   it('asks for no camera on an audio call', () => {
     expect(mediaConstraints('audio', {}).video).toBe(false);
   });
+
+  it('CHAT-075: noise suppression is on unless switched off', () => {
+    expect(mediaConstraints('audio', {}).audio).toMatchObject({ noiseSuppression: true });
+    expect(mediaConstraints('audio', { noiseSuppression: false }).audio).toMatchObject({
+      noiseSuppression: false,
+      echoCancellation: true,
+    });
+  });
 });

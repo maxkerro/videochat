@@ -1,3 +1,4 @@
+import { noiseSuppressionOn } from '../calls/callPrefs';
 import {
   AndroidAudioTypePresets,
   AudioSession,
@@ -306,7 +307,11 @@ export function GroupCallScreen({
         connect={audioReady}
         audio
         video={false}
-        options={ROOM_OPTIONS}
+        options={{
+          ...ROOM_OPTIONS,
+          // CHAT-075: the noise-suppression setting, as the microphone is opened.
+          audioCaptureDefaults: { noiseSuppression: noiseSuppressionOn() },
+        }}
         onDisconnected={onLeave}
         onError={() => {
           Alert.alert('The group call was interrupted');

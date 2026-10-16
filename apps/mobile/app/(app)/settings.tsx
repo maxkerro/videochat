@@ -22,6 +22,7 @@ import { session } from '../../src/lib/api';
 import { describeError } from '../../src/ui/describeError';
 import { Button, Field, Notice } from '../../src/ui/Form';
 import { useTheme } from '../../src/ui/theme';
+import { setNoiseSuppression, useNoiseSuppression } from '../../src/calls/callPrefs';
 import { fieldErrors } from '../../src/ui/useFormErrors';
 
 const VISIBILITY_LABELS: Record<LastSeenVisibility, string> = {
@@ -108,6 +109,7 @@ function Choice<T extends string>({
 
 export default function Settings() {
   const t = useTheme();
+  const noiseSuppression = useNoiseSuppression();
   const queryClient = useQueryClient();
   const { state } = useAuth();
   const user = state.status === 'signedIn' ? state.user : null;
@@ -201,6 +203,17 @@ export default function Settings() {
         value={s.notifications.mentions}
         onChange={(mentions) => void save({ notifications: { mentions } })}
       />
+
+      <Heading>Calls</Heading>
+      <ToggleRow
+        label="Noise suppression"
+        value={noiseSuppression}
+        onChange={(on) => void setNoiseSuppression(on)}
+      />
+      <Text style={{ color: t.muted, fontSize: 13 }}>
+        Filters out background noise from your microphone on calls (this phone only). Takes effect
+        on your next call.
+      </Text>
 
       <Heading>Appearance</Heading>
       <Choice

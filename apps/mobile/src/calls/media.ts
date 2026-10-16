@@ -46,11 +46,14 @@ export interface MediaSource {
 export async function acquireMedia(
   source: MediaSource,
   media: CallMedia,
+  options: { noiseSuppression?: boolean } = {},
 ): Promise<{ stream: RtcStream; cameraMissing: boolean }> {
+  // CHAT-075: the phone's WebRTC noise suppression is on by default; only say so to turn it off.
+  const audio = options.noiseSuppression === false ? { noiseSuppression: false } : true;
   let stream: RtcStream;
   try {
     stream = await source.getUserMedia({
-      audio: true,
+      audio,
       video: media === 'video' ? { ...CAMERA_CONSTRAINTS } : false,
     });
   } catch (error) {
@@ -58,7 +61,7 @@ export async function acquireMedia(
       // The camera may be the problem (in use by another app, or refused along with the
       // microphone): try sound only before giving up.
       try {
-        stream = await source.getUserMedia({ audio: true, video: false });
+        stream = await source.getUserMedia({ audio, video: false });
       } catch (audioError) {
         throw new MediaAccessError(isDenied(audioError) ? 'microphone-denied' : 'unavailable');
       }

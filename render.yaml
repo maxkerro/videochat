@@ -150,6 +150,25 @@ services:
       - type: rewrite
         source: /calls/*
         destination: https://videochat-api-p6sw.onrender.com/calls/*
+      # Missing until 2026-10 (found in CHAT-075): without these, the web app's signed-URL
+      # requests (attachments -- the CHAT-082 grey thumbnails -- and voice messages), message
+      # search, presence, Web Push subscriptions and the composer's link preview got index.html back
+      # instead of the API. apps/web/src/test/proxyRoutes.test.ts now checks this list.
+      - type: rewrite
+        source: /attachments/*
+        destination: https://videochat-api-p6sw.onrender.com/attachments/*
+      - type: rewrite
+        source: /search
+        destination: https://videochat-api-p6sw.onrender.com/search
+      - type: rewrite
+        source: /presence
+        destination: https://videochat-api-p6sw.onrender.com/presence
+      - type: rewrite
+        source: /push/*
+        destination: https://videochat-api-p6sw.onrender.com/push/*
+      - type: rewrite
+        source: /link-preview
+        destination: https://videochat-api-p6sw.onrender.com/link-preview
       - type: rewrite
         source: /health
         destination: https://videochat-api-p6sw.onrender.com/health
@@ -173,6 +192,11 @@ services:
       - path: /assets/*
         name: Cache-Control
         value: public, max-age=31536000, immutable
+      # CHAT-075: background blur's WebAssembly and model (~10 MB, fetched once blur is used).
+      # Names don't change between versions, so cache for a week rather than forever.
+      - path: /mediapipe/*
+        name: Cache-Control
+        value: public, max-age=604800
     envVars:
       - key: NODE_VERSION
         value: 22.22.0
