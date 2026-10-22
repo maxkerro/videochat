@@ -15,7 +15,12 @@ export type MessageType = (typeof MESSAGE_TYPES)[number];
 export const DEVICE_PLATFORMS = ['web', 'ios', 'android'] as const;
 export type DevicePlatform = (typeof DEVICE_PLATFORMS)[number];
 
-export const AUTH_TOKEN_PURPOSES = ['email_verify', 'password_reset'] as const;
+export const AUTH_TOKEN_PURPOSES = [
+  'email_verify',
+  'password_reset',
+  'login_link',
+  'login_code',
+] as const;
 export type AuthTokenPurpose = (typeof AUTH_TOKEN_PURPOSES)[number];
 
 /** Product limits referenced by both validation and UI. */
@@ -31,7 +36,19 @@ export const LIMITS = {
   avatarMaxBytes: 5 * 1024 * 1024,
   /** Consecutive failed logins before a cool-down (CHAT-010). */
   loginAttemptsBeforeLockout: 5,
-  loginLockoutMinutes: 15,
+  /** CHAT-081: the cool-down is a progressive delay, not a long lock: 30 s after the 5th
+   *  failure, doubling with each further one, capped at 5 minutes (so a stranger who knows your
+   *  username can hold you up a few minutes at most, and the emailed sign-in code always works).
+   *  Still at most ~19 guesses per account in the first hour and 12 an hour after that, fewer
+   *  than the old 15-minute lock allowed (20 an hour). */
+  loginDelayBaseSeconds: 30,
+  loginDelayMaxSeconds: 300,
+  /** Failures older than this no longer count (the delay starts over). */
+  loginFailureWindowMinutes: 60,
+  /** CHAT-081: emailed sign-in links/codes. */
+  loginLinkTtlMinutes: 15,
+  loginLinksPerWindow: 3,
+  loginCodeMaxFailures: 5,
   /** Max rows returned by the "find people" search (CHAT-012). */
   userSearchMaxResults: 20,
   /** Messages returned by the initial (non-paged) history load (CHAT-014). Full cursor-based

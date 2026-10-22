@@ -4,7 +4,7 @@ import { useState } from 'react';
 import { Button, Modal, useToast } from '../../components/ui';
 import { useAuth, withAuthRetry } from '../auth/AuthContext';
 import { fetchAttachmentUrl, formatBytes } from './attachmentsApi';
-import { useAttachmentUrl } from './useAttachmentUrl';
+import { useSignedImage } from './useSignedImage';
 import styles from './Attachments.module.css';
 import { VoiceMessage } from '../voice/VoiceMessage';
 
@@ -32,43 +32,67 @@ export function AttachmentView({ attachment }: { attachment: Attachment }) {
 
 function ImageAttachment({ attachment }: { attachment: Attachment }) {
   const [open, setOpen] = useState(false);
-  const thumb = useAttachmentUrl(attachment.id, 'thumb');
-  const original = useAttachmentUrl(attachment.id, 'original', open);
+  const thumb = useSignedImage(attachment.id, 'thumb');
+  const original = useSignedImage(attachment.id, 'original', open);
   const box = thumbBox(attachment.width, attachment.height);
   return (
     <>
-      <button
-        type="button"
-        className={styles.imageButton}
-        style={{ width: box.width, height: box.height }}
-        onClick={() => setOpen(true)}
-        aria-label={`Open image ${attachment.filename}`}
-      >
-        {thumb.data ? (
-          <img
-            src={thumb.data}
-            alt={attachment.filename}
-            width={box.width}
-            height={box.height}
-            className={styles.image}
-            // A signed URL that expired while the page sat open: get a fresh one.
-            onError={() => void thumb.refetch()}
-          />
-        ) : (
-          <span className={styles.imagePlaceholder} aria-hidden="true" />
-        )}
-      </button>
+      {thumb.state === 'error' ? (
+        <div
+          className={styles.imageError}
+          style={{ width: box.width, height: box.height }}
+          role="alert"
+        >
+          <span>Couldn’t load this photo.</span>
+          <Button variant="secondary" size="sm" onClick={thumb.retry}>
+            Retry
+          </Button>
+        </div>
+      ) : (
+        <button
+          type="button"
+          className={styles.imageButton}
+          style={{ width: box.width, height: box.height }}
+          onClick={() => setOpen(true)}
+          aria-label={`Open image ${attachment.filename}`}
+        >
+          {thumb.src ? (
+            <img
+              src={thumb.src}
+              alt={attachment.filename}
+              width={box.width}
+              height={box.height}
+              className={styles.image}
+              onLoad={thumb.onLoad}
+              onError={thumb.onError}
+            />
+          ) : (
+            <span className={styles.imagePlaceholder} aria-hidden="true" />
+          )}
+        </button>
+      )}
       <Modal open={open} onOpenChange={setOpen} title={attachment.filename} footer={null}>
         <div className={styles.lightbox}>
-          {original.data ? (
-            <img src={original.data} alt={attachment.filename} className={styles.lightboxImage} />
-          ) : original.isError ? (
-            <p role="alert">Couldn’t load this image.</p>
+          {original.state === 'error' ? (
+            <div role="alert" className={styles.lightboxError}>
+              <p>Couldn’t load this image.</p>
+              <Button variant="secondary" size="sm" onClick={original.retry}>
+                Retry
+              </Button>
+            </div>
+          ) : original.src ? (
+            <img
+              src={original.src}
+              alt={attachment.filename}
+              className={styles.lightboxImage}
+              onLoad={original.onLoad}
+              onError={original.onError}
+            />
           ) : (
             <p role="status">Loading…</p>
           )}
-          {original.data && (
-            <a href={original.data} target="_blank" rel="noopener noreferrer">
+          {original.src && original.state !== 'error' && (
+            <a href={original.src} target="_blank" rel="noopener noreferrer">
               Open original ({formatBytes(attachment.sizeBytes)})
             </a>
           )}

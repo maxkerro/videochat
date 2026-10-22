@@ -3,7 +3,7 @@ import { useState, type FormEvent } from 'react';
 import { Link, useLocation, useNavigate } from 'react-router';
 import { Button, Input } from '../../components/ui';
 import { useAuth } from '../../features/auth/AuthContext';
-import { resendVerification } from '../../features/auth/authApi';
+import { requestLoginLink, resendVerification } from '../../features/auth/authApi';
 import { ApiError } from '../../lib/api';
 import { fieldErrors } from '../../lib/formErrors';
 import { AuthLayout } from './AuthLayout';
@@ -12,7 +12,7 @@ import styles from './auth.module.css';
 const EMPTY: LoginInput = { identifier: '', password: '' };
 
 export function LoginPage() {
-  const { login } = useAuth();
+  const { login, loginWithLink } = useAuth();
   const navigate = useNavigate();
   const location = useLocation();
   const from = (location.state as { from?: string } | null)?.from ?? '/';
@@ -23,6 +23,50 @@ export function LoginPage() {
   const [unverified, setUnverified] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [resent, setResent] = useState(false);
+  // CHAT-081: signing in with an emailed code instead of the password.
+  const [codeFor, setCodeFor] = useState<string | null>(null);
+  const [code, setCode] = useState('');
+  const [sendingCode, setSendingCode] = useState(false);
+
+  async function emailCode() {
+    setFormError(null);
+    const identifier = form.identifier.trim();
+    if (!identifier) {
+      setErrors({ identifier: 'Enter your email or username first' });
+      return;
+    }
+    setErrors({});
+    setSendingCode(true);
+    try {
+      await requestLoginLink(identifier);
+      setCodeFor(identifier);
+      setCode('');
+    } catch (err) {
+      setFormError(err instanceof ApiError ? err.message : 'Something went wrong. Try again.');
+    } finally {
+      setSendingCode(false);
+    }
+  }
+
+  async function submitCode(e: FormEvent) {
+    e.preventDefault();
+    if (!codeFor) return;
+    setFormError(null);
+    if (!/^\d{6}$/.test(code.trim())) {
+      setErrors({ code: 'Enter the 6-digit code from the email' });
+      return;
+    }
+    setErrors({});
+    setSubmitting(true);
+    try {
+      await loginWithLink({ identifier: codeFor, code: code.trim() });
+      void navigate(from, { replace: true });
+    } catch (err) {
+      setFormError(err instanceof ApiError ? err.message : 'Something went wrong. Try again.');
+    } finally {
+      setSubmitting(false);
+    }
+  }
 
   function update<K extends keyof LoginInput>(key: K) {
     return (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -61,6 +105,45 @@ export function LoginPage() {
     } finally {
       setSubmitting(false);
     }
+  }
+
+  if (codeFor) {
+    return (
+      <AuthLayout>
+        <h1>Check your email</h1>
+        <p className={styles.subtitle}>
+          If an account matches <strong>{codeFor}</strong>, we emailed it a sign-in link and a
+          6-digit code. Open the link, or enter the code here. Both work once, for 15 minutes.
+        </p>
+        {formError && (
+          <p className={styles.formError} role="alert">
+            {formError}
+          </p>
+        )}
+        <form className={styles.form} onSubmit={submitCode} noValidate>
+          <Input
+            label="Code"
+            inputMode="numeric"
+            autoComplete="one-time-code"
+            maxLength={6}
+            value={code}
+            onChange={(e) => setCode(e.target.value)}
+            error={errors.code}
+          />
+          <Button type="submit" loading={submitting}>
+            Sign in
+          </Button>
+        </form>
+        <div className={styles.footerRow}>
+          <Button variant="ghost" size="sm" loading={sendingCode} onClick={() => void emailCode()}>
+            Send another email
+          </Button>
+          <Button variant="ghost" size="sm" onClick={() => setCodeFor(null)}>
+            Use my password
+          </Button>
+        </div>
+      </AuthLayout>
+    );
   }
 
   return (
@@ -122,6 +205,10 @@ export function LoginPage() {
           Log in
         </Button>
       </form>
+      {/* CHAT-081: works even while password sign-in is delayed after failed attempts. */}
+      <Button variant="ghost" loading={sendingCode} onClick={() => void emailCode()}>
+        Email me a sign-in code instead
+      </Button>
       <div className={styles.footerRow}>
         <Link to="/signup">Create an account</Link>
         <Link to="/forgot-password">Forgot password?</Link>

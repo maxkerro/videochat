@@ -78,8 +78,13 @@ export const users = pgTable(
     emailVerifiedAt: timestamp('email_verified_at', { withTimezone: true }),
     /** Consecutive failed login attempts; reset to 0 on a successful login (CHAT-010). */
     failedLoginAttempts: bigint('failed_login_attempts', { mode: 'number' }).notNull().default(0),
-    /** Set after too many failed attempts; login is refused until this passes. */
+    /** Set after too many failed attempts; login is refused until this passes. CHAT-081: a short,
+     *  growing delay (see LIMITS.loginDelay*), not a long lock. */
     lockedUntil: timestamp('locked_until', { withTimezone: true }),
+    /** CHAT-081: when the last failed attempt was; failures older than the window are forgotten. */
+    lastFailedLoginAt: timestamp('last_failed_login_at', { withTimezone: true }),
+    /** CHAT-081: wrong emailed sign-in codes since the last email; too many void the codes. */
+    loginCodeFailures: bigint('login_code_failures', { mode: 'number' }).notNull().default(0),
     /** CHAT-034: when their last realtime connection went away. Null if never connected. */
     lastActiveAt: timestamp('last_active_at', { withTimezone: true }),
     /** CHAT-034/037: who may see their online status and last-seen time. */

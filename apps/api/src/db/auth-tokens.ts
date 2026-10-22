@@ -1,4 +1,4 @@
-import { eq, and, isNull, gt } from 'drizzle-orm';
+import { eq, and, isNull, gt, gte, count } from 'drizzle-orm';
 import type { AuthTokenPurpose } from '@videochat/shared';
 import type { DbExecutor } from './client.js';
 import { authTokens, type AuthTokenRow } from './schema.js';
@@ -70,4 +70,48 @@ export async function consumeAuthToken(
     )
     .returning();
   return row;
+}
+
+/** CHAT-081: tokens of a purpose created for a user since `since` (consumed or not). */
+export async function countRecentAuthTokens(
+  db: DbExecutor,
+  userId: string,
+  purpose: AuthTokenPurpose,
+  since: Date,
+): Promise<number> {
+  const [row] = await db
+    .select({ n: count() })
+    .from(authTokens)
+    .where(
+      and(
+        eq(authTokens.userId, userId),
+        eq(authTokens.purpose, purpose),
+        gte(authTokens.createdAt, since),
+      ),
+    );
+  return Number(row?.n ?? 0);
+}
+
+/** CHAT-081: marks every outstanding token of a purpose used (one sign-in email, one sign-in). */
+export async function consumeAllAuthTokens(
+  db: DbExecutor,
+  userId: string,
+  purpose: AuthTokenPurpose,
+): Promise<void> {
+  await db
+    .update(authTokens)
+    .set({ consumedAt: new Date() })
+    .where(
+      and(
+        eq(authTokens.userId, userId),
+        eq(authTokens.purpose, purpose),
+        isNull(authTokens.consumedAt),
+      ),
+    );
+}
+
+/** CHAT-081: voids a user's outstanding sign-in codes after too many wrong guesses (their
+ *  links keep working). */
+export async function voidLoginCodes(db: DbExecutor, userId: string): Promise<void> {
+  await consumeAllAuthTokens(db, userId, 'login_code');
 }

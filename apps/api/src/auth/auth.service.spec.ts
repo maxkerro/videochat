@@ -62,6 +62,8 @@ function makeUser(overrides: Partial<User> = {}): User {
     isModerator: false,
     suspendedUntil: null,
     bannedAt: null,
+    lastFailedLoginAt: null,
+    loginCodeFailures: 0,
     createdAt: new Date(),
     updatedAt: new Date(),
     ...overrides,
@@ -341,6 +343,7 @@ describe('AuthService', () => {
       const user = makeUser();
       (usersDb.findUserByEmail as Mock).mockResolvedValue(user);
       (verifyPassword as Mock).mockResolvedValue(false);
+      (usersDb.recordFailedLogin as Mock).mockResolvedValue({ ...user, failedLoginAttempts: 1 });
       const { service } = makeService();
       await expect(service.login({ identifier: user.email, password: 'wrong' })).rejects.toThrow(
         INVALID_LOGIN_MESSAGE,

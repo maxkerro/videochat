@@ -113,3 +113,25 @@
     transition: none;
   }
 }
+
+/* CHAT-082: a photo that couldn't be loaded says so, with a way to try again. */
+.imageError {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-2);
+  max-width: 100%;
+  border-radius: var(--radius-md, 8px);
+  background: var(--color-surface-sunken);
+  color: var(--color-text-muted);
+  font-size: var(--text-sm);
+  text-align: center;
+  padding: var(--space-3);
+}
+.lightboxError {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--space-2);
+}

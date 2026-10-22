@@ -18,6 +18,8 @@ import {
   verifyEmailSchema,
   type AuthSession,
   type MobileAuthSession,
+  loginLinkVerifySchema,
+  requestLoginLinkSchema,
 } from '@videochat/shared';
 import { z } from 'zod';
 import type { Request, Response } from 'express';
@@ -80,6 +82,31 @@ export class AuthController {
     @Res({ passthrough: true }) res: Response,
   ): Promise<AuthSession | MobileAuthSession> {
     const { session, refreshToken } = await this.auth.login(body);
+    return deliverRefreshToken(req, res, session, refreshToken, this.env);
+  }
+
+  /** CHAT-081: "email me a sign-in link/code". Same answer whether or not the account exists. */
+  @Post('login-link')
+  @HttpCode(202)
+  @UseGuards(LoginThrottlerGuard)
+  async requestLoginLink(
+    @Body(new ZodValidationPipe(requestLoginLinkSchema))
+    body: z.infer<typeof requestLoginLinkSchema>,
+  ) {
+    await this.auth.requestLoginLink(body.identifier);
+    return { message: 'If that account exists, we emailed it a sign-in link and code.' };
+  }
+
+  /** CHAT-081: sign in with that link's token or code. */
+  @Post('login-link/verify')
+  @HttpCode(200)
+  @UseGuards(LoginThrottlerGuard)
+  async verifyLoginLink(
+    @Body(new ZodValidationPipe(loginLinkVerifySchema)) body: z.infer<typeof loginLinkVerifySchema>,
+    @Req() req: Request,
+    @Res({ passthrough: true }) res: Response,
+  ): Promise<AuthSession | MobileAuthSession> {
+    const { session, refreshToken } = await this.auth.verifyLoginLink(body);
     return deliverRefreshToken(req, res, session, refreshToken, this.env);
   }
 

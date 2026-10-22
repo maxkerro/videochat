@@ -171,6 +171,20 @@ export const loginRequestSchema = z
   })
   .transform((v): LoginInput => ({ identifier: (v.identifier ?? v.email)!, password: v.password }));
 
+/** CHAT-081: "email me a sign-in link". Always answered the same way (no account enumeration). */
+export const requestLoginLinkSchema = z.object({ identifier: loginIdentifierSchema });
+export type RequestLoginLinkInput = z.infer<typeof requestLoginLinkSchema>;
+
+/** CHAT-081: sign in with the emailed link's token, or with its 6-digit code (phones type it). */
+export const loginLinkVerifySchema = z.union([
+  z.object({ token: z.string().min(1).max(200) }),
+  z.object({
+    identifier: loginIdentifierSchema,
+    code: z.string().regex(/^\d{6}$/, 'Enter the 6-digit code'),
+  }),
+]);
+export type LoginLinkVerifyInput = z.infer<typeof loginLinkVerifySchema>;
+
 export const requestPasswordResetSchema = z.object({ email: emailSchema });
 export type RequestPasswordResetInput = z.infer<typeof requestPasswordResetSchema>;
 

@@ -5,6 +5,7 @@ import {
   type AuthSession,
   type LoginInput,
   type Me,
+  type LoginLinkVerifyInput,
 } from '@videochat/shared';
 import {
   createContext,
@@ -29,6 +30,8 @@ export interface AuthContextValue {
   user: Me | null;
   accessToken: string | null;
   login: (input: LoginInput) => Promise<void>;
+  /** CHAT-081: sign in with an emailed link's token, or its code. */
+  loginWithLink: (input: LoginLinkVerifyInput) => Promise<void>;
   logout: () => Promise<void>;
   /** Silently exchanges the httpOnly refresh cookie for a new session. Resolves to the new
    *  access token, or null if there was no valid session to refresh. */
@@ -111,6 +114,15 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     [queryClient],
   );
 
+  const loginWithLink = useCallback(
+    async (input: LoginLinkVerifyInput) => {
+      const next = await apiPost('/auth/login-link/verify', authSessionSchema, input);
+      queryClient.clear();
+      setSession(next);
+    },
+    [queryClient],
+  );
+
   const logout = useCallback(async () => {
     // CHAT-035: stop this browser receiving the signed-out person's notifications.
     if (session?.accessToken) await removePushSubscription(session.accessToken);
@@ -146,11 +158,12 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       user: session?.user ?? null,
       accessToken: session?.accessToken ?? null,
       login,
+      loginWithLink,
       logout,
       refresh,
       setUser,
     }),
-    [session, login, logout, refresh, setUser],
+    [session, login, loginWithLink, logout, refresh, setUser],
   );
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;

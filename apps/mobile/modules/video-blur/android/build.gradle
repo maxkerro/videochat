@@ -1,0 +1,26 @@
+apply plugin: 'com.android.library'
+
+group = 'expo.modules.videoblur'
+version = '1.0.0'
+
+def expoModulesCorePlugin = new File(project(":expo-modules-core").projectDir.absolutePath, "ExpoModulesCorePlugin.gradle")
+apply from: expoModulesCorePlugin
+applyKotlinExpoModulesCorePlugin()
+useCoreDependencies()
+useDefaultAndroidSdkVersions()
+
+android {
+  namespace "expo.modules.videoblur"
+  defaultConfig {
+    versionCode 1
+    versionName "1.0.0"
+  }
+}
+
+dependencies {
+  // The camera pipeline's frame-processor hook (VideoFrameProcessor / ProcessorProvider) and,
+  // through its `api` dependency, the WebRTC classes (livekit.org.webrtc.*).
+  implementation project(':livekit_react-native-webrtc')
+  // On-device person segmentation (bundled model, no Play Services download needed).
+  implementation 'com.google.mlkit:segmentation-selfie:16.0.0-beta6'
+}

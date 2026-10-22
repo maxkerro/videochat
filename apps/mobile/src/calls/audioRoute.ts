@@ -101,6 +101,9 @@ export interface AudioSnapshot {
   route: AudioRoute | null;
   /** What the person can pick. */
   choices: AudioRoute[];
+  /** CHAT-083: whether the call's audio is running, and the kind of call it's set up for. */
+  active: boolean;
+  media: CallMedia;
 }
 
 /**
@@ -118,7 +121,12 @@ export class AudioSession {
   private picked: AudioRoute | null = null;
   private settled = false;
   private unwatch: (() => void) | null = null;
-  private snap: AudioSnapshot = { route: null, choices: routeChoices([]) };
+  private snap: AudioSnapshot = {
+    route: null,
+    choices: routeChoices([]),
+    active: false,
+    media: 'audio',
+  };
   private readonly listeners = new Set<() => void>();
 
   constructor(private readonly driver: AudioDriver) {}
@@ -156,6 +164,7 @@ export class AudioSession {
     this.media = media;
     if (this.picked === null && !this.hasExternal())
       this.apply(defaultRoute(media, this.available));
+    else this.publish();
   }
 
   choose(route: AudioRoute): void {
@@ -218,7 +227,12 @@ export class AudioSession {
   }
 
   private publish(): void {
-    this.snap = { route: this.current, choices: routeChoices(this.available) };
+    this.snap = {
+      route: this.current,
+      choices: routeChoices(this.available),
+      active: this.running,
+      media: this.media,
+    };
     for (const listener of this.listeners) listener();
   }
 }

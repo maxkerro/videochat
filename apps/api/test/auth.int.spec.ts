@@ -61,28 +61,42 @@ describe.skipIf(!hasInfra)('auth data layer (CHAT-010, CHAT-011)', () => {
       expect(updated.username).toBe('erin');
     });
 
-    it('locks the account after the configured number of failed logins, then resets', async () => {
+    it('CHAT-081: delays sign-in progressively from the threshold on (capped), then resets', async () => {
       const u = await makeUser('felix');
       let latest: Awaited<ReturnType<typeof recordFailedLogin>>;
       for (let i = 0; i < LIMITS.loginAttemptsBeforeLockout - 1; i++) {
         latest = await recordFailedLogin(db, u.id);
         expect(latest.lockedUntil).toBeNull();
       }
+      const delays: number[] = [];
+      for (let i = 0; i < 6; i++) {
+        latest = await recordFailedLogin(db, u.id);
+        delays.push(Math.round((latest.lockedUntil!.getTime() - Date.now()) / 1000));
+      }
+      // 30 s, 60 s, 2 min, 4 min, then capped at 5 min.
+      const expected = [30, 60, 120, 240, 300, 300];
+      delays.forEach((d, i) => expect(Math.abs(d - expected[i]!)).toBeLessThanOrEqual(2));
+      expect(latest!.failedLoginAttempts).toBe(LIMITS.loginAttemptsBeforeLockout + 5);
+
+      // A failure after the window has passed starts the count over.
+      await db
+        .update(users)
+        .set({ lastFailedLoginAt: new Date(Date.now() - 61 * 60_000) })
+        .where(eq(users.id, u.id));
       latest = await recordFailedLogin(db, u.id);
-      expect(latest.lockedUntil).not.toBeNull();
-      expect(latest.lockedUntil!.getTime()).toBeGreaterThan(Date.now());
-      expect(latest.failedLoginAttempts).toBe(0); // reset once locked
+      expect(latest.failedLoginAttempts).toBe(1);
+      expect(latest.lockedUntil).toBeNull();
 
       await resetFailedLogins(db, u.id);
       const [again] = await db.select().from(users).where(eq(users.id, u.id));
       expect(again?.lockedUntil).toBeNull();
       expect(again?.failedLoginAttempts).toBe(0);
+      expect(again?.lastFailedLoginAt).toBeNull();
     });
 
     it('loses no increments when failed logins race (single atomic UPDATE, not read-then-write)', async () => {
       const u = await makeUser('marla');
-      // One below the lockout threshold, so every increment should still be visible in the
-      // counter rather than having tripped the lockout-reset-to-0 path.
+      // One below the threshold, so no delay is set yet.
       const concurrentAttempts = LIMITS.loginAttemptsBeforeLockout - 1;
       await Promise.all(
         Array.from({ length: concurrentAttempts }, () => recordFailedLogin(db, u.id)),

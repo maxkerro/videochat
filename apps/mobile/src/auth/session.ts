@@ -248,6 +248,19 @@ export function createSessionManager(options: SessionManagerOptions) {
     return send((await refreshNow()).accessToken);
   };
 
+  /** Keeps a freshly issued session (password or emailed code). */
+  async function start(session: MobileAuthSession): Promise<MobileAuthSession> {
+    const mine = (generation += 1);
+    const written = await persist(session.refreshToken, mine);
+    if (!written || generation !== mine) {
+      // Logged out (or logged in again) while the keystore write was pending.
+      void revoke(session.refreshToken);
+      throw new NotSignedInError();
+    }
+    apply(session);
+    return session;
+  }
+
   return {
     authedFetch,
     getAccessToken,
@@ -279,16 +292,22 @@ export function createSessionManager(options: SessionManagerOptions) {
     },
 
     async login(input: LoginInput): Promise<MobileAuthSession> {
-      const session = await authApi.apiPost('/auth/login', mobileAuthSessionSchema, input);
-      const mine = (generation += 1);
-      const written = await persist(session.refreshToken, mine);
-      if (!written || generation !== mine) {
-        // Logged out (or logged in again) while the keystore write was pending.
-        void revoke(session.refreshToken);
-        throw new NotSignedInError();
-      }
-      apply(session);
-      return session;
+      return start(await authApi.apiPost('/auth/login', mobileAuthSessionSchema, input));
+    },
+
+    /** CHAT-081: email a sign-in link and code (same answer whether the account exists). */
+    async requestLoginCode(identifier: string): Promise<void> {
+      await authApi.apiPost('/auth/login-link', z.unknown(), { identifier });
+    },
+
+    /** CHAT-081: sign in with the 6-digit code from that email. */
+    async loginWithCode(identifier: string, code: string): Promise<MobileAuthSession> {
+      return start(
+        await authApi.apiPost('/auth/login-link/verify', mobileAuthSessionSchema, {
+          identifier,
+          code,
+        }),
+      );
     },
 
     /** On app start: turn a stored refresh token back into a session. */

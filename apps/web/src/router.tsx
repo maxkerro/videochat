@@ -4,6 +4,7 @@ import { ChatPane } from './features/chat/ChatPane';
 import { ProfilePage } from './features/profile/ProfilePage';
 import { AppShell } from './layout/AppShell';
 import { ForgotPasswordPage } from './pages/auth/ForgotPasswordPage';
+import { LoginLinkPage } from './pages/auth/LoginLinkPage';
 import { LoginPage } from './pages/auth/LoginPage';
 import { ResetPasswordPage } from './pages/auth/ResetPasswordPage';
 import { SignUpPage } from './pages/auth/SignUpPage';
@@ -49,6 +50,8 @@ export const routes: RouteObject[] = [
   { path: '/login', element: <LoginPage /> },
   { path: '/verify-email', element: <VerifyEmailPage /> },
   { path: '/forgot-password', element: <ForgotPasswordPage /> },
+  // CHAT-081: the emailed sign-in link.
+  { path: '/login-link', element: <LoginLinkPage /> },
   { path: '/reset-password', element: <ResetPasswordPage /> },
   {
     path: '/ui',

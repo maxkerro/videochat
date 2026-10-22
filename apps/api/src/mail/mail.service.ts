@@ -48,6 +48,19 @@ export class MailService {
     );
   }
 
+  /** CHAT-081: a one-time sign-in link (web) and code (phones). */
+  async sendLoginLinkEmail(to: string, token: string, code: string): Promise<void> {
+    const link = `${this.env.PUBLIC_WEB_URL}/login-link?token=${encodeURIComponent(token)}`;
+    await this.send(
+      to,
+      `Your Videochat sign-in code: ${code}`,
+      `<p>Use this to sign in to Videochat without your password.</p>
+       <p><a href="${link}">Sign in</a></p>
+       <p>Or enter this code in the app: <strong style="font-size:20px;letter-spacing:2px">${code}</strong></p>
+       <p>Both work once and expire in 15 minutes. If you didn't ask for this, you can ignore it: someone may have typed your username by mistake, and nobody can sign in without this email.</p>`,
+    );
+  }
+
   /** CHAT-077: tells someone a moderator acted on their account. Deliberately generic: no
    *  moderator names or internal notes. */
   async sendModerationNotice(

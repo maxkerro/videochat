@@ -146,26 +146,35 @@ export async function setPasswordHash(
 }
 
 /**
- * Increments the failed-login counter and, once it reaches the threshold, sets `lockedUntil`
- * and resets the counter so the next window starts fresh after the lockout passes (CHAT-010).
+ * Counts a failed login and, from the threshold on, sets `lockedUntil` to a short delay that
+ * grows with each further failure (CHAT-081; it replaced CHAT-010's 15-minute lock, which anyone
+ * who knows a username could trigger on purpose). The count only resets on a successful sign-in,
+ * or when the last failure is older than `LIMITS.loginFailureWindowMinutes`.
  *
  * This is one atomic UPDATE, not a read-then-write: every expression in a Postgres SET clause
  * sees the same pre-update row, and concurrent UPDATEs to the same row serialize on that row's
  * lock rather than racing. A read-then-write version (SELECT, compute in JS, UPDATE) would lose
  * increments under concurrency -- N parallel wrong-password requests would all read the same
  * count and each write count+1, letting an attacker who parallelizes get far more than
- * `loginAttemptsBeforeLockout` guesses per lockout window.
+ * `loginAttemptsBeforeLockout` guesses before the delay starts.
  */
 export async function recordFailedLogin(db: DbExecutor, id: string): Promise<User> {
   const threshold = LIMITS.loginAttemptsBeforeLockout;
-  const lockoutMs = LIMITS.loginLockoutMinutes * 60_000;
+  // CHAT-081: consecutive failures within the window; an old one starts the count over.
+  const attempts = sql`(case when ${users.lastFailedLoginAt} is null
+      or ${users.lastFailedLoginAt} < now() - make_interval(mins => ${LIMITS.loginFailureWindowMinutes})
+    then 1 else ${users.failedLoginAttempts} + 1 end)`;
   const [row] = await db
     .update(users)
     .set({
-      failedLoginAttempts: sql`case when ${users.failedLoginAttempts} + 1 >= ${threshold}
-        then 0 else ${users.failedLoginAttempts} + 1 end`,
-      lockedUntil: sql`case when ${users.failedLoginAttempts} + 1 >= ${threshold}
-        then now() + (${lockoutMs} * interval '1 millisecond') else ${users.lockedUntil} end`,
+      failedLoginAttempts: attempts,
+      lastFailedLoginAt: sql`now()`,
+      // From the threshold on: 30 s, 60 s, 2 min, 4 min, then 5 min per further failure.
+      lockedUntil: sql`case when ${attempts} >= ${threshold}
+        then now() + make_interval(secs => least(
+          ${LIMITS.loginDelayBaseSeconds} * power(2, ${attempts} - ${threshold}),
+          ${LIMITS.loginDelayMaxSeconds}))
+        else null end`,
     })
     .where(eq(users.id, id))
     .returning();
@@ -174,7 +183,15 @@ export async function recordFailedLogin(db: DbExecutor, id: string): Promise<Use
 }
 
 export async function resetFailedLogins(db: DbExecutor, id: string): Promise<void> {
-  await db.update(users).set({ failedLoginAttempts: 0, lockedUntil: null }).where(eq(users.id, id));
+  await db
+    .update(users)
+    .set({
+      failedLoginAttempts: 0,
+      lockedUntil: null,
+      lastFailedLoginAt: null,
+      loginCodeFailures: 0,
+    })
+    .where(eq(users.id, id));
 }
 
 /** CHAT-037: a conversation's current members who have read receipts on (and so may see others'). */
@@ -194,4 +211,18 @@ export async function listReadReceiptMemberIds(
       ),
     );
   return rows.map((r) => r.userId);
+}
+
+/** CHAT-081: counts a wrong emailed sign-in code; returns the new count. */
+export async function recordLoginCodeFailure(db: DbExecutor, id: string): Promise<number> {
+  const [row] = await db
+    .update(users)
+    .set({ loginCodeFailures: sql`${users.loginCodeFailures} + 1` })
+    .where(eq(users.id, id))
+    .returning({ n: users.loginCodeFailures });
+  return row?.n ?? 0;
+}
+
+export async function resetLoginCodeFailures(db: DbExecutor, id: string): Promise<void> {
+  await db.update(users).set({ loginCodeFailures: 0 }).where(eq(users.id, id));
 }

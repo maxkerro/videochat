@@ -6,17 +6,20 @@ import {
   Injectable,
   type OnModuleInit,
   UnauthorizedException,
+  Logger,
 } from '@nestjs/common';
 import { JwtService } from '@nestjs/jwt';
 import {
+  LIMITS,
   isEmailIdentifier,
   type AuthSession,
+  type LoginLinkVerifyInput,
   type ChangePasswordInput,
   type LoginInput,
   type ResetPasswordInput,
   type SignUpInput,
 } from '@videochat/shared';
-import { randomUUID } from 'node:crypto';
+import { randomInt, randomUUID } from 'node:crypto';
 import type { Env } from '../config/env.js';
 import type { User } from '../db/schema.js';
 import type { Database } from '../db/client.js';
@@ -24,7 +27,13 @@ import { DB, ENV, REDIS } from '../infra/tokens.js';
 import { Redis } from 'ioredis';
 import { publishSessionEnded } from '../realtime/realtime.service.js';
 import { TokenStateService } from './token-state.service.js';
-import { consumeAuthToken, createAuthToken } from '../db/auth-tokens.js';
+import {
+  consumeAllAuthTokens,
+  consumeAuthToken,
+  countRecentAuthTokens,
+  createAuthToken,
+  voidLoginCodes,
+} from '../db/auth-tokens.js';
 import { isUniqueViolation } from '../db/pg-errors.js';
 import {
   createRefreshToken,
@@ -42,7 +51,9 @@ import {
   isUsernameTaken,
   markEmailVerified,
   recordFailedLogin,
+  recordLoginCodeFailure,
   resetFailedLogins,
+  resetLoginCodeFailures,
   setPasswordHash,
 } from '../db/users.js';
 import { hashPassword, verifyAgainstDummyHash, verifyPassword, warmDummyHash } from './password.js';
@@ -64,6 +75,9 @@ export const INVALID_LOGIN_MESSAGE = 'Incorrect email/username or password';
 
 @Injectable()
 export class AuthService implements OnModuleInit {
+  /** CHAT-081: delay, throttle and sign-in-link events, per account, to spot abuse. */
+  private readonly logger = new Logger(AuthService.name);
+
   constructor(
     @Inject(DB) private readonly db: Database,
     @Inject(ENV) private readonly env: Env,
@@ -151,17 +165,14 @@ export class AuthService implements OnModuleInit {
       throw invalid();
     }
 
-    // Known trade-off (CHAT-081): with username login, anyone who has seen a username in a chat
-    // can lock that account by failing on purpose, and the per-IP throttler doesn't stop that
-    // when spread across IPs. Accepted for now -- the lock is short (LIMITS.loginLockoutMinutes)
-    // -- with softer options (progressive delay, lock bypass after an email step) tracked there.
-    if (user.lockedUntil && user.lockedUntil.getTime() > Date.now()) {
-      throw new ForbiddenException('Too many failed attempts. Try again in a few minutes.');
-    }
+    // CHAT-081: anyone who has seen a username can fail on purpose, so failures only cost a short,
+    // growing delay (at most LIMITS.loginDelayMaxSeconds), and the owner can always sign in with
+    // an emailed link or code instead (requestLoginLink), which this delay doesn't apply to.
+    this.refuseWhileDelayed(user);
 
     const ok = await verifyPassword(user.passwordHash, input.password);
     if (!ok) {
-      await recordFailedLogin(this.db, user.id);
+      await this.recordFailure(user.id);
       throw invalid();
     }
     await resetFailedLogins(this.db, user.id);
@@ -280,15 +291,132 @@ export class AuthService implements OnModuleInit {
   private async checkPasswordWithLockout(userId: string, password: string): Promise<boolean> {
     const user = await findUserById(this.db, userId);
     if (!user?.passwordHash) return false;
-    if (user.lockedUntil && user.lockedUntil.getTime() > Date.now()) {
-      throw new ForbiddenException('Too many failed attempts. Try again in a few minutes.');
-    }
+    this.refuseWhileDelayed(user);
     if (!(await verifyPassword(user.passwordHash, password))) {
-      await recordFailedLogin(this.db, user.id);
+      await this.recordFailure(user.id);
       return false;
     }
     if (user.failedLoginAttempts > 0) await resetFailedLogins(this.db, user.id);
     return true;
+  }
+
+  /**
+   * CHAT-081: "email me a sign-in link". The email has a one-time link (web) and a 6-digit code
+   * (phones), both valid for LIMITS.loginLinkTtlMinutes, and it works while password sign-in is
+   * delayed -- so someone failing on purpose can never keep the owner out. Answered the same way
+   * whether or not the account exists; at most LIMITS.loginLinksPerWindow emails per window.
+   */
+  async requestLoginLink(identifier: string): Promise<void> {
+    const id = identifier.trim().toLowerCase();
+    const user = isEmailIdentifier(id)
+      ? await findUserByEmail(this.db, id)
+      : await findUserByUsername(this.db, id);
+    if (!user || user.deletedAt) return;
+    const ttlMs = LIMITS.loginLinkTtlMinutes * 60_000;
+    const recent = await countRecentAuthTokens(
+      this.db,
+      user.id,
+      'login_link',
+      new Date(Date.now() - ttlMs),
+    );
+    if (recent >= LIMITS.loginLinksPerWindow) {
+      this.logger.warn({ event: 'login.link_limited', userId: user.id });
+      return;
+    }
+    const token = generateOpaqueToken();
+    const expiresAt = new Date(Date.now() + ttlMs);
+    await createAuthToken(this.db, {
+      userId: user.id,
+      purpose: 'login_link',
+      tokenHash: hashToken(token),
+      expiresAt,
+    });
+    let code = '';
+    for (let attempt = 0; attempt < 5 && !code; attempt++) {
+      const candidate = String(randomInt(0, 1_000_000)).padStart(6, '0');
+      try {
+        await createAuthToken(this.db, {
+          userId: user.id,
+          purpose: 'login_code',
+          tokenHash: hashToken(loginCodeKey(user.id, candidate)),
+          expiresAt,
+        });
+        code = candidate;
+      } catch (err) {
+        // The same 6 digits are already out for this account (rare): pick others.
+        if (!isUniqueViolation(err)) throw err;
+      }
+    }
+    // A fresh email gets a fresh set of tries at its code.
+    await resetLoginCodeFailures(this.db, user.id);
+    await this.mail.sendLoginLinkEmail(user.email, token, code);
+    this.logger.warn({ event: 'login.link_sent', userId: user.id });
+  }
+
+  /** CHAT-081: signs in with the emailed link's token or code (one use; the email's other half
+   *  stops working too). Proves the email address, so it also verifies it. */
+  async verifyLoginLink(input: LoginLinkVerifyInput): Promise<IssuedSession> {
+    let userId: string;
+    if ('token' in input) {
+      const row = await consumeAuthToken(this.db, hashToken(input.token), 'login_link');
+      if (!row) throw new BadRequestException('This sign-in link is invalid or has expired');
+      userId = row.userId;
+    } else {
+      const invalid = () => new BadRequestException('That code is wrong or has expired');
+      const id = input.identifier.trim().toLowerCase();
+      const user = isEmailIdentifier(id)
+        ? await findUserByEmail(this.db, id)
+        : await findUserByUsername(this.db, id);
+      if (!user || user.deletedAt) throw invalid();
+      if (user.loginCodeFailures >= LIMITS.loginCodeMaxFailures) throw invalid();
+      const row = await consumeAuthToken(
+        this.db,
+        hashToken(loginCodeKey(user.id, input.code)),
+        'login_code',
+      );
+      if (!row) {
+        const failures = await recordLoginCodeFailure(this.db, user.id);
+        if (failures >= LIMITS.loginCodeMaxFailures) {
+          // Too many wrong codes: void the codes. The link in the email still works, so someone
+          // guessing can't lock the owner out this way either.
+          await voidLoginCodes(this.db, user.id);
+          this.logger.warn({ event: 'login.codes_voided', userId: user.id });
+        }
+        throw invalid();
+      }
+      userId = user.id;
+    }
+    await consumeAllAuthTokens(this.db, userId, 'login_link');
+    await consumeAllAuthTokens(this.db, userId, 'login_code');
+    await markEmailVerified(this.db, userId);
+    await resetFailedLogins(this.db, userId);
+    this.logger.warn({ event: 'login.link_used', userId });
+    return this.issueSession(userId);
+  }
+
+  /** CHAT-081: refuses while the account's delay runs, saying how long and what else works. */
+  private refuseWhileDelayed(user: Pick<User, 'id' | 'lockedUntil'>): void {
+    const waitMs = user.lockedUntil ? user.lockedUntil.getTime() - Date.now() : 0;
+    if (waitMs <= 0) return;
+    const seconds = Math.ceil(waitMs / 1000);
+    this.logger.warn({ event: 'login.throttled', userId: user.id, retryAfterSec: seconds });
+    throw new ForbiddenException({
+      message: `Too many failed attempts. Try again in ${formatWait(seconds)}, or sign in with an emailed code.`,
+      code: 'login_throttled',
+      retryAfterSec: seconds,
+    });
+  }
+
+  private async recordFailure(userId: string): Promise<void> {
+    const row = await recordFailedLogin(this.db, userId);
+    if (row.failedLoginAttempts >= LIMITS.loginAttemptsBeforeLockout) {
+      this.logger.warn({
+        event: 'login.delayed',
+        userId,
+        failures: row.failedLoginAttempts,
+        until: row.lockedUntil?.toISOString(),
+      });
+    }
   }
 
   private async issueSession(
@@ -332,4 +460,16 @@ export function restrictionMessage(
     return `This account is suspended until ${user.suspendedUntil.toISOString().slice(0, 16).replace('T', ' ')} UTC.`;
   }
   return null;
+}
+
+/** CHAT-081: what an emailed code is stored as (hashed, and tied to the account, so the same six
+ *  digits sent to two people are two different rows). */
+function loginCodeKey(userId: string, code: string): string {
+  return `login-code:${userId}:${code}`;
+}
+
+function formatWait(seconds: number): string {
+  if (seconds < 60) return `${seconds} seconds`;
+  const minutes = Math.ceil(seconds / 60);
+  return minutes === 1 ? 'a minute' : `${minutes} minutes`;
 }

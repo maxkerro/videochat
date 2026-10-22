@@ -163,6 +163,8 @@ describe('AudioSession', () => {
     expect(s.getSnapshot()).toEqual({
       route: 'bluetooth',
       choices: ['earpiece', 'speaker', 'bluetooth'],
+      active: true,
+      media: 'audio',
     });
   });
 

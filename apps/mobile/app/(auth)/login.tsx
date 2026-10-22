@@ -16,6 +16,69 @@ export default function Login() {
   const [errors, setErrors] = useState<Record<string, string>>({});
   const [formError, setFormError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  // CHAT-081: signing in with an emailed code instead of the password.
+  const [codeFor, setCodeFor] = useState<string | null>(null);
+  const [code, setCode] = useState('');
+
+  async function emailCode() {
+    setFormError(null);
+    const id = identifier.trim();
+    if (!id) return setErrors({ identifier: 'Enter your email or username first' });
+    setErrors({});
+    setBusy(true);
+    try {
+      await session.requestLoginCode(id);
+      setCodeFor(id);
+      setCode('');
+    } catch (e) {
+      setFormError(describeError(e));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function submitCode() {
+    if (!codeFor) return;
+    setFormError(null);
+    if (!/^\d{6}$/.test(code.trim()))
+      return setErrors({ code: 'Enter the 6-digit code from the email' });
+    setErrors({});
+    setBusy(true);
+    try {
+      await session.loginWithCode(codeFor, code.trim());
+    } catch (e) {
+      setFormError(describeError(e));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  if (codeFor) {
+    return (
+      <FormScreen title="Check your email">
+        <Text style={{ color: theme.text }}>
+          If an account matches {codeFor}, we emailed it a 6-digit code (and a link for the web). It
+          works once, for 15 minutes.
+        </Text>
+        <Field
+          label="Code"
+          value={code}
+          onChangeText={setCode}
+          error={errors.code}
+          keyboardType="number-pad"
+          autoComplete="one-time-code"
+          textContentType="oneTimeCode"
+          maxLength={6}
+          returnKeyType="go"
+          onSubmitEditing={() => void submitCode()}
+        />
+        {formError ? <Notice kind="error">{formError}</Notice> : null}
+        <Button title="Sign in" busy={busy} onPress={() => void submitCode()} />
+        <Button title="Send another email" kind="link" onPress={() => void emailCode()} />
+        <Button title="Use my password" kind="link" onPress={() => setCodeFor(null)} />
+      </FormScreen>
+    );
+  }
 
   async function submit() {
     setFormError(null);
@@ -59,6 +122,8 @@ export default function Login() {
       />
       {formError ? <Notice kind="error">{formError}</Notice> : null}
       <Button title="Log in" busy={busy} onPress={() => void submit()} />
+      {/* CHAT-081: works even while password sign-in is delayed after failed attempts. */}
+      <Button title="Email me a sign-in code" kind="link" onPress={() => void emailCode()} />
       <Button
         title="Forgot your password?"
         kind="link"

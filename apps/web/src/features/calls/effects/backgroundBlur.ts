@@ -1,3 +1,5 @@
+import { SlowBlurDetector, type BlurStats } from '@videochat/shared';
+
 /**
  * CHAT-075: background blur for the camera, with MediaPipe selfie segmentation running on the GPU
  * (WebGL) through LiveKit's track processor. The library, its WebAssembly and the model are only
@@ -11,10 +13,7 @@ export interface BlurredTrack {
   stop(): void;
 }
 
-export interface BlurStats {
-  /** Average time to segment and blur one frame over the last second, in ms. */
-  frameMs: number;
-}
+export type { BlurStats } from '@videochat/shared';
 
 const base = import.meta.env.BASE_URL.replace(/\/?$/, '/');
 export const BLUR_ASSETS = {
@@ -111,28 +110,8 @@ export async function blurTrack(
   };
 }
 
-/** A frame taking longer than this means the device is struggling (at 24 fps a frame has ~42 ms,
- *  shared with everything else the call does). */
-export const SLOW_FRAME_MS = 45;
-/** ...for this many seconds in a row: blur turns itself off. */
-export const SLOW_SECONDS = 5;
-
-/** CHAT-075 (CPU budget): watches the per-second frame times and says when blur is too slow
- *  for this device to keep it on. */
-export class SlowBlurDetector {
-  private slowSeconds = 0;
-  private fired = false;
-  constructor(private readonly onSlow: () => void) {}
-
-  report(stats: BlurStats): void {
-    if (this.fired) return;
-    this.slowSeconds = stats.frameMs > SLOW_FRAME_MS ? this.slowSeconds + 1 : 0;
-    if (this.slowSeconds >= SLOW_SECONDS) {
-      this.fired = true;
-      this.onSlow();
-    }
-  }
-}
+// CHAT-084: the slowness rule is shared with the phone apps.
+export { SLOW_FRAME_MS, SLOW_SECONDS, SlowBlurDetector } from '@videochat/shared';
 
 /** Blur with the watchdog attached: what the call engines use. */
 export function blurWithWatchdog(camera: MediaStreamTrack, onSlow: () => void) {

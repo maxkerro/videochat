@@ -10,3 +10,4 @@ export * from './mentions.js';
 export * from './voice.js';
 export * from './e2ee.js';
 export * from './moderation.js';
+export * from './blur.js';

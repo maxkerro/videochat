@@ -36,6 +36,9 @@ import {
   type MediaSource,
 } from './media';
 import { nativeAudioDriver, requestBluetoothPermission } from './nativeAudio';
+import { ProximityGuard } from './proximity';
+import { proximityScreen } from '../../modules/proximity-screen';
+import { blur } from './nativeBlur';
 import { nativeCallApi } from './nativeCallUi';
 import { nativeCallDeps, nativeMedia, SIGNALLING_WAIT_MS } from './nativeDeps';
 import { pip, useIsInPip } from './nativePip';
@@ -171,6 +174,10 @@ export function CallProvider({
   useEffect(() => {
     audioSession.setMedia(videoCall ? 'video' : 'audio');
   }, [videoCall, audioSession]);
+  // CHAT-083: screen off against the ear on an earpiece audio call.
+  const [proximity] = useState(() => new ProximityGuard(proximityScreen));
+  useEffect(() => proximity.sync(audio), [proximity, audio]);
+  useEffect(() => () => proximity.release(), [proximity]);
 
   // CHAT-062 picture-in-picture: a connected video call shrinks into a window when the app is
   // left (Android; iOS does the same through the video view itself).
@@ -211,6 +218,10 @@ export function CallProvider({
   useEffect(() => {
     setCallActive(busy);
     return () => setCallActive(false);
+  }, [busy]);
+  // CHAT-084: the next call starts from the Settings blur choice again.
+  useEffect(() => {
+    if (!busy) blur.callEnded();
   }, [busy]);
 
   // Once signed in, listen to the system call screen (and pick up a call it is already ringing

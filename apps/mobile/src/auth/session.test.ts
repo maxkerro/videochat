@@ -79,6 +79,26 @@ describe('session manager', () => {
     expect(session.isSignedIn()).toBe(true);
   });
 
+  it('CHAT-081: emails a sign-in code, then signs in with it like a password login', async () => {
+    const { session, mem, calls } = setup(null, (url) =>
+      url.endsWith('/auth/login-link') ? res(202, { message: 'sent' }) : res(200, sessionBody(2)),
+    );
+    await session.requestLoginCode('max');
+    expect(calls[0]).toMatchObject({
+      url: 'https://api.test/auth/login-link',
+      body: { identifier: 'max' },
+    });
+    expect(session.isSignedIn()).toBe(false);
+    await session.loginWithCode('max', '123456');
+    expect(calls[1]).toMatchObject({
+      url: 'https://api.test/auth/login-link/verify',
+      body: { identifier: 'max', code: '123456' },
+    });
+    expect(calls[1]?.headers['x-refresh-mode']).toBe('body');
+    expect(mem.peek()).toBe('refresh-2');
+    expect(session.isSignedIn()).toBe(true);
+  });
+
   it('restore: no stored token means signed out, without calling the server', async () => {
     const { session, calls } = setup(null, () => res(500));
     await expect(session.restore()).resolves.toEqual({ status: 'signedOut' });

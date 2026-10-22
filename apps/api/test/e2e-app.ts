@@ -32,6 +32,12 @@ export class FakeMailService {
   sendPasswordResetEmail() {
     return Promise.resolve();
   }
+  /** CHAT-081 */
+  loginLinks: Array<{ to: string; token: string; code: string }> = [];
+  sendLoginLinkEmail(to: string, token: string, code: string) {
+    this.loginLinks.push({ to, token, code });
+    return Promise.resolve();
+  }
   /** CHAT-077 */
   notices: Array<{ to: string; kind: string }> = [];
   sendModerationNotice(to: string, notice: { kind: string }) {

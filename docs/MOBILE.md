@@ -239,10 +239,11 @@ logic, tested with a fake) and `nativeCallUi.ts` (the library).
 - **Native modules:** WebRTC is now `@livekit/react-native-webrtc` (same API as `react-native-webrtc`;
   the iOS call audio needs this build), plus `expo-callkit-telecom`, and `expo-build-properties`
   (Android `minSdkVersion` 26). Still version `0.5.0` (unreleased).
-- **Known limits:** (0) **No proximity sensor:** the previous audio manager turned the screen off
-  against the ear on the earpiece; the native call library does not, so on an audio call a cheek can
-  press the screen (mute / hang up). Tracked as CHAT-083 (a proximity wake lock while the route is the earpiece).
-  (1) Declining from the lock screen while the app is _killed_ only reaches the
+- **Proximity (CHAT-083):** on an audio call whose sound is on the earpiece, the screen turns off
+  against the ear (a local native module, `modules/proximity-screen`: an Android proximity wake lock,
+  iOS proximity monitoring). Not on the speaker, a headset, Bluetooth or video calls; released when
+  the route changes or the call ends. Needs an APK built after it was added.
+- **Known limits:** (1) Declining from the lock screen while the app is _killed_ only reaches the
   server once the app is running; otherwise the caller keeps ringing until the 30 s timeout. (2) A
   caller cancelling while the phone is ringing with the app killed does not dismiss the system
   call screen until its own 30 s timeout (the app is not running to hear `call.ended`). (3) **iOS
@@ -318,5 +319,29 @@ double-tap starts recording and a second double-tap sends. Recording is off duri
 
 Settings → Calls → "Noise suppression" (on by default) switches the phone's WebRTC noise
 suppression for 1:1 and group calls; it's kept on this phone and applies from the next call.
-Background blur is in the web app only for now: on phones it needs a native video-frame processor
-(segmentation with ML Kit on Android, Vision on iOS), which is a separate backlog item.
+
+## Background blur (CHAT-084)
+
+Settings → Calls → "Blur my background" (off by default, this phone only) is the starting choice
+for every video call; the ◐ button in a 1:1 or group call switches it for that call only.
+
+- **Native part:** the local Expo module `apps/mobile/modules/video-blur` registers a
+  react-native-webrtc frame processor named `videochat-blur`; JS turns it on for a camera track
+  with `track._setVideoEffects(['videochat-blur'])` and off with `[]`.
+  - Android (`BlurProcessor.kt`): ML Kit selfie segmentation (bundled model,
+    `com.google.mlkit:segmentation-selfie`) on a ≈256 px copy of the frame, on its own thread; the
+    newest mask is mixed with a downsampled box blur of the frame on the CPU (I420).
+  - iOS (`VBBlurProcessor.m`): Vision `VNGeneratePersonSegmentationRequest` and Core Image
+    (`CIBlendWithMask` over a Gaussian blur), iOS 15+.
+  - Both: until the first mask is ready the whole picture is blurred, and a frame that can't be
+    processed is sent black, so **no unblurred frame goes out once blur is on**.
+- **JS part:** `src/calls/blur.ts` (`BlurController`) and `src/calls/nativeBlur.ts`. Every camera
+  a 1:1 call opens goes through it before reaching the peer connection (`nativeCallDeps` /
+  `nativeMedia`). In group calls the camera is created with `createLocalVideoTrack`, blurred,
+  then published; turning it off unpublishes it (rather than muting, which makes LiveKit restart
+  the camera without the effect), and flipping uses the same track.
+- **Slow phones:** the processor reports the average time per frame once a second; with the same
+  rule as the web (`SlowBlurDetector` in `@videochat/shared`: over 45 ms for 5 seconds in a row)
+  blur turns itself off and the call screen says so.
+- Needs a new app build (`eas build`): an APK built before this has no `VideoBlur` module, and
+  then the switch simply isn't shown. The native code is compiled only by EAS (not in CI).

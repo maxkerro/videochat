@@ -22,7 +22,13 @@ import { session } from '../../src/lib/api';
 import { describeError } from '../../src/ui/describeError';
 import { Button, Field, Notice } from '../../src/ui/Form';
 import { useTheme } from '../../src/ui/theme';
-import { setNoiseSuppression, useNoiseSuppression } from '../../src/calls/callPrefs';
+import {
+  setBackgroundBlur,
+  setNoiseSuppression,
+  useBackgroundBlurPref,
+  useNoiseSuppression,
+} from '../../src/calls/callPrefs';
+import { useBlur } from '../../src/calls/nativeBlur';
 import { fieldErrors } from '../../src/ui/useFormErrors';
 
 const VISIBILITY_LABELS: Record<LastSeenVisibility, string> = {
@@ -110,6 +116,8 @@ function Choice<T extends string>({
 export default function Settings() {
   const t = useTheme();
   const noiseSuppression = useNoiseSuppression();
+  const backgroundBlur = useBackgroundBlurPref();
+  const blurAvailable = useBlur().available;
   const queryClient = useQueryClient();
   const { state } = useAuth();
   const user = state.status === 'signedIn' ? state.user : null;
@@ -214,6 +222,19 @@ export default function Settings() {
         Filters out background noise from your microphone on calls (this phone only). Takes effect
         on your next call.
       </Text>
+      {blurAvailable ? (
+        <>
+          <ToggleRow
+            label="Blur my background"
+            value={backgroundBlur}
+            onChange={(on) => void setBackgroundBlur(on)}
+          />
+          <Text style={{ color: t.muted, fontSize: 13 }}>
+            Blurs what’s behind you on video calls from this phone. You can also switch it during a
+            call. Turns itself off if your phone can’t keep up.
+          </Text>
+        </>
+      ) : null}
 
       <Heading>Appearance</Heading>
       <Choice

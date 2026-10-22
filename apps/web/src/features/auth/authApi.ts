@@ -37,3 +37,7 @@ export const resetPassword = (input: ResetPasswordInput) => {
   resetPasswordSchema.parse(input);
   return apiPost('/auth/reset-password', messageResponseSchema, input);
 };
+
+/** CHAT-081: email a sign-in link and code (same answer whether the account exists or not). */
+export const requestLoginLink = (identifier: string) =>
+  apiPost('/auth/login-link', messageResponseSchema, { identifier });

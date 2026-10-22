@@ -5,6 +5,7 @@ import type { CallEngineDeps } from './CallEngine';
 import type { MediaSource } from './media';
 import { getConnectionId, sendRealtimeEvent, waitForRealtime } from '../realtime/connection';
 import type { RtcPeer, RtcStream } from './rtc';
+import { withBlur } from './nativeBlur';
 
 /** How long an answered call waits for the app's socket to come up (a cold start from the lock
  *  screen) before giving up. */
@@ -22,8 +23,11 @@ export function nativeCallDeps(): CallEngineDeps {
     send: (type, payload) => getConnectionId() !== null && sendRealtimeEvent(type, payload),
     getConnectionId,
     getIceServers: () => fetchIceServers().then((r) => r.iceServers),
+    // CHAT-084: every camera goes through the blur before it reaches a peer connection.
     getUserMedia: (constraints) =>
-      mediaDevices.getUserMedia(constraints as never) as unknown as Promise<RtcStream>,
+      (mediaDevices.getUserMedia(constraints as never) as unknown as Promise<RtcStream>).then(
+        withBlur,
+      ),
     createPeerConnection: (config) => new RTCPeerConnection(config as never) as unknown as RtcPeer,
     createMediaStream: () => new MediaStream() as unknown as RtcStream,
     now: () => Date.now(),
@@ -38,5 +42,7 @@ export function nativeCallDeps(): CallEngineDeps {
 /** The real microphone and camera. */
 export const nativeMedia: MediaSource = {
   getUserMedia: (constraints) =>
-    mediaDevices.getUserMedia(constraints as never) as unknown as Promise<RtcStream>,
+    (mediaDevices.getUserMedia(constraints as never) as unknown as Promise<RtcStream>).then(
+      withBlur,
+    ),
 };

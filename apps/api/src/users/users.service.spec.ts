@@ -45,6 +45,8 @@ function makeUser(overrides: Partial<User> = {}): User {
     isModerator: false,
     suspendedUntil: null,
     bannedAt: null,
+    lastFailedLoginAt: null,
+    loginCodeFailures: 0,
     createdAt: new Date(),
     updatedAt: new Date(),
     ...overrides,

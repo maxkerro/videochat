@@ -10,6 +10,8 @@ import { useCalls } from './CallProvider';
 import type { CallSnapshot } from './CallEngine';
 import type { RtcStream } from './rtc';
 import { useCallTimer } from './useCallTimer';
+import { BLUR_SLOW_NOTICE } from './blur';
+import { blur, useBlur } from './nativeBlur';
 
 const KEEP_AWAKE_TAG = 'call';
 const RING_PATTERN = [0, 900, 1_100];
@@ -168,6 +170,7 @@ function InCall({ call }: { call: CallSnapshot }) {
   const showRemoteVideo = live && remoteUrl !== null && call.remoteVideoEnabled;
   const showLocalVideo = call.videoEnabled && !call.videoPaused && localUrl !== null;
   const { audio } = calls;
+  const blurState = useBlur();
   const current = audio.route ?? (call.videoEnabled ? 'speaker' : 'earpiece');
 
   function onRoutePress() {
@@ -192,6 +195,7 @@ function InCall({ call }: { call: CallSnapshot }) {
         {call.quality === 'poor' && call.phase === 'active' ? (
           <Text style={styles.warning}>Poor connection</Text>
         ) : null}
+        {blurState.turnedOffSlow ? <Text style={styles.warning}>{BLUR_SLOW_NOTICE}</Text> : null}
         {call.remoteScreenSharing && call.remoteVideoEnabled ? (
           <Text style={styles.topStatus}>{call.peer.displayName} is sharing their screen</Text>
         ) : null}
@@ -261,6 +265,14 @@ function InCall({ call }: { call: CallSnapshot }) {
         />
         {call.videoEnabled ? (
           <CircleButton label="Flip" glyph="⟳" onPress={calls.switchCamera} />
+        ) : null}
+        {call.videoEnabled && blurState.available ? (
+          <CircleButton
+            label="Blur"
+            glyph="◐"
+            active={blurState.on}
+            onPress={() => blur.setOn(!blurState.on)}
+          />
         ) : null}
         <CircleButton label="End" glyph="✕" tone="danger" onPress={calls.hangUp} />
       </View>
@@ -394,6 +406,8 @@ const styles = StyleSheet.create({
   suggestionText: { color: '#ffffff', textAlign: 'center' },
   controls: {
     flexDirection: 'row',
+    flexWrap: 'wrap',
+    rowGap: 12,
     justifyContent: 'space-evenly',
     alignItems: 'flex-start',
     paddingBottom: 24,
