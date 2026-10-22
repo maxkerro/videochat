@@ -75,6 +75,8 @@ export interface MessageBubbleProps {
   /** CHAT-076 (spike): this browser shows the chat as encrypted, so each message says whether it
    *  actually was (the other person may write from a phone or a browser without encryption). */
   encryptedChat?: boolean;
+  /** CHAT-077: report someone else's message. */
+  onReport?: (message: Message) => void;
 }
 
 /** One message in the list: reply quote, attachment, text, link preview, and its actions menu
@@ -96,6 +98,10 @@ export function MessageBubble(props: MessageBubbleProps) {
         },
         { label: 'Add reaction…', onSelect: () => props.onOpenPicker(message) },
         ...(canEdit ? [{ label: 'Edit', onSelect: () => props.onStartEdit(message) }] : []),
+        // CHAT-077: anyone else's message can be reported to the moderators.
+        ...(!isOwn && props.onReport && message.senderId
+          ? [{ label: 'Report…', onSelect: () => props.onReport!(message) }]
+          : []),
         ...(canDelete
           ? [
               {

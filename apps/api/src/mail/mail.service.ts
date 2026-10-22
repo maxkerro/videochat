@@ -47,4 +47,29 @@ export class MailService {
        <p>This link expires in 30 minutes and works once. If you didn't request this, you can ignore this email.</p>`,
     );
   }
+
+  /** CHAT-077: tells someone a moderator acted on their account. Deliberately generic: no
+   *  moderator names or internal notes. */
+  async sendModerationNotice(
+    to: string,
+    notice: { kind: 'warn' } | { kind: 'suspend'; until: Date } | { kind: 'ban' },
+  ): Promise<void> {
+    const body =
+      notice.kind === 'warn'
+        ? '<p>A message or behaviour of yours on Videochat was reported and reviewed by our moderators. Please keep to the community rules: repeated reports can lead to a suspension.</p>'
+        : notice.kind === 'suspend'
+          ? `<p>After reviewing reports, our moderators suspended your Videochat account until ${notice.until.toISOString().slice(0, 16).replace('T', ' ')} UTC. You were signed out and can sign in again after that.</p>`
+          : '<p>After reviewing reports, our moderators banned your Videochat account. You were signed out and can no longer sign in.</p>';
+    const subject =
+      notice.kind === 'warn'
+        ? 'A warning about your Videochat account'
+        : notice.kind === 'suspend'
+          ? 'Your Videochat account is suspended'
+          : 'Your Videochat account is banned';
+    await this.send(
+      to,
+      subject,
+      `${body}<p>If you think this is a mistake, reply to this email.</p>`,
+    );
+  }
 }

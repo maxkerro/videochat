@@ -30,6 +30,21 @@ export const routes: RouteObject[] = [
     ),
   },
   { path: '/profile', element: <Navigate to="/settings" replace /> },
+  {
+    // CHAT-077: moderators only (the API enforces it); loaded on demand. Not "/moderation": that
+    // prefix is the API's (render.yaml rewrites /moderation/* to it).
+    path: '/moderate',
+    lazy: async () => {
+      const { ModerationPage } = await import('./features/moderation/ModerationPage');
+      return {
+        Component: () => (
+          <RequireAuth>
+            <ModerationPage />
+          </RequireAuth>
+        ),
+      };
+    },
+  },
   { path: '/signup', element: <SignUpPage /> },
   { path: '/login', element: <LoginPage /> },
   { path: '/verify-email', element: <VerifyEmailPage /> },

@@ -44,7 +44,7 @@ describe.skipIf(!hasInfra)('database schema v1 (CHAT-004)', () => {
     const result = await again.db.execute<{ n: number }>(
       sql`select count(*)::int as n from information_schema.tables where table_schema = 'public'`,
     );
-    expect(result.rows[0]?.n).toBe(17); // users, devices, conversations, memberships, messages, refresh_tokens, auth_tokens, blocks, calls, attachments, reactions, message_reports, group_calls, and CHAT-076's e2ee_devices, e2ee_key_packages, e2ee_groups, e2ee_welcomes
+    expect(result.rows[0]?.n).toBe(18); // users, devices, conversations, memberships, messages, refresh_tokens, auth_tokens, blocks, calls, attachments, reactions, message_reports, group_calls, and CHAT-076's e2ee_devices, e2ee_key_packages, e2ee_groups, e2ee_welcomes, and CHAT-077's moderation_actions
     await again.close();
   });
 

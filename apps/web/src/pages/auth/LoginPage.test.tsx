@@ -64,6 +64,20 @@ describe('LoginPage', () => {
     expect(await screen.findByText('Incorrect email/username or password')).toBeInTheDocument();
   });
 
+  it('CHAT-077: shows why a suspended account can’t sign in (no resend offer)', async () => {
+    vi.stubGlobal(
+      'fetch',
+      fetchAlwaysReturning(
+        { message: 'This account is suspended until 2026-10-24 11:00 UTC.' },
+        403,
+      ),
+    );
+    renderApp('/login');
+    await submitLogin();
+    expect(await screen.findByText(/suspended until 2026-10-24/)).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /resend/i })).not.toBeInTheDocument();
+  });
+
   it('offers to resend the verification email on a 403', async () => {
     vi.stubGlobal('fetch', fetchAlwaysReturning({ message: 'Email not verified' }, 403));
     renderApp('/login');

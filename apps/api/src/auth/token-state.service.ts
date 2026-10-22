@@ -15,6 +15,9 @@ interface UserTokenState {
   deleted: boolean;
   /** Tokens issued (JWT `iat`, seconds) before this second are refused. */
   validFromSec: number;
+  /** CHAT-077: banned, or suspended until this time (ms). */
+  banned: boolean;
+  suspendedUntilMs: number;
 }
 
 /**
@@ -32,7 +35,8 @@ export class TokenStateService {
 
   async isTokenValid(userId: string, issuedAtSec: number | undefined): Promise<boolean> {
     const state = await this.state(userId);
-    if (!state.exists || state.deleted) return false;
+    if (!state.exists || state.deleted || state.banned) return false;
+    if (state.suspendedUntilMs > Date.now()) return false;
     return (issuedAtSec ?? 0) >= state.validFromSec;
   }
 
@@ -46,7 +50,12 @@ export class TokenStateService {
     const hit = this.cache.get(userId);
     if (hit && Date.now() - hit.at < CACHE_MS) return hit.state;
     const [row] = await this.db
-      .select({ deletedAt: users.deletedAt, passwordChangedAt: users.passwordChangedAt })
+      .select({
+        deletedAt: users.deletedAt,
+        passwordChangedAt: users.passwordChangedAt,
+        bannedAt: users.bannedAt,
+        suspendedUntil: users.suspendedUntil,
+      })
       .from(users)
       .where(eq(users.id, userId))
       .limit(1);
@@ -60,6 +69,8 @@ export class TokenStateService {
       exists: !!row,
       deleted: !!row?.deletedAt,
       validFromSec: row?.passwordChangedAt ? Math.floor(row.passwordChangedAt.getTime() / 1000) : 0,
+      banned: !!row?.bannedAt,
+      suspendedUntilMs: row?.suspendedUntil?.getTime() ?? 0,
     };
     this.cache.set(userId, { state, at: Date.now() });
     return state;

@@ -96,6 +96,12 @@ export const users = pgTable(
     deletedAt: timestamp('deleted_at', { withTimezone: true }),
     /** CHAT-037 review: access tokens issued before this are no longer accepted. */
     passwordChangedAt: timestamp('password_changed_at', { withTimezone: true }),
+    /** CHAT-077: can use the moderation console (granted with `db/scripts/moderator.ts`). */
+    isModerator: boolean('is_moderator').notNull().default(false),
+    /** CHAT-077: a moderator suspended (until this time) or banned the account; either way it
+     *  can't sign in, and its sessions were ended. */
+    suspendedUntil: timestamp('suspended_until', { withTimezone: true }),
+    bannedAt: timestamp('banned_at', { withTimezone: true }),
     ...timestamps,
   },
   (t) => [
@@ -422,10 +428,24 @@ export const messageReports = pgTable(
     reason: text('reason').notNull(),
     details: text('details'),
     bodySnapshot: text('body_snapshot'),
+    /** CHAT-077: the snapshot was typed in by the reporter (an encrypted message): unverified. */
+    snapshotFromReporter: boolean('snapshot_from_reporter').notNull().default(false),
+    /** CHAT-077: the moderation queue. */
+    status: text('status').notNull().default('open'),
+    resolvedAt: timestamp('resolved_at', { withTimezone: true }),
+    resolvedBy: uuid('resolved_by').references(() => users.id, { onDelete: 'set null' }),
+    resolution: text('resolution'),
+    resolutionNote: text('resolution_note'),
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
   },
   (t) => [
     uniqueIndex('message_reports_reporter_message_uq').on(t.reporterId, t.messageId),
+    // CHAT-077: one open report per reporter and person (reports of a person have no message).
+    uniqueIndex('message_reports_reporter_user_open_uq')
+      .on(t.reporterId, t.reportedUserId)
+      .where(sql`${t.messageId} IS NULL AND ${t.status} = 'open'`),
+    index('message_reports_queue_idx').on(t.status, t.createdAt),
+    check('message_reports_status_ck', sql`${t.status} in ('open', 'resolved', 'dismissed')`),
     check(
       'message_reports_reason_ck',
       sql`${t.reason} in ('spam', 'harassment', 'inappropriate', 'other')`,
@@ -600,3 +620,29 @@ export const e2eeWelcomes = pgTable(
 
 export type E2eeGroupRow = typeof e2eeGroups.$inferSelect;
 export type E2eeWelcomeRow = typeof e2eeWelcomes.$inferSelect;
+
+/**
+ * CHAT-077: the moderation audit log -- one row per moderator action, opening a report included.
+ * Rows are only ever added. Moderators and targets are kept as ids (set null if an account is
+ * deleted later), so the log survives the people in it.
+ */
+export const moderationActions = pgTable(
+  'moderation_actions',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    moderatorId: uuid('moderator_id').references(() => users.id, { onDelete: 'set null' }),
+    action: text('action').notNull(),
+    reportId: uuid('report_id').references(() => messageReports.id, { onDelete: 'set null' }),
+    targetUserId: uuid('target_user_id').references(() => users.id, { onDelete: 'set null' }),
+    note: text('note'),
+    details: jsonb('details').$type<Record<string, unknown>>(),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [
+    index('moderation_actions_created_idx').on(t.createdAt),
+    index('moderation_actions_target_idx').on(t.targetUserId, t.createdAt),
+  ],
+);
+
+export type MessageReportRow = typeof messageReports.$inferSelect;
+export type ModerationActionRow = typeof moderationActions.$inferSelect;

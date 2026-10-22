@@ -14,6 +14,7 @@ export async function upsertMessageReport(
     reason: string;
     details: string | null;
     bodySnapshot: string | null;
+    snapshotFromReporter?: boolean;
   },
 ): Promise<void> {
   await db
@@ -21,6 +22,43 @@ export async function upsertMessageReport(
     .values(input)
     .onConflictDoUpdate({
       target: [messageReports.reporterId, messageReports.messageId],
-      set: { reason: input.reason, details: input.details, createdAt: sql`now()` },
+      // CHAT-077: reporting it again puts it back in the queue.
+      set: {
+        reason: input.reason,
+        details: input.details,
+        createdAt: sql`now()`,
+        status: 'open',
+        resolvedAt: null,
+        resolvedBy: null,
+        resolution: null,
+        resolutionNote: null,
+      },
+    });
+}
+
+/** CHAT-077: a report of a person (no message). One open report per reporter and person:
+ *  reporting them again while it's open just updates it. */
+export async function upsertUserReport(
+  db: DbExecutor,
+  input: {
+    reporterId: string;
+    reportedUserId: string;
+    conversationId: string;
+    reason: string;
+    details: string | null;
+  },
+): Promise<void> {
+  await db
+    .insert(messageReports)
+    .values({ ...input, messageId: null, bodySnapshot: null })
+    .onConflictDoUpdate({
+      target: [messageReports.reporterId, messageReports.reportedUserId],
+      targetWhere: sql`${messageReports.messageId} IS NULL AND ${messageReports.status} = 'open'`,
+      set: {
+        reason: input.reason,
+        details: input.details,
+        conversationId: input.conversationId,
+        createdAt: sql`now()`,
+      },
     });
 }

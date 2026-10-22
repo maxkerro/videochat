@@ -1,5 +1,5 @@
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { LIMITS } from '@videochat/shared';
+import { LIMITS, REPORT_REASONS, type ReportReason } from '@videochat/shared';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import { useState } from 'react';
 import {
@@ -14,7 +14,14 @@ import {
 } from 'react-native';
 import { useAuth } from '../../../../src/auth/AuthContext';
 import * as actions from '../../../../src/data/actions';
-import { blockUser, fetchBlockedUsers, searchUsers, unblockUser } from '../../../../src/data/api';
+import {
+  blockUser,
+  fetchBlockedUsers,
+  reportUser,
+  searchUsers,
+  unblockUser,
+} from '../../../../src/data/api';
+import { MessageActions } from '../../../../src/chat/MessageActions';
 import { useConversation, useMembers } from '../../../../src/data/hooks';
 import { keys } from '../../../../src/data/keys';
 import { Avatar } from '../../../../src/ui/Avatar';
@@ -49,6 +56,7 @@ export default function ChatInfo() {
   const [title, setTitle] = useState<string | null>(null);
   const [find, setFind] = useState('');
   const [busy, setBusy] = useState(false);
+  const [reportOpen, setReportOpen] = useState(false);
 
   const memberIds = new Set((members.data ?? []).map((m) => m.userId));
   const candidates = useQuery({
@@ -248,6 +256,31 @@ export default function ChatInfo() {
         />
       ) : null}
 
+      {c.peer ? (
+        <Button
+          title={`Report ${c.peer.displayName}`}
+          kind="link"
+          onPress={() => setReportOpen(true)}
+        />
+      ) : null}
+      <MessageActions
+        message={null}
+        open={reportOpen}
+        title={c.peer ? `Report ${c.peer.displayName}` : 'Report'}
+        actions={REPORT_REASONS.map((reason) => ({
+          label: REPORT_LABELS[reason],
+          onPress: () => {
+            const peer = c.peer;
+            if (!peer) return;
+            void run('Couldn’t send the report', async () => {
+              await reportUser(peer.id, { conversationId: id, reason });
+              Alert.alert('Thanks for letting us know', 'Our moderators will review it.');
+            });
+          },
+        }))}
+        onClose={() => setReportOpen(false)}
+      />
+
       {isGroup ? (
         <Button
           title="Leave group"
@@ -271,6 +304,14 @@ export default function ChatInfo() {
     </ScrollView>
   );
 }
+
+/** CHAT-077: same wording as reporting a message. */
+const REPORT_LABELS: Record<ReportReason, string> = {
+  spam: 'Spam',
+  harassment: 'Harassment or bullying',
+  inappropriate: 'Inappropriate content',
+  other: 'Something else',
+};
 
 const styles = StyleSheet.create({
   flex: { flex: 1 },

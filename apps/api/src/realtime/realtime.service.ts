@@ -41,7 +41,7 @@ export interface RealtimeSocket extends WebSocket {
 /** Same code as an unauthorised connect: the client treats both as "sign in again". */
 export const SESSION_ENDED_CLOSE_CODE = 4401;
 
-export type SessionEndReason = 'account-deleted' | 'password-changed';
+export type SessionEndReason = 'account-deleted' | 'password-changed' | 'account-restricted';
 
 /** Publishes the `session.ended` control message that makes every node close a user's sockets.
  *  A plain function so auth code can use it without depending on the realtime module. */

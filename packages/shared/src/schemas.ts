@@ -102,6 +102,8 @@ export const meSchema = publicUserSchema.extend({
   emailVerified: z.boolean(),
   /** CHAT-037. Defaults so older cached/mocked responses without it still parse. */
   settings: userSettingsSchema.default(DEFAULT_USER_SETTINGS),
+  /** CHAT-077: can open the moderation console. */
+  moderator: z.boolean().default(false),
 });
 export type Me = z.infer<typeof meSchema>;
 
@@ -452,6 +454,9 @@ export type ReportReason = (typeof REPORT_REASONS)[number];
 export const reportMessageSchema = z.object({
   reason: z.enum(REPORT_REASONS),
   details: z.string().trim().max(500).optional(),
+  /** CHAT-077: for an end-to-end encrypted message (the server can't read it), the reporter's
+   *  device sends the text it decrypted. Shown to moderators as unverified. Ignored otherwise. */
+  decryptedText: z.string().max(LIMITS.messageMaxLength).optional(),
 });
 export type ReportMessageInput = z.infer<typeof reportMessageSchema>;
 

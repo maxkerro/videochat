@@ -206,7 +206,7 @@ export function RealtimeProvider({ children }: { children: ReactNode }) {
       singleton.context.subscribe((envelope) => {
         if (envelope.type !== 'session.ended') return;
         const reason = (envelope.payload as { reason?: string } | null)?.reason;
-        if (reason === 'account-deleted') void auth.logout();
+        if (reason === 'account-deleted' || reason === 'account-restricted') void auth.logout();
         else void auth.refresh();
       }),
     [singleton, auth],

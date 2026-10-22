@@ -33,6 +33,10 @@ export function AccountMenu() {
       }
       items={[
         { label: 'Settings', onSelect: () => void navigate('/settings') },
+        // CHAT-077
+        ...(user!.moderator
+          ? [{ label: 'Moderation', onSelect: () => void navigate('/moderate') }]
+          : []),
         {
           label: 'Log out',
           danger: true,

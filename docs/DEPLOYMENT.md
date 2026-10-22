@@ -265,3 +265,23 @@ Off everywhere by default; nothing changes for anyone until both switches below 
    answers 404 and encrypted messages are refused.
 2. In each browser that should take part: Settings -> Privacy -> **End-to-end encryption
    (prototype)**. The toggle only appears while the API has the flag on.
+
+## Moderation (CHAT-077)
+
+People report a message (its menu: Report…) or a person (direct chat menu, or chat info on the
+phone). Reports land in the moderation queue at once. Moderators open the console from the account
+menu (**Moderation**, web only, page `/moderate`). For each report they see the reported text as it
+was when reported, plus at most 5 messages around it, and can dismiss it, warn the person (email),
+suspend them for some days, or ban them. A suspension or ban ends every session at once (refresh
+tokens, live connections and access tokens) and refuses sign-in until it ends or is lifted. Every
+action, including opening a report, is written to the audit log (`moderation_actions`, also shown
+in the console). Migration `0020_moderation` adds the queue fields and the audit log.
+
+Make someone a moderator (they must have an account):
+
+- Locally: `pnpm --filter @videochat/api moderator grant anna@example.com` (`revoke` to undo).
+- On Render: `videochat-api` -> **Shell** -> `node dist/db/scripts/moderator.js grant <email>`.
+
+Before a public launch, check the EU Digital Services Act duties that apply (notice-and-action,
+statements of reasons to the person affected, transparency reporting); the warn/suspend/ban emails
+are generic today.

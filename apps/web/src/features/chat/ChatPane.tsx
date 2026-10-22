@@ -72,6 +72,7 @@ import {
   type TypingEntry,
 } from './typingIndicator';
 import { E2eeUnavailableError, sendTextMessage, useDecryptedMessages, useE2ee } from '../e2ee';
+import { ReportDialog, type ReportTarget } from '../moderation/ReportDialog';
 import styles from './ChatPane.module.css';
 
 /** How often the typing-indicator map is checked for entries that have gone stale (see
@@ -256,6 +257,8 @@ export function ChatPane() {
   // briefly highlighted after jumping to it.
   const [replyTo, setReplyTo] = useState<Message | null>(null);
   const [editingId, setEditingId] = useState<string | null>(null);
+  // CHAT-077: the message or person being reported.
+  const [reportTarget, setReportTarget] = useState<ReportTarget | null>(null);
   const [deleteTarget, setDeleteTarget] = useState<Message | null>(null);
   const [highlightId, setHighlightId] = useState<string | null>(null);
   const [pickerTarget, setPickerTarget] = useState<Message | null>(null);
@@ -1066,6 +1069,22 @@ export function ChatPane() {
                     label: `Block ${peer.displayName}`,
                     onSelect: () => blockMutation.mutate(peer.id),
                   },
+              // CHAT-077
+              ...(conversationId
+                ? [
+                    {
+                      label: `Report ${peer.displayName}…`,
+                      danger: true,
+                      onSelect: () =>
+                        setReportTarget({
+                          kind: 'user',
+                          userId: peer.id,
+                          name: peer.displayName,
+                          conversationId,
+                        }),
+                    },
+                  ]
+                : []),
             ]}
           />
         )}
@@ -1167,6 +1186,13 @@ export function ChatPane() {
                           onToggleReaction={react}
                           onOpenPicker={setPickerTarget}
                           encryptedChat={encrypted}
+                          onReport={(m) =>
+                            setReportTarget({
+                              kind: 'message',
+                              message: m,
+                              senderName: nameFor(m.senderId),
+                            })
+                          }
                         />
                       )}
                     {row.kind === 'pending' && (
@@ -1386,6 +1412,7 @@ export function ChatPane() {
         onPick={(emoji) => pickerTarget && react(pickerTarget, emoji)}
       />
 
+      <ReportDialog target={reportTarget} onClose={() => setReportTarget(null)} />
       <Modal
         open={deleteTarget !== null}
         onOpenChange={(open) => !open && setDeleteTarget(null)}

@@ -751,3 +751,17 @@ export async function listMutedMentionRecipients(
     );
   return rows.map((r) => r.userId);
 }
+
+/** CHAT-077: whether the user is, or ever was, a member (left or removed members included). */
+export async function wasConversationMember(
+  db: DbExecutor,
+  conversationId: string,
+  userId: string,
+): Promise<boolean> {
+  const [row] = await db
+    .select({ userId: memberships.userId })
+    .from(memberships)
+    .where(and(eq(memberships.conversationId, conversationId), eq(memberships.userId, userId)))
+    .limit(1);
+  return row !== undefined;
+}

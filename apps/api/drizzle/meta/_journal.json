@@ -141,6 +141,13 @@
       "when": 1792140651550,
       "tag": "0019_e2ee_last_resort",
       "breakpoints": true
+    },
+    {
+      "idx": 20,
+      "version": "7",
+      "when": 1792233505975,
+      "tag": "0020_moderation",
+      "breakpoints": true
     }
   ]
 }

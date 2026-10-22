@@ -14,6 +14,7 @@ import {
   messageSchema,
   renameConversationSchema,
   reportMessageSchema,
+  reportUserSchema,
   searchResponseSchema,
   sendMessageSchema,
   startDirectConversationSchema,
@@ -26,6 +27,7 @@ import {
   type CreateAttachmentUploadInput,
   type CreateGroupConversationInput,
   type ReportMessageInput,
+  type ReportUserInput,
   type SearchQuery,
   type SendMessageInput,
   type UpdateProfileInput,
@@ -202,6 +204,10 @@ export const reportMessage = (
     z.undefined(),
     reportMessageSchema.parse(input),
   );
+
+/** CHAT-077: report a person, from a chat you share with them. */
+export const reportUser = (userId: string, input: ReportUserInput) =>
+  apiPost(`/users/${userId}/report`, z.undefined(), reportUserSchema.parse(input));
 
 // Profile, settings, blocking ---------------------------------------------------------------
 

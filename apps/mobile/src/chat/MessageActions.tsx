@@ -19,8 +19,11 @@ export function MessageActions({
   onClose,
   onDismissed,
   title,
+  open,
 }: {
   message: Message | null;
+  /** Shows the sheet without a message (CHAT-077: reporting a person). */
+  open?: boolean;
   actions: MessageAction[];
   /** Omit for a menu without the reaction bar (the report reasons). */
   onReact?: (emoji: string) => void;
@@ -30,7 +33,7 @@ export function MessageActions({
   title?: string;
 }) {
   const t = useTheme();
-  const visible = message !== null;
+  const visible = open ?? message !== null;
   // A light tick as the menu opens.
   useEffect(() => {
     if (visible) tick();

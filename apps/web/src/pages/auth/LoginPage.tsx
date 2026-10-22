@@ -45,7 +45,13 @@ export function LoginPage() {
       await login(result.data);
       void navigate(from, { replace: true });
     } catch (err) {
-      if (err instanceof ApiError && err.status === 403) {
+      // Only "verify your email" offers a new link; other 403s (a lockout, CHAT-077's suspension
+      // or ban) say what the server said.
+      if (
+        err instanceof ApiError &&
+        err.status === 403 &&
+        (err.code === 'email_unverified' || /verif/i.test(err.message))
+      ) {
         setUnverified(true);
       } else if (err instanceof ApiError) {
         setFormError(err.message);

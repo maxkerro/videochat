@@ -18,6 +18,7 @@ import {
 } from '@videochat/shared';
 import { randomUUID } from 'node:crypto';
 import type { Env } from '../config/env.js';
+import type { User } from '../db/schema.js';
 import type { Database } from '../db/client.js';
 import { DB, ENV, REDIS } from '../infra/tokens.js';
 import { Redis } from 'ioredis';
@@ -166,7 +167,11 @@ export class AuthService implements OnModuleInit {
     await resetFailedLogins(this.db, user.id);
 
     if (!user.emailVerifiedAt) {
-      throw new ForbiddenException('Please verify your email before logging in');
+      // CHAT-077: a code, so clients can tell this 403 from a lockout or a suspension.
+      throw new ForbiddenException({
+        message: 'Please verify your email before logging in',
+        code: 'email_unverified',
+      });
     }
 
     return this.issueSession(user.id);
@@ -292,6 +297,9 @@ export class AuthService implements OnModuleInit {
   ): Promise<IssuedSession> {
     const user = await findUserById(this.db, userId);
     if (!user) throw new UnauthorizedException('Invalid session');
+    // CHAT-077: a suspended or banned account gets no new session (sign-in or refresh).
+    const restricted = restrictionMessage(user);
+    if (restricted) throw new ForbiddenException(restricted);
 
     const refreshToken = generateOpaqueToken();
     await createRefreshToken(this.db, {
@@ -312,4 +320,16 @@ export class AuthService implements OnModuleInit {
       refreshToken,
     };
   }
+}
+
+/** CHAT-077: why this account can't sign in right now, or null. */
+export function restrictionMessage(
+  user: Pick<User, 'bannedAt' | 'suspendedUntil'>,
+  now = Date.now(),
+): string | null {
+  if (user.bannedAt) return 'This account has been banned.';
+  if (user.suspendedUntil && user.suspendedUntil.getTime() > now) {
+    return `This account is suspended until ${user.suspendedUntil.toISOString().slice(0, 16).replace('T', ' ')} UTC.`;
+  }
+  return null;
 }

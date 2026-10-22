@@ -23,13 +23,19 @@ import { LinkPreviewFetcher } from '../src/link-previews/link-preview.fetcher.js
 import { WebPushChannel } from '../src/notifications/web-push.channel.js';
 import { SFU, type Sfu, type SfuRoom } from '../src/group-calls/sfu.js';
 
-class FakeMailService {
+export class FakeMailService {
   verifyTokens: string[] = [];
   sendVerificationEmail(_to: string, token: string) {
     this.verifyTokens.push(token);
     return Promise.resolve();
   }
   sendPasswordResetEmail() {
+    return Promise.resolve();
+  }
+  /** CHAT-077 */
+  notices: Array<{ to: string; kind: string }> = [];
+  sendModerationNotice(to: string, notice: { kind: string }) {
+    this.notices.push({ to, kind: notice.kind });
     return Promise.resolve();
   }
 }

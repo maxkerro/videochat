@@ -26,5 +26,6 @@ export function toMe(user: User, avatarUrl: string | null): Me {
       },
       theme: user.theme,
     },
+    moderator: user.isModerator,
   };
 }

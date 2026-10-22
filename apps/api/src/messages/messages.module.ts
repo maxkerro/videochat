@@ -21,5 +21,6 @@ import { ReportsService } from './reports.service.js';
   ],
   controllers: [MessagesController],
   providers: [MessagesService, ReactionsService, ReportsService],
+  exports: [ReportsService],
 })
 export class MessagesModule {}
